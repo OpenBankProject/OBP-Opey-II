@@ -19,7 +19,6 @@ from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client as LangsmithClient
 
 from agent import opey_graph
-from agent.components.chains import QueryFormulatorOutput
 from fastapi import WebSocket
 from schema import (
     ChatMessage,

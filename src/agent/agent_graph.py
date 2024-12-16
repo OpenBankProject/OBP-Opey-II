@@ -46,3 +46,7 @@ opey_workflow.add_edge("tools", "opey")
 opey_workflow.add_edge("summarize_conversation", END)
 
 opey_graph = opey_workflow.compile(checkpointer=memory, interrupt_before=["human_review"])
+
+# Compile the graph for end-to-end evaluation, where we won't wait for human review
+# this is the equivalent of approving all requests to obp
+opey_graph_eval = opey_workflow.compile()
