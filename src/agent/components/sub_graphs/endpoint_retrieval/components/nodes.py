@@ -1,4 +1,6 @@
 import os
+import logging
+logger = logging.getLogger(__name__)
 
 from agent.components.sub_graphs.endpoint_retrieval.components.states import OutputState
 from agent.components.sub_graphs.retriever_config import setup_chroma_vector_store, setup_retriever

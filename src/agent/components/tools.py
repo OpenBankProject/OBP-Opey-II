@@ -2,6 +2,8 @@ import json
 import requests
 import aiohttp
 import asyncio
+import logging
+logger = logging.getLogger(__name__)
 
 from langchain_core.tools import tool
 
@@ -21,9 +23,9 @@ async def _async_request(method: str, url: str, body: Any | None, headers: dict[
                 return json_response, status
             
     except aiohttp.ClientError as e:
-        print(f"Error fetching data from {url}: {e}")
+        logger.error(f"Error fetching data from {url}: {e}")
     except asyncio.TimeoutError:
-        print(f"Request to {url} timed out")
+        logger.error(f"Request to {url} timed out")
 
 @tool
 async def obp_requests(method: str, path: str, body: str):
@@ -55,20 +57,20 @@ async def obp_requests(method: str, path: str, body: str):
     try:
         response = await _async_request(method, url, json_body, headers=headers)
     except Exception as e:
-        print(f"Error fetching data from {url}: {e}")
+        logger.error(f"Error fetching data from {url}: {e}")
         return
     
     if response is None:
-        print("OBP returned 'None' response")
+        logger.info("OBP returned 'None' response")
         return
     json_response, status = response
 
-    print("Response from OBP:\n", json.dumps(json_response, indent=2))
+    logger.info("Response from OBP:\n", json.dumps(json_response, indent=2))
     
     if status == 200:
         return json_response
     else:
-        print("Error fetching data from OBP:", json_response)
+        logger.error("Error fetching data from OBP:", json_response)
         return json_response
     
     

@@ -1,31 +1,34 @@
 import os
+import logging
+logger = logging.getLogger(__name__)
 
 from agent.components.states import OpeyGraphState
 from langgraph.graph import END
-from typing import Literal 
+from typing import Literal
+
 
 def should_summarize(state: OpeyGraphState) -> Literal["summarize_conversation", END]:
     """
     Conditional edge to route to conversation summarizer or not
     """
-    print("----- DECIDING WHETHER TO SUMMARIZE -----")
+    logger.info("----- DECIDING WHETHER TO SUMMARIZE -----")
     messages = state["messages"]
     total_tokens = state["total_tokens"]
-    print(f"Total tokens in conversation: {total_tokens}")
+    logger.info(f"Total tokens in conversation: {total_tokens}")
 
     if not total_tokens:
         raise ValueError("Total tokens not found in state")
 
     token_limit = os.getenv("CONVERSATION_TOKEN_LIMIT")
     if not token_limit:
-        print("Token limit (CONVERSATION_TOKEN_LIMIT) not set in environment variables, defaulting to 50000")
+        logger.info("Token limit (CONVERSATION_TOKEN_LIMIT) not set in environment variables, defaulting to 50000")
         token_limit = 50000
         
     if total_tokens >= int(token_limit):
-        print(f"Conversation more than token limit of {token_limit}, Descision: Summarize")
+        logger.info(f"Conversation more than token limit of {token_limit}, Descision: Summarize")
         return "summarize_conversation"
     # Otherwise we can just end
-    print(f"Conversation less than token limit of {token_limit}, Descision: Do not summarize")
+    logger.info(f"Conversation less than token limit of {token_limit}, Descision: Do not summarize")
     return END
         
 def needs_human_review(state:OpeyGraphState) -> Literal["human_review", "tools", END]:

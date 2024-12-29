@@ -1,6 +1,8 @@
 import json
 import uuid
 import os
+import logging
+logger = logging.getLogger(__name__)
 
 from typing import List
 
@@ -19,7 +21,7 @@ from agent.components.chains import conversation_summarizer_chain
 from agent.utils.model_factory import get_llm
 
 async def run_summary_chain(state: OpeyGraphState):
-    print("----- SUMMARIZING CONVERSATION -----")
+    logger.info("----- SUMMARIZING CONVERSATION -----")
     state["current_state"] = "summarize_conversation"
     total_tokens = state["total_tokens"]
     if not total_tokens:
@@ -39,7 +41,7 @@ async def run_summary_chain(state: OpeyGraphState):
     # After we summarize we reset the token_count to zero, this will be updated when Opey is next called
     summary = await conversation_summarizer_chain.ainvoke({"messages": messages, "existing_summary_message": summary_system_message})
 
-    print(f"\nSummary: {summary}\n")
+    logger.debug(f"\nSummary: {summary}\n")
 
     # Right now we delete all but the last two messages
     trimmed_messages = trim_messages(
@@ -55,7 +57,7 @@ async def run_summary_chain(state: OpeyGraphState):
     for i, trimmed_messages_msg in enumerate(trimmed_messages):
         # Stop at each ToolMessage to find the AIMessage that called it
         if isinstance(trimmed_messages_msg, ToolMessage):
-            print(f"Checking tool message {trimmed_messages_msg}")
+            logger.debug(f"Checking tool message {trimmed_messages_msg}")
             tool_call_id = trimmed_messages_msg.tool_call_id
             found_tool_call = False
             for k, msg in enumerate(messages):
@@ -76,9 +78,11 @@ async def run_summary_chain(state: OpeyGraphState):
             i, msg = pair
             trimmed_messages.insert(i, msg)
 
-    print(f"\nTrimmed messages:\n")
-    for msg in trimmed_messages:
-        msg.pretty_print()
+    
+    if logger.level == logging.DEBUG:
+        logger.debug(f"\nTrimmed messages:\n")
+        for msg in trimmed_messages:
+            msg.pretty_print()
     delete_messages = [RemoveMessage(id=message.id) for message in messages if message not in trimmed_messages]
 
     return {"messages": delete_messages, "conversation_summary": summary}
@@ -103,12 +107,12 @@ async def run_opey(state: OpeyGraphState):
         total_tokens += llm.get_num_tokens_from_messages(messages)
     except NotImplementedError as e:
         # Note that this defaulting to gpt-4o wont work if there is no OpenAI API key in the env, so will probably need to find another defaulting method
-        print(f"could not count tokens for model provider {os.getenv('MODEL_PROVIDER')}:\n{e}\n\ndefaulting to OpenAI GPT-4o counting...")
+        logger.error(f"could not count tokens for model provider {os.getenv('MODEL_PROVIDER')}:\n{e}\n\ndefaulting to OpenAI GPT-4o counting...")
         total_tokens += ChatOpenAI(model='gpt-4o').get_num_tokens_from_messages(messages)
 
     return {"messages": response, "total_tokens": total_tokens}
 
 async def human_review_node(state):
     state["current_state"] = "human_review"
-    print("Awaiting human approval for tool call...")
+    logger.info("Awaiting human approval for tool call...")
     pass
