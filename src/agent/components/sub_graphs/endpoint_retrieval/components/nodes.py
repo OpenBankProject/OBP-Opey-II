@@ -27,7 +27,7 @@ async def retrieve_endpoints(state):
     Returns:
         state (dict): New key added to state, documents, that contains retrieved documents
     """
-    print("---RETRIEVE ENDPOINTS---")
+    logging.info("---RETRIEVE ENDPOINTS---")
     rewritten_question = state.get("rewritten_question", "")
     total_retries = state.get("total_retries", 0)
     
@@ -38,12 +38,13 @@ async def retrieve_endpoints(state):
         question = state["question"]
     # Retrieval
     documents = await endpoint_retriever.ainvoke(question)
+    logging.debug("Doucumnets: ", documents)
     return {"documents": documents, "total_retries": total_retries}
 
 
 async def return_documents(state) -> OutputState:
     """Return the relevant documents"""
-    print("---RETRUN RELEVANT DOCUMENTS---")
+    logging.info("---RETRUN RELEVANT DOCUMENTS---")
     relevant_documents = state["relevant_documents"]
     return {"relevant_documents": relevant_documents}
 
@@ -59,7 +60,7 @@ async def grade_documents(state):
         state (dict): Updates documents key with only filtered relevant documents
     """
 
-    print("---CHECK DOCUMENT RELEVANCE TO QUESTION---")
+    logging.info("---CHECK DOCUMENT RELEVANCE TO QUESTION---")
     question = state["question"]
     documents = state["documents"]
     
@@ -73,11 +74,11 @@ async def grade_documents(state):
         )
         grade = score.binary_score
         if grade == "yes":
-            print(f"{d.metadata["method"]} - {d.metadata["path"]}", " [RELEVANT]")
+            logging.info(f"{d.metadata["method"]} - {d.metadata["path"]}", " [RELEVANT]")
             #print("---GRADE: DOCUMENT RELEVANT---")
             filtered_docs.append(d)
         else:
-            print(f"{d.metadata["method"]} - {d.metadata["path"]}", " [NOT RELEVANT]")
+            logging.info(f"{d.metadata["method"]} - {d.metadata["path"]}", " [NOT RELEVANT]")
             #print("---GRADE: DOCUMENT NOT RELEVANT---")
             continue
         
@@ -104,11 +105,11 @@ async def transform_query(state):
         state (dict): Updates question key with a re-phrased question
     """
 
-    print("---TRANSFORM QUERY---")
+    logging.info("---TRANSFORM QUERY---")
     question = state["question"]
     documents = state["documents"]
     total_retries = state.get("total_retries", 0)
     # Re-write question
     better_question = await endpoint_question_rewriter.ainvoke({"question": question})
-    print(f"New query: \n{better_question}\n")
+    logging.debug(f"New query: \n{better_question}\n")
     return {"documents": documents, "rewritten_question": better_question}
