@@ -29,6 +29,9 @@ prance = "^23.6.21.0"
 openapi-spec-validator = "^0.7.1"
 swagger-spec-validator = "^3.0.4"
 markdownify = "^0.14.1"
+prettytable = "^3.12.0"
+simsimd = "^6.2.1"
+langchain-weaviate = {git = "https://github.com/langchain-ai/langchain-weaviate.git", rev = "main", subdirectory = "libs/weaviate"}
 
 [build-system]
 requires = ["poetry-core"]
