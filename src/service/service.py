@@ -253,6 +253,16 @@ async def message_generator(user_input: StreamInput) -> AsyncGenerator[str, None
     yield "data: [DONE]\n\n"
 
 
+async def raw_message_generator(user_input: StreamInput) -> AsyncGenerator[str, None]:
+    agent: CompiledStateGraph = app.state.agent
+    kwargs, run_id = _parse_input(user_input)
+    config = kwargs["config"]
+
+    print(f"------------START STREAM-----------\n\n")
+    # Process streamed events from the graph and yield messages over the SSE stream.
+    async for event in agent.astream_events(**kwargs, version="v2"):
+        yield json.dumps(event)
+
 def _sse_response_example() -> dict[int, Any]:
     return {
         status.HTTP_200_OK: {
@@ -279,6 +289,15 @@ async def stream_agent(user_input: StreamInput) -> StreamingResponse:
 
     return StreamingResponse(message_generator(user_input), media_type="text/event-stream")
 
+@app.post("/stream-langchain", response_class=StreamingResponse)
+async def stream_agent_langchain(user_input: StreamInput) -> StreamingResponse:
+    """
+    Stream the agent's response in raw langchain LCEL format.
+    """
+
+    return StreamingResponse(raw_message_generator(user_input), media_type="text/event-stream")
+
+
 
 @app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example())
 async def user_approval(user_approval_response: ToolCallApproval, thread_id: str) -> StreamingResponse:
@@ -293,7 +312,7 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
         await agent.aupdate_state(
             {"configurable": {"thread_id": thread_id}},
             {"messages": [ToolMessage(content="User denied request to OBP API", tool_call_id=user_approval_response.tool_call_id)]},
-            as_node="obp_requests_tools",
+            as_node="tools",
         )
     else:
         # If approved, just continue to the OBP requests node
