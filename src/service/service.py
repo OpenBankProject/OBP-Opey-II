@@ -260,8 +260,17 @@ async def raw_message_generator(user_input: StreamInput) -> AsyncGenerator[str, 
 
     print(f"------------START STREAM-----------\n\n")
     # Process streamed events from the graph and yield messages over the SSE stream.
-    async for event in agent.astream_events(**kwargs, version="v2"):
-        yield json.dumps(event)
+    try:
+        async for event in agent.astream_events(**kwargs, version="v2"):
+            print(event)
+            data = "{}".format(event)
+            yield f"data: {data}\n\n"
+    except Exception as e:
+        print(f"Error in raw_message_generator: {e}")
+        yield f"data: {json.dumps({'type': 'error', 'content': f'Error in raw_message_generator: {e}'})}\n\n"
+    
+    yield "data: [DONE]\n\n"
+
 
 def _sse_response_example() -> dict[int, Any]:
     return {
