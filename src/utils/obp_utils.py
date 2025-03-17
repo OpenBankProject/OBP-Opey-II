@@ -16,13 +16,15 @@ username = os.getenv("OBP_USERNAME")
 password = os.getenv("OBP_PASSWORD")
 consumer_key = os.getenv("OBP_CONSUMER_KEY")
 
-def get_direct_login_token():
+def get_direct_login_token(obp_base_url: str = obp_base_url, username: str = username, password: str = password, consumer_key: str = consumer_key):
     url = f"{obp_base_url}/my/logins/direct"
     headers = {
         "Content-Type": "application/json",
         "directlogin": f"username={username},password={password},consumer_key={consumer_key}"
     }
     
+    print("Headers:", headers)
+
     response = requests.post(url, headers=headers)
     if response.status_code == 201:
         token = response.json().get('token')
@@ -45,8 +47,8 @@ async def _async_request(method: str, url: str, body: Any | None, headers: dict[
     except asyncio.TimeoutError:
         print(f"Request to {url} timed out")
 
-def get_headers():
-    token = get_direct_login_token()
+def get_headers(**kwargs):
+    token = get_direct_login_token(**kwargs)
     if token:
         return {
             "Authorization": f"DirectLogin token={token}",
@@ -55,7 +57,7 @@ def get_headers():
     else:
         return None
 
-async def obp_requests(method: str, path: str, body: str):
+async def obp_requests(method: str, path: str, body: str, **kwargs):
     
     # TODO: Add more descriptive docstring, I think this is required for the llm to know when to call this tool
     """
@@ -74,7 +76,7 @@ async def obp_requests(method: str, path: str, body: str):
         print(response)
     """
     url = f"{obp_base_url}{path}"
-    headers = get_headers()
+    headers = get_headers(**kwargs)
     
     if body == '':
         json_body = None

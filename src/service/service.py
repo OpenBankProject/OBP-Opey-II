@@ -21,7 +21,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client as LangsmithClient
 
 from utils.obp_utils import obp_requests
-from .auth import sign_jwt
+from .auth import OBPConsentAuth, AuthTypes
 
 from agent import opey_graph, opey_graph_no_obp_tools
 from agent.components.chains import QueryFormulatorOutput
@@ -38,7 +38,7 @@ from schema import (
     AuthResponse,
 )
 
-logger = logging.getLogger('uvicorn.error')
+logger = logging.getLogger()
 
 if os.getenv("DISABLE_OBP_CALLING") == "true":
     logger.info("Disabling OBP tools: Calls to the OBP-API will not be available")
@@ -71,19 +71,30 @@ if cors_allowed_origins := os.getenv("CORS_ALLOWED_ORIGINS"):
 else:
     raise ValueError("CORS_ALLOWED_ORIGINS environment variable must be set")
 
-# TODO: change to implement our own authentication checking (also decide what auth to use)
-# NOTE: will be different when we use consents rather than a secret
+# Define Allowed Authentication methods,
+# Currently only OBP consent is allowed
+auth_types = AuthTypes({
+    "obp_consent": OBPConsentAuth(),
+})
+
+# Middleware for checking the Authorization header, i.e. OBP consent
+obp_base_url = os.getenv('OBP_BASE_URL')
+jwk_url = f'{obp_base_url}/obp/v5.1.0/certs'
+
 @app.middleware("http")
-async def check_auth_header(request: Request, call_next: Callable) -> Response:
+async def check_auth_header(request: Request, call_next: Callable, auth) -> Response:
     request_body = await request.body()
     logger.debug("This is coming from the auth middleware")
     logger.debug(f"Request: {request_body}")
-    if auth_secret := os.getenv("AUTH_SECRET"):
-        auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            return Response(status_code=401, content="Missing or invalid token")
-        if auth_header[7:] != auth_secret:
+
+    # Check if the request has a consent JWT in the headers
+    if request.headers.get("Consent-JWT"):
+        token = request.headers.get("Consent-JWT")
+        if not auth_types.obp_consent.acheck_auth(token):
             return Response(status_code=401, content="Invalid token")
+        
+    # TODO: Add more auth methods here if needed
+        
     response = await call_next(request)
     logger.debug(f"Response: {response}")
     return response
