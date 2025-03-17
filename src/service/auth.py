@@ -62,6 +62,7 @@ class OBPConsentAuth(BaseAuth):
         }
 
         response = requests.get(self.current_user_url, headers=headers)
+        
         if response.status_code == 200:
             logger.debug(f'OBP consent check successful: {await response.json()}')
             return True

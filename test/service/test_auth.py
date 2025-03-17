@@ -12,7 +12,7 @@ load_dotenv()
 
 
 @pytest_asyncio.fixture
-async def get_obp_jwt():
+async def get_obp_consent():
 
     consumer_id = os.getenv("OBP_CONSUMER_ID")
     print("Consumer ID:", consumer_id)  
@@ -38,8 +38,8 @@ def get_obp_auth():
     return OBPConsentAuth()
 
 @pytest.mark.asyncio
-async def test_check_obp_consent(get_obp_jwt, get_obp_auth):
-    token = get_obp_jwt
+async def test_check_obp_consent(get_obp_consent, get_obp_auth):
+    token = get_obp_consent
     obp_consent_auth = get_obp_auth
 
     valid = await obp_consent_auth.acheck_auth(token)

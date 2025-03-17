@@ -3,13 +3,13 @@ import os
 import warnings
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Annotated
 import uuid
 import asyncio
 import logging
 
 
-from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -73,7 +73,7 @@ else:
 
 # Define Allowed Authentication methods,
 # Currently only OBP consent is allowed
-auth_types = AuthTypes({
+auth = AuthTypes({
     "obp_consent": OBPConsentAuth(),
 })
 
@@ -82,7 +82,7 @@ obp_base_url = os.getenv('OBP_BASE_URL')
 jwk_url = f'{obp_base_url}/obp/v5.1.0/certs'
 
 @app.middleware("http")
-async def check_auth_header(request: Request, call_next: Callable, auth) -> Response:
+async def check_auth_header(request: Request, call_next: Callable) -> Response:
     request_body = await request.body()
     logger.debug("This is coming from the auth middleware")
     logger.debug(f"Request: {request_body}")
@@ -90,9 +90,11 @@ async def check_auth_header(request: Request, call_next: Callable, auth) -> Resp
     # Check if the request has a consent JWT in the headers
     if request.headers.get("Consent-JWT"):
         token = request.headers.get("Consent-JWT")
-        if not auth_types.obp_consent.acheck_auth(token):
+        if not await auth.obp_consent.acheck_auth(token):
             return Response(status_code=401, content="Invalid token")
-        
+    else:
+        return Response(status_code=401, content="Missing Authorization headers, Must be one of ['Consent-JWT']")
+
     # TODO: Add more auth methods here if needed
         
     response = await call_next(request)
@@ -373,38 +375,38 @@ async def feedback(feedback: Feedback) -> FeedbackResponse:
     )
     return FeedbackResponse()
 
-@app.post("/auth")
-async def auth(consent_auth_body: ConsentAuthBody, response: Response):
-    """ 
-    Authorize Opey using an OBP consent
-    """
-    logger.debug("Authorizing Opey using an OBP consent")
-    version = os.getenv("OBP_API_VERSION")
-    consent_challenge_answer_path = f"/obp/{version}/banks/gh.29.uk/consents/{consent_auth_body.consent_id}/challenge"
+# @app.post("/auth")
+# async def auth(consent_auth_body: ConsentAuthBody, response: Response):
+#     """ 
+#     Authorize Opey using an OBP consent
+#     """
+#     logger.debug("Authorizing Opey using an OBP consent")
+#     version = os.getenv("OBP_API_VERSION")
+#     consent_challenge_answer_path = f"/obp/{version}/banks/gh.29.uk/consents/{consent_auth_body.consent_id}/challenge"
     
-    # Check consent challenge answer
-    try:
-        obp_response = await obp_requests("POST", consent_challenge_answer_path, json.dumps({"answer": consent_auth_body.consent_challenge_answer}))
-    except Exception as e:
-        logger.error(f"Error in /auth endpoint: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+#     # Check consent challenge answer
+#     try:
+#         obp_response = await obp_requests("POST", consent_challenge_answer_path, json.dumps({"answer": consent_auth_body.consent_challenge_answer}))
+#     except Exception as e:
+#         logger.error(f"Error in /auth endpoint: {e}")
+#         raise HTTPException(status_code=500, detail=str(e))
 
-    if obp_response and not (200 <= obp_response.status < 300):
-        logger.debug("Welp, we got an error from OBP")
-        message = await obp_response.text()
-        raise HTTPException(status_code=obp_response.status, detail=message)
+#     if obp_response and not (200 <= obp_response.status < 300):
+#         logger.debug("Welp, we got an error from OBP")
+#         message = await obp_response.text()
+#         raise HTTPException(status_code=obp_response.status, detail=message)
     
-    try:
-        payload = {
-            "consent_id": consent_auth_body.consent_id,
-        }
-        opey_jwt = sign_jwt(payload)
-    except Exception as e:
-        logger.debug("Looks like signing the JWT failed OMG")
-        logger.error(f"Error in /auth endpoint: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+#     try:
+#         payload = {
+#             "consent_id": consent_auth_body.consent_id,
+#         }
+#         opey_jwt = sign_jwt(payload)
+#     except Exception as e:
+#         logger.debug("Looks like signing the JWT failed OMG")
+#         logger.error(f"Error in /auth endpoint: {e}")
+#         raise HTTPException(status_code=500, detail=str(e))
 
-    print("got consent jwt")
-    # Set the JWT cookie
-    response.set_cookie(key="jwt", value=opey_jwt, httponly=False, samesite='lax', secure=False)
-    return AuthResponse(success=True)
+#     print("got consent jwt")
+#     # Set the JWT cookie
+#     response.set_cookie(key="jwt", value=opey_jwt, httponly=False, samesite='lax', secure=False)
+#     return AuthResponse(success=True)
