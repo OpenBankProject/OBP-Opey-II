@@ -6,9 +6,13 @@ from dotenv import load_dotenv
 import pytest
 import pytest_asyncio
 import json
+import aiohttp
+import logging
 
 load_dotenv()
 
+# Configure logging to show INFO messages
+logging.basicConfig(level=logging.INFO)
 
 
 @pytest_asyncio.fixture
@@ -33,12 +37,23 @@ async def get_obp_consent():
 
     return consent.get("jwt")
 
+
+
 @pytest_asyncio.fixture
-def get_obp_auth():
-    return OBPConsentAuth()
+async def get_obp_auth():
+
+    client = aiohttp.ClientSession()
+
+    auth = OBPConsentAuth(client)
+
+    yield auth
+
+    # Close the client session after the tests
+    await client.close()
 
 @pytest.mark.asyncio
-async def test_check_obp_consent(get_obp_consent, get_obp_auth):
+async def test_check_obp_consent(get_obp_consent, get_obp_auth, caplog):
+    caplog.set_level(logging.INFO)
     token = get_obp_consent
     obp_consent_auth = get_obp_auth
 

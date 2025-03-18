@@ -3,11 +3,12 @@ import os
 import warnings
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from typing import Any, Annotated
+from typing import Any, Optional
+from socket import AF_INET
 import uuid
 import asyncio
 import logging
-
+import aiohttp
 
 from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
 from fastapi.responses import StreamingResponse
@@ -49,12 +50,40 @@ else:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+
+    # Init the aiohttp client
+    logger.info("Starting up")
+    await SingletonAiohttp.get_aiohttp_client()
     # Construct agent with Sqlite checkpointer
     async with AsyncSqliteSaver.from_conn_string("checkpoints.db") as saver:
         opey_instance.checkpointer = saver
         app.state.agent = opey_instance
         yield
     # context manager will clean up the AsyncSqliteSaver on exit
+
+    # Close the aiohttp client
+    logger.info("Shutting down")
+    await SingletonAiohttp.close_aiohttp_client()
+
+# Construct an async requests client to use across the app for requests, to OBP or external APIs
+CONNECTION_POOL_LIMIT=100
+class SingletonAiohttp:
+    aiohttp_client: Optional[aiohttp.ClientSession] = None
+
+    @classmethod
+    async def get_aiohttp_client(cls) -> aiohttp.ClientSession:
+        if cls.aiohttp_client is None:
+            #connector = aiohttp.TCPConnector(family=AF_INET, limit_per_host=CONNECTION_POOL_LIMIT)
+            cls.aiohttp_client = aiohttp.ClientSession()
+
+        return cls.aiohttp_client
+
+    @classmethod
+    async def close_aiohttp_client(cls) -> None:
+        if cls.aiohttp_client:
+            await cls.aiohttp_client.close()
+            cls.aiohttp_client = None
+
 
 
 app = FastAPI(lifespan=lifespan)
