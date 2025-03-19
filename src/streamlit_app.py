@@ -32,7 +32,7 @@ APP_TITLE = "Opey Agent Service"
 
 @st.cache_resource
 def get_agent_client() -> AgentClient:
-    agent_url = os.getenv("AGENT_URL", "http://localhost:6000")
+    agent_url = os.getenv("AGENT_URL", "http://localhost:5000")
     return AgentClient(agent_url)
 
 
