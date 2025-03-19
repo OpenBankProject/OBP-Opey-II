@@ -247,7 +247,7 @@ async def message_generator(user_input: StreamInput) -> AsyncGenerator[str, None
 
         tool_approval_message = ChatMessage(type="tool", tool_approval_request=True, tool_call_id=tool_call["id"], content="", tool_calls=[tool_call])
 
-        yield f"data: {json.dumps({'type': 'message', "content": tool_approval_message.model_dump()})}\n\n"
+        yield f"data: {json.dumps({'type': 'message', 'content': tool_approval_message.model_dump()})}\n\n"
     
 
     yield "data: [DONE]\n\n"
