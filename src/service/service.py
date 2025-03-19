@@ -207,7 +207,7 @@ async def invoke(user_input: UserInput) -> ChatMessage:
     try:
         response = await agent.ainvoke(**kwargs)
         output = ChatMessage.from_langchain(response["messages"][-1])
-        logger.info(f"Replied to thread_id {kwargs['config']["configurable"]['thread_id']} with message:\n\n {output.content}\n")
+        logger.info(f"Replied to thread_id {kwargs['config']['configurable']['thread_id']} with message:\n\n {output.content}\n")
         output.run_id = str(run_id)
         return output
     except Exception as e:
