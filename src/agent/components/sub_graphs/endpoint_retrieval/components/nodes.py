@@ -1,4 +1,5 @@
 import os
+import json
 
 from langchain_core.documents import Document
 from typing import List
@@ -54,7 +55,7 @@ async def return_documents(state) -> OutputState:
                 "method": doc.metadata["method"],
                 "path": doc.metadata["path"],
                 "operation_id": doc.metadata["operation_id"],
-                "documentation": doc.page_content,
+                "documentation": json.loads(doc.page_content),
             }
         )
         

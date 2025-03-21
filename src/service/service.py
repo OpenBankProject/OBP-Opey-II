@@ -135,7 +135,7 @@ def _remove_tool_calls(content: str | list[str | dict]) -> str | list[str | dict
     ]
 
     
-async def _process_stream_event(event: StreamEvent, user_input: StreamInput | ToolCallApproval, run_id: str) -> AsyncGenerator[str, None]:
+async def _process_stream_event(event: StreamEvent, user_input: StreamInput, run_id: str) -> AsyncGenerator[str, None]:
     """Helper to process stream events consistently"""
     if not event:
         return
@@ -168,10 +168,16 @@ async def _process_stream_event(event: StreamEvent, user_input: StreamInput | To
             except Exception as e:
                 yield f"data: {json.dumps({'type': 'error', 'content': f'Error parsing message: {e}'})}\n\n"
                 continue
-
+            
+            # We need this first if statement to avoid returning the user input, which langchain does for some reason
             if not (chat_message.type == "human" and chat_message.content == user_input.message):
                 chat_message.pretty_print()
-                yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
+
+                if chat_message.type == "tool":
+                    yield f"data: {json.dumps({'type': 'tool', 'content': chat_message.model_dump()})}\n\n"
+                
+                else:
+                    yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
 
     # Handle tokens streamed from LLMs
     if (
