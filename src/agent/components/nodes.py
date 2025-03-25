@@ -84,7 +84,11 @@ async def run_summary_chain(state: OpeyGraphState):
         msg.pretty_print()
     delete_messages = [RemoveMessage(id=message.id) for message in messages if message not in trimmed_messages]
 
-    return {"messages": delete_messages, "conversation_summary": summary}
+    # Reset total tokens count, this is fine to do even though messages remain in the state as the tokens are counted 
+    # at the run of the Opey node
+    total_tokens = 0
+
+    return {"messages": delete_messages, "conversation_summary": summary, "total_tokens": total_tokens}
     
 async def run_opey(state: OpeyGraphState):
 

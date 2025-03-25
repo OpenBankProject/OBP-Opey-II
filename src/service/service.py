@@ -177,7 +177,7 @@ def _remove_tool_calls(content: str | list[str | dict]) -> str | list[str | dict
     ]
 
     
-async def _process_stream_event(event: StreamEvent, user_input: StreamInput | ToolCallApproval, run_id: str) -> AsyncGenerator[str, None]:
+async def _process_stream_event(event: StreamEvent, user_input: StreamInput, run_id: str) -> AsyncGenerator[str, None]:
     """Helper to process stream events consistently"""
     if not event:
         return
@@ -210,10 +210,16 @@ async def _process_stream_event(event: StreamEvent, user_input: StreamInput | To
             except Exception as e:
                 yield f"data: {json.dumps({'type': 'error', 'content': f'Error parsing message: {e}'})}\n\n"
                 continue
-
+            
+            # We need this first if statement to avoid returning the user input, which langchain does for some reason
             if not (chat_message.type == "human" and chat_message.content == user_input.message):
                 chat_message.pretty_print()
-                yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
+
+                if chat_message.type == "tool":
+                    yield f"data: {json.dumps({'type': 'tool', 'content': chat_message.model_dump()})}\n\n"
+                
+                else:
+                    yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
 
     # Handle tokens streamed from LLMs
     if (
@@ -249,7 +255,7 @@ async def invoke(user_input: UserInput) -> ChatMessage:
     try:
         response = await agent.ainvoke(**kwargs)
         output = ChatMessage.from_langchain(response["messages"][-1])
-        logger.info(f"Replied to thread_id {kwargs['config']["configurable"]['thread_id']} with message:\n\n {output.content}\n")
+        logger.info(f"Replied to thread_id {kwargs['config']['configurable']['thread_id']} with message:\n\n {output.content}\n")
         output.run_id = str(run_id)
         return output
     except Exception as e:
@@ -289,7 +295,7 @@ async def message_generator(user_input: StreamInput) -> AsyncGenerator[str, None
 
         tool_approval_message = ChatMessage(type="tool", tool_approval_request=True, tool_call_id=tool_call["id"], content="", tool_calls=[tool_call])
 
-        yield f"data: {json.dumps({'type': 'message', "content": tool_approval_message.model_dump()})}\n\n"
+        yield f"data: {json.dumps({'type': 'message', 'content': tool_approval_message.model_dump()})}\n\n"
     
 
     yield "data: [DONE]\n\n"

@@ -39,7 +39,10 @@ def needs_human_review(state:OpeyGraphState) -> Literal["human_review", "tools",
         return END
     
     for tool_call in tool_calls:
-        if tool_call["name"] == "obp_requests":
-            return "human_review"
+        if (tool_call["name"] == "obp_requests"):
+            if not (tool_call["args"]["method"] == "GET"):
+                return "human_review"
+            else:
+                return "tools"
         return "tools"
 
