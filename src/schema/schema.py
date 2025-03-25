@@ -12,6 +12,7 @@ from langchain_core.messages import (
 )
 from pydantic import BaseModel, Field
 
+import json
 
 def convert_message_content_to_string(content: str | list[str | dict]) -> str:
     if isinstance(content, str):
@@ -25,6 +26,13 @@ def convert_message_content_to_string(content: str | list[str | dict]) -> str:
             text.append(content_item["text"])
     return "".join(text)
 
+def convert_message_content_to_dict(content: str | list[str | dict]) -> dict[str, Any] | str:
+    try:
+        content = json.loads(content)
+        return content
+    except json.JSONDecodeError as e:
+        print(f"Failed to parse content {e.doc}\n\n with error {e.msg}")
+        return convert_message_content_to_string(content)
 
 class UserInput(BaseModel):
     """Basic user input for the agent."""
@@ -75,7 +83,7 @@ class ChatMessage(BaseModel):
         description="Role of the message.",
         examples=["human", "ai", "tool"],
     )
-    content: str = Field(
+    content: str | dict = Field(
         description="Content of the message.",
         examples=["Hello, world!"],
     )
@@ -126,7 +134,7 @@ class ChatMessage(BaseModel):
             case ToolMessage():
                 tool_message = cls(
                     type="tool",
-                    content=convert_message_content_to_string(message.content),
+                    content=convert_message_content_to_dict(message.content), # we need a smarter way to process content from tool messages, i.e. if it is a valid dict, leave it as so, otherwise convert to string
                     tool_call_id=message.tool_call_id,
                     original=original,
                 )

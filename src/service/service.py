@@ -216,7 +216,7 @@ async def _process_stream_event(event: StreamEvent, user_input: StreamInput, run
                 chat_message.pretty_print()
 
                 if chat_message.type == "tool":
-                    tool_message_dict = {'type': 'tool', 'content': json.loads(chat_message.content)}
+                    tool_message_dict = {'type': 'tool', 'content': chat_message.model_dump()}
                     yield f"data: {json.dumps(tool_message_dict)}\n\n"
                 
                 else:
