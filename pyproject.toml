@@ -16,7 +16,7 @@ pydantic = "^2.9.2"
 langchain-chroma = "^0.1.4"
 uuid = "^1.30"
 fastapi = "^0.115.4"
-langsmith = "^0.1.139"
+langsmith = {extras = ["pytest"], version = "^0.3.23"}
 langgraph = "^0.2.44"
 protobuf = "3.20.*"
 langchain-anthropic = "^0.3.0"
