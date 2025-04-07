@@ -1,5 +1,13 @@
 import pytest
 from langsmith import testing as t
+import os
+
+from pydantic import BaseModel, Field
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_openai.chat_models import ChatOpenAI
+
+# Import the opey agent to test tool calling
+from src.agent.components.chains import opey_agent
 
 # Import the graph and relavant nodes from the endpoint_retrieval_graph
 from src.agent.components.sub_graphs.endpoint_retrieval.endpoint_retrieval_graph import endpoint_retrieval_graph
@@ -9,64 +17,84 @@ from src.agent.components.sub_graphs.endpoint_retrieval.components.nodes import 
     return_documents,
 )
 
+
+os.environ["LANGSMITH_TEST_SUITE"] = "opey-endpoint-retrieval"
+
+
 @pytest.mark.langsmith
 @pytest.mark.parametrize(
-    "query, expected_endpoints_operationIDs",
+    "user_question",
     [
-        (
-            "API information",
-            [
-                "root",
-                "getTopAPIs",
-            ]
-        ),
-        (
-            "API usage information",
-            [
-                "getTopAPIs",
-                "getMetricsTopConsumers",
-                "getAggregateMetrics",
-                "getMetrics",
-            ]
-        ),
+        "What are the top APIs?",
+        "What is the API usage information?",
+        "Can you provide me with API usage information?",
+        "How would I create a new Bank at OBP?",
+        "Who is the current user?",
+        "What are consents?",
+        "How can I create a new customer?",
+        "Create a new account at a bank please.",
+        "is there a user with the id 1234567890?",
     ]
 )
-async def test_end_to_end_graph(query, expected_endpoints_operationIDs):
+async def test_endpoint_retrieval_tool_calling(user_question):
     """
-    Test the end-to-end functionality of the endpoint retrieval graph.
+    Test the endpoint retrieval tool calling functionality of the Opey agent.
     
     Args:
-        query (str): The input query to test.
-        expected_endpoints (list): The expected endpoints to be retrieved.
+        user_question (str): The input question from the user.
     """
     
+    # Create a HumanMessage with the user question
+    message = HumanMessage(content=user_question)
+    
+    # Run the Opey agent with the provided message
+    result: AIMessage = await opey_agent.ainvoke({"messages": [message]})
+    
+    # Log the outputs and reference outputs
+    t.log_outputs({"result": result})
 
-    # Run the graph with the provided query
+    assert len(result.tool_calls) > 0
+    assert result.tool_calls[0]["name"] == "retrieve_endpoints"
+
+    # Call the tool for endpoint retrieval to get the output documents
+    tool_call = result.tool_calls[0]
+    query = tool_call["args"]["question"]
+    print(f"Query: {query}")
+    print(f"Tool call: {tool_call}")
+
     result = await endpoint_retrieval_graph.ainvoke({"question": query})
 
-    # Assert that the output matches the expected endpoints
-    result_operationIDs = [
-        doc["operation_id"] for doc in result["output_documents"]
-    ]
+    # Use LLM as judge to evaluate if the input question to the endpoint retrieval tool is any good
+    with t.trace_feedback():
+        llm = ChatOpenAI(
+            temperature=0,
+            model="gpt-4o",
+        )
 
-    t.log_outputs({"operationIDs": result_operationIDs})
+        class QueryGraderOutput(BaseModel):
+            score: int = Field(description="Score from 0 to 10")
+            feedback: str = Field(description="Feedback on the query quality")
 
-    t.log_reference_outputs(
-        {"operationIDs": expected_endpoints_operationIDs}
-    )
+        messages = [
+            SystemMessage(
+                content="""You are a helpful assistant that evaluates the quality of the input question to the endpoint retrieval tool." \
+                
+                You should consider the user's original question. Then the query formulated to the RAG system.
 
-    print(f"Result operation IDs: {result_operationIDs}")
+                Give a score from 0 to 10, where 0 is a bad query and 10 is a good query. Based on how relevant the resulting documents from the retriever are to the user's original question/ message.\
+                
+                Also give a short written feedback (max 2 sentences) on the quality of the query.\
+                """
+            ),
 
-    # Calculate the accuracy as being the intersection of the expected vs resultant endpoint operation IDs
-    accuracy = len(
-        set(result_operationIDs).intersection(expected_endpoints_operationIDs)
-    ) / len(expected_endpoints_operationIDs)
+            HumanMessage(content=f"User question: {user_question}\n\nQuery Formulated By LLM: {query}\n\nResulting documents: {result['output_documents']}\n\n"),
+        ]
+
+        score_result = llm.with_structured_output(QueryGraderOutput).invoke(messages)
+
+        t.log_feedback(key='score', score=score_result.score)
+        t.log_feedback(key='feedback', score=score_result.feedback)
+
+
+
     
-    t.log_feedback(key='accuracy', score=accuracy)
-        
-    assert accuracy >= 0.8, f"Expected 80% of {expected_endpoints_operationIDs}, but got {result_operationIDs}\n\n with accuracy: {accuracy}"
-
-
-
-def test_basic():
-    assert True
