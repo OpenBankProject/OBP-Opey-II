@@ -216,6 +216,10 @@ async def _process_stream_event(event: StreamEvent, user_input: StreamInput, run
                 chat_message.pretty_print()
 
                 if chat_message.type == "tool":
+                    # Get rid of the original langchain message as it often breaks the JSON
+                    # and we don't need it anyway
+                    chat_message.original = None
+
                     tool_message_dict = {'type': 'tool', 'content': chat_message.model_dump()}
                     yield f"data: {json.dumps(tool_message_dict)}\n\n"
                 
