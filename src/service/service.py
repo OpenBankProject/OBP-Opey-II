@@ -22,7 +22,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client as LangsmithClient
 
 from utils.obp_utils import obp_requests
-from .auth import OBPConsentAuth, AuthConfig
+from auth.auth import OBPConsentAuth, AuthConfig
 
 from agent import opey_graph, opey_graph_no_obp_tools
 from agent.components.chains import QueryFormulatorOutput

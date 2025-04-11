@@ -1,6 +1,7 @@
 import os
 import requests
 from dotenv import load_dotenv
+from auth import OBPConsentAuth, OBPDirectLoginAuth
 
 load_dotenv()
 
@@ -24,6 +25,17 @@ def get_direct_login_token():
     else:
         print("Error fetching token:", response.json())
         return None
+
+if os.getenv("USE_OBP_CONSENTS") == "true":
+    auth = OBPConsentAuth()
+else:
+    auth = OBPDirectLoginAuth(config={
+        "username": username,
+        "password": password,
+        "consumer_key": consumer_key,
+        "base_uri": obp_base_url
+    })
+    
 
 def get_headers():
     token = get_direct_login_token()

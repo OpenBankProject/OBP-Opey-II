@@ -1,4 +1,4 @@
-from service.auth import OBPConsentAuth
+from auth.auth import OBPConsentAuth
 from utils.obp_utils import obp_requests
 import requests
 import os

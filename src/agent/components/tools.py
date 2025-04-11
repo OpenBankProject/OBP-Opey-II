@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 
 from typing import Any
 
-from agent.utils.config import obp_base_url, get_headers
+from agent.utils.config import obp_base_url, auth
 from agent.components.sub_graphs.endpoint_retrieval.endpoint_retrieval_graph import endpoint_retrieval_graph
 from agent.components.sub_graphs.glossary_retrieval.glossary_retrieval_graph import glossary_retrieval_graph
 
@@ -45,7 +45,7 @@ async def obp_requests(method: str, path: str, body: str):
         print(response)
     """
     url = f"{obp_base_url}{path}"
-    headers = get_headers()
+    headers = auth.construct_headers()
     
     if body == '':
         json_body = None
