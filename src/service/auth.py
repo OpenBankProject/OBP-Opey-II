@@ -30,6 +30,12 @@ class BaseAuth():
             self.async_requests_client = aiohttp.ClientSession()
         return self.async_requests_client
     
+    def construct_headers(self):
+        """
+        Constructs the nessecary HTTP auth headers for a given auth method
+        """
+        raise NotImplementedError
+    
     # Asynchronous method to check if the token is valid
     async def acheck_auth(self, token: str) -> bool:
         raise NotImplementedError
@@ -51,7 +57,7 @@ class OBPConsentAuth(BaseAuth):
             raise ValueError('OBP_CONSUMER_KEY not set in environment variables')
         
         self.current_user_url = self.base_uri + '/obp/v5.1.0/users/current' # type: ignore
-
+ 
     # Asynchronous method to check if the token is valid
     async def acheck_auth(self, token: str) -> bool:
         """
@@ -67,12 +73,7 @@ class OBPConsentAuth(BaseAuth):
             library may occur during the API call.
         """
 
-        consumer_key = self.opey_consumer_key
-
-        headers = {
-            'Consent-JWT': token,
-            'Consumer-Key': consumer_key,
-        }
+        headers = self.construct_headers(token)
 
         client = await self.get_client()
         async with client.get(self.current_user_url, headers=headers) as response:
@@ -82,9 +83,23 @@ class OBPConsentAuth(BaseAuth):
             else:
                 logger.error(f'Error checking OBP consent: {await response.text()}')
                 return False
+            
+    def construct_headers(self, token: str) -> Dict[str, str]:
+        """
+        Constructs the necessary HTTP auth headers for a given auth method
+        """
+        if not token:
+            raise ValueError('Token is required')
+
+        headers = {
+            'Consent-JWT': token,
+            'Consumer-Key': self.opey_consumer_key,
+        }
+
+        return headers
 
 
-class AuthTypes:
+class AuthConfig:
     # This class is used to store different types of authentication methods
     def __init__(self, auth_types: Dict[str, BaseAuth]):
         for key, value in auth_types.items():
