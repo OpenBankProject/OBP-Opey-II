@@ -77,25 +77,25 @@ auth_config = AuthConfig({
 obp_base_url = os.getenv('OBP_BASE_URL')
 jwk_url = f'{obp_base_url}/obp/v5.1.0/certs'
 
-@app.middleware("http")
-async def check_auth_header(request: Request, call_next: Callable) -> Response:
-    request_body = await request.body()
-    logger.debug("This is coming from the auth middleware")
-    logger.debug(f"Request: {request_body}")
+# @app.middleware("http")
+# async def check_auth_header(request: Request, call_next: Callable) -> Response:
+#     request_body = await request.body()
+#     logger.debug("This is coming from the auth middleware")
+#     logger.debug(f"Request: {request_body}")
 
-    # Check if the request has a consent JWT in the headers
-    if request.headers.get("Consent-JWT"):
-        token = request.headers.get("Consent-JWT")
-        if not await auth_config.obp_consent.acheck_auth(token):
-            return Response(status_code=401, content="Invalid token")
-    else:
-        return Response(status_code=401, content="Missing Authorization headers, Must be one of ['Consent-JWT']")
+#     # Check if the request has a consent JWT in the headers
+#     if request.headers.get("Consent-JWT"):
+#         token = request.headers.get("Consent-JWT")
+#         if not await auth_config.obp_consent.acheck_auth(token):
+#             return Response(status_code=401, content="Invalid token")
+#     else:
+#         return Response(status_code=401, content="Missing Authorization headers, Must be one of ['Consent-JWT']")
 
-    # TODO: Add more auth methods here if needed
+#     # TODO: Add more auth methods here if needed
         
-    response = await call_next(request)
-    logger.debug(f"Response: {response}")
-    return response
+#     response = await call_next(request)
+#     logger.debug(f"Response: {response}")
+#     return response
 
 @app.post("/create_session")
 async def create_session(request: Request) -> Response:
@@ -122,6 +122,13 @@ async def create_session(request: Request) -> Response:
 
     response = Response(status_code=200, content="Session created")
     return response
+
+
+@app.post("/delete_session")
+async def delete_session(response: Response, session_id: uuid.UUID = Depends(cookie)):
+    await backend.delete(session_id)
+    cookie.delete_from_response(response)
+    return Response(status_code=200, content="deleted session")
 
 
 @app.get("/status")
@@ -191,25 +198,6 @@ async def message_generator(user_input: StreamInput) -> AsyncGenerator[str, None
     yield "data: [DONE]\n\n"
 
 
-async def raw_message_generator(user_input: StreamInput) -> AsyncGenerator[str, None]:
-    agent: CompiledStateGraph = app.state.agent
-    kwargs, run_id = _parse_input(user_input)
-    config = kwargs["config"]
-
-    print(f"------------START STREAM-----------\n\n")
-    # Process streamed events from the graph and yield messages over the SSE stream.
-    try:
-        async for event in agent.astream_events(**kwargs, version="v2"):
-            print(event)
-            data = "{}".format(event)
-            yield f"data: {data}\n\n"
-    except Exception as e:
-        print(f"Error in raw_message_generator: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': f'Error in raw_message_generator: {e}'})}\n\n"
-    
-    yield "data: [DONE]\n\n"
-
-
 def _sse_response_example() -> dict[int, Any]:
     return {
         status.HTTP_200_OK: {
@@ -235,15 +223,6 @@ async def stream_agent(user_input: StreamInput) -> StreamingResponse:
     logger.debug(f"Received stream request: {user_input}")
 
     return StreamingResponse(message_generator(user_input), media_type="text/event-stream")
-
-@app.post("/stream-langchain", response_class=StreamingResponse)
-async def stream_agent_langchain(user_input: StreamInput) -> StreamingResponse:
-    """
-    Stream the agent's response in raw langchain LCEL format.
-    """
-
-    return StreamingResponse(raw_message_generator(user_input), media_type="text/event-stream")
-
 
 
 @app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example())
