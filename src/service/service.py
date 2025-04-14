@@ -97,8 +97,8 @@ jwk_url = f'{obp_base_url}/obp/v5.1.0/certs'
 #     logger.debug(f"Response: {response}")
 #     return response
 
-@app.post("/create_session")
-async def create_session(request: Request) -> Response:
+@app.post("/create-session")
+async def create_session(request: Request, response: Response) -> Response:
     """
     Create a session for the user using the OBP consent JWT.
     """
@@ -118,21 +118,26 @@ async def create_session(request: Request) -> Response:
         consent_jwt=consent_jwt,
     )
 
-    backend.create(session_id, session_data)
+    await backend.create(session_id, session_data)
+    cookie.attach_to_response(response, session_id)
 
-    response = Response(status_code=200, content="Session created")
+    response.status_code = 200
+    response.body = b"session created"
+
     return response
 
 
-@app.post("/delete_session")
+@app.post("/delete-session")
 async def delete_session(response: Response, session_id: uuid.UUID = Depends(cookie)):
     await backend.delete(session_id)
     cookie.delete_from_response(response)
-    return Response(status_code=200, content="deleted session")
+    response.status_code = 200
+    response.body = b"session deleted"
+    return response
 
 
-@app.get("/status")
-async def get_status() -> dict[str, str]:
+@app.get("/status", dependencies=[Depends(cookie)])
+async def get_status(session_data: SessionData = Depends(verifier)) -> dict[str, str]:
     """Health check endpoint."""
     if not app.state.agent:
         raise HTTPException(status_code=500, detail="Agent not initialized")

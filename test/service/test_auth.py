@@ -1,5 +1,5 @@
 from auth.auth import OBPConsentAuth
-from utils.obp_utils import obp_requests
+from utils.obp_utils import sync_obp_requests, async_obp_requests
 import requests
 import os
 from dotenv import load_dotenv
@@ -30,7 +30,7 @@ async def get_obp_consent():
 
     print("Consent Body:", consent_body)
 
-    consent_response = await obp_requests("POST", "/obp/v5.1.0/my/consents/IMPLICIT", json.dumps(consent_body), consumer_key=os.getenv("API_EXPLORER_CONSUMER_KEY"))
+    consent_response = await async_obp_requests("POST", "/obp/v5.1.0/my/consents/IMPLICIT", json.dumps(consent_body), consumer_key=os.getenv("API_EXPLORER_CONSUMER_KEY"))
     if not consent_response:
         raise ValueError(f"Error fetching consent from OBP")
     consent = await consent_response.json()
