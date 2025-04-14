@@ -1,32 +1,29 @@
 import json
 import os
-import warnings
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from typing import Any, Optional
-from socket import AF_INET
+from typing import Any
 import uuid
-import asyncio
 import logging
-import aiohttp
 
 from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langchain_core.runnables import RunnableConfig
-from langchain_core.runnables.schema import StreamEvent
 from langchain_core.messages import ToolMessage
 from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client as LangsmithClient
 
-from utils.obp_utils import obp_requests
 from auth.auth import OBPConsentAuth, AuthConfig
+from auth.session import cookie, backend, verifier, SessionData
+
+from .streaming import (
+    _parse_input,
+    _process_stream_event,
+)
 
 from agent import opey_graph, opey_graph_no_obp_tools
-from agent.components.chains import QueryFormulatorOutput
-from starlette.background import BackgroundTask
 from schema import (
     ChatMessage,
     Feedback,
@@ -35,8 +32,6 @@ from schema import (
     UserInput,
     convert_message_content_to_string,
     ToolCallApproval,
-    ConsentAuthBody,
-    AuthResponse,
 )
 
 logger = logging.getLogger()
@@ -102,113 +97,31 @@ async def check_auth_header(request: Request, call_next: Callable) -> Response:
     logger.debug(f"Response: {response}")
     return response
 
+@app.post("/create_session")
+async def create_session(request: Request) -> Response:
+    """
+    Create a session for the user using the OBP consent JWT.
+    """
+    # Get the consent JWT from the request
+    consent_jwt = request.headers.get("Consent-JWT")
+    if not consent_jwt:
+        return Response(status_code=401, content="Missing Authorization headers, Must be one of ['Consent-JWT']")
 
-# @app.middleware("http")
-# async def log_request_response(request: Request, call_next: Callable):
-#     request_body = await request.body()
+    # Check if the consent JWT is valid
+    if not await auth_config.obp_consent.acheck_auth(consent_jwt):
+        return Response(status_code=401, content="Invalid Consent-JWT")
 
-#     response = await call_next(request)
-#     chunks = []
-#     async for chunk in response.body_iterator:
-#         chunks.append(chunk)
-#     res_body = b''.join(chunks)
+    session_id = uuid.uuid4()
 
-#     logger.info(f"Request: {request.method} {request.headers} {request.url} {request_body}")
-#     logger.info(f"Response: {response.status_code} {res_body}")
-#     return response
+    # Create a session using the OBP consent JWT
+    session_data = SessionData(
+        consent_jwt=consent_jwt,
+    )
 
+    backend.create(session_id, session_data)
 
-def _parse_input(user_input: UserInput) -> tuple[dict[str, Any], uuid.UUID]:
-    run_id = uuid.uuid4()
-    thread_id = user_input.thread_id or str(uuid.uuid4())
-    # If this is a tool call approval, we don't need to send any input to the agent.
-    if user_input.is_tool_call_approval:
-        _input = None
-    else:
-        input_message = ChatMessage(type="human", content=user_input.message)
-        _input = {"messages": [input_message.to_langchain()]}
-    
-    kwargs = {
-        "input": _input,
-        "config": RunnableConfig(
-            configurable={"thread_id": thread_id}, run_id=run_id
-        ),
-    }
-    return kwargs, run_id
-
-
-def _remove_tool_calls(content: str | list[str | dict]) -> str | list[str | dict]:
-    """Remove tool calls from content."""
-    if isinstance(content, str):
-        return content
-    # Currently only Anthropic models stream tool calls, using content item type tool_use.
-    return [
-        content_item
-        for content_item in content
-        if isinstance(content_item, str) or content_item["type"] != "tool_use"
-    ]
-
-    
-async def _process_stream_event(event: StreamEvent, user_input: StreamInput, run_id: str) -> AsyncGenerator[str, None]:
-    """Helper to process stream events consistently"""
-    if not event:
-        return
-    
-    # Handle messages after node execution
-    if (
-        event["event"] == "on_chain_end"
-        and any(t.startswith("graph:step:") for t in event.get("tags", []))
-        and event["data"].get("output") is not None
-        and "messages" in event["data"]["output"]
-        and event["metadata"].get("langgraph_node", "") not in ["human_review", "summarize_conversation"]
-    ):
-        new_messages = event["data"]["output"]["messages"]
-        if not isinstance(new_messages, list):
-            new_messages = [new_messages]
-
-        # This is a proper hacky way to make sure that no messages are sent from the retreiaval decider node
-        if event["metadata"].get("langgraph_node", "") == "retrieval_decider":
-            print(f"Retrieval decider node returned text content, erasing...")
-            erase_content = True
-        else:
-            erase_content = False
-            
-        for message in new_messages:
-            if erase_content:
-                message.content = ""
-            try:
-                chat_message = ChatMessage.from_langchain(message)
-                chat_message.run_id = str(run_id)
-            except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'content': f'Error parsing message: {e}'})}\n\n"
-                continue
-            
-            # We need this first if statement to avoid returning the user input, which langchain does for some reason
-            if not (chat_message.type == "human" and chat_message.content == user_input.message):
-                chat_message.pretty_print()
-
-                if chat_message.type == "tool":
-                    # Get rid of the original langchain message as it often breaks the JSON
-                    # and we don't need it anyway
-                    chat_message.original = None
-
-                    tool_message_dict = {'type': 'tool', 'content': chat_message.model_dump()}
-                    yield f"data: {json.dumps(tool_message_dict)}\n\n"
-                
-                else:
-                    yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
-
-    # Handle tokens streamed from LLMs
-    if (
-        event["event"] == "on_chat_model_stream"
-        and user_input.stream_tokens
-        and event['metadata'].get('langgraph_node', '') != "transform_query"
-        and event['metadata'].get('langgraph_node', '') != "retrieval_decider"
-        and event['metadata'].get('langgraph_node', '') != "summarize_conversation"
-    ):
-        content = _remove_tool_calls(event["data"]["chunk"].content)
-        if content:
-            yield f"data: {json.dumps({'type': 'token', 'content': convert_message_content_to_string(content)})}\n\n"
+    response = Response(status_code=200, content="Session created")
+    return response
 
 
 @app.get("/status")
