@@ -1,7 +1,7 @@
 from auth.auth import BaseAuth
 from typing import Annotated
 
-from auth.session import session_verifier
+from auth.session import session_verifier, SessionData
 from fastapi import Depends
 
 from agent import opey_graph, opey_graph_no_obp_tools
@@ -12,20 +12,20 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def setup_checkpointing():
+async def setup_checkpointing():
     """
     Set up the checkpointing system for the Opey agent.
     """
     # Check if the environment variable is set to enable checkpointing
-    with AsyncSqliteSaver.from_conn_string('checkpoints.db') as checkpointer:
+    async with AsyncSqliteSaver.from_conn_string('checkpoints.db') as checkpointer:
         yield checkpointer
 
 class OpeyContext:
     """
     Class to manage Opey sessions.
     """
-    def __init__(self, session_data: Annotated[dict, Depends(session_verifier)], checkpointer: Annotated[AsyncSqliteSaver, Depends(setup_checkpointing)]):
-        self.consent_jwt = session_data.get("consent_jwt")
+    def __init__(self, session_data: Annotated[SessionData, Depends(session_verifier)], checkpointer: Annotated[AsyncSqliteSaver, Depends(setup_checkpointing)]):
+        self.consent_jwt = session_data.consent_jwt
 
         if os.getenv("DISABLE_OBP_CALLING") == "true":
             logger.info("Disabling OBP tools: Calls to the OBP-API will not be available")

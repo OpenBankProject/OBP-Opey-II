@@ -67,6 +67,15 @@ async def test_get_protected_route(client: AsyncClient,):
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
+async def test_get_protected_streaming_route(client: AsyncClient, create_session):
+    # Create a session first
+    session_id = create_session
+    print(session_id)
+
+    # Try to access the protected streaming route
+    response = await client.post("/stream", data=json.dumps({'message': 'Hello opey.', 'thread_id': '12345', 'is_tool_call_approval': False}))
+    assert response.status_code == 200
+
 
 @pytest.mark.dependency(depends=["test_create_session"])
 @pytest.mark.asyncio(loop_scope="session")
@@ -87,3 +96,5 @@ async def test_get_protected_route_after_deletion(client: AsyncClient):
     response = await client.get("/status")
     assert response.status_code == 403
     assert response.json() == {"detail": "No session provided"}
+
+

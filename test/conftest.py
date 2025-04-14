@@ -16,10 +16,9 @@ def anyio_backend():
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def client():
-    async with LifespanManager(app) as manager:
-        async with AsyncClient(transport=ASGITransport(app=manager.app), base_url="http://localhost:5000") as client:
-            print("Client is ready")
-            yield client
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost:5000") as client:
+        print("Client is ready")
+        yield client
 # Add the parent directory to sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

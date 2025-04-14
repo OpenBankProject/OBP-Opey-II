@@ -18,7 +18,7 @@ from langsmith import Client as LangsmithClient
 from auth.auth import OBPConsentAuth, AuthConfig
 from auth.session import session_cookie, backend, session_verifier, SessionData
 
-from opey_session import OpeyContext
+from service.opey_session import OpeyContext
 
 from .streaming import (
     _parse_input,
@@ -47,7 +47,7 @@ else:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-   pass
+   yield
 
 
 app = FastAPI(lifespan=lifespan)
@@ -134,9 +134,9 @@ async def delete_session(response: Response, session_id: uuid.UUID = Depends(ses
 
 
 @app.get("/status", dependencies=[Depends(session_cookie)])
-async def get_status() -> dict[str, str]:
+async def get_status(opey_context: Annotated[OpeyContext, Depends()]) -> dict[str, str]:
     """Health check endpoint."""
-    if not app.state.agent:
+    if not opey_context.graph:
         raise HTTPException(status_code=500, detail="Agent not initialized")
     
     return {"status": "ok"}
