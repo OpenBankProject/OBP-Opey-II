@@ -7,14 +7,19 @@ from langchain_core.tools import tool
 
 from typing import Any
 
-from agent.utils.config import obp_base_url, auth
+from auth import OBPConsentAuth
+from auth.session import backend
+
+from agent.utils.config import obp_base_url
 from agent.components.sub_graphs.endpoint_retrieval.endpoint_retrieval_graph import endpoint_retrieval_graph
 from agent.components.sub_graphs.glossary_retrieval.glossary_retrieval_graph import glossary_retrieval_graph
-
 
 async def _async_request(method: str, url: str, body: Any | None, headers: dict[str, str] | None = None):
     try:
         async with aiohttp.ClientSession() as session:
+            auth = OBPConsentAuth(session)
+            # construct the headers using the auth object
+            auth.construct_headers()
             async with session.request(method, url, json=body, headers=headers) as response:
                 json_response = await response.json()
                 status = response.status

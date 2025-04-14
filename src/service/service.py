@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Annotated
 import uuid
 import logging
 
@@ -16,7 +16,9 @@ from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client as LangsmithClient
 
 from auth.auth import OBPConsentAuth, AuthConfig
-from auth.session import cookie, backend, verifier, SessionData
+from auth.session import session_cookie, backend, session_verifier, SessionData
+
+from opey_session import OpeyContext
 
 from .streaming import (
     _parse_input,
@@ -45,12 +47,7 @@ else:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # Construct agent with Sqlite checkpointer
-    async with AsyncSqliteSaver.from_conn_string("checkpoints.db") as saver:
-        opey_instance.checkpointer = saver
-        app.state.agent = opey_instance
-        yield
-    # context manager will clean up the AsyncSqliteSaver on exit
+   pass
 
 
 app = FastAPI(lifespan=lifespan)
@@ -119,7 +116,7 @@ async def create_session(request: Request, response: Response) -> Response:
     )
 
     await backend.create(session_id, session_data)
-    cookie.attach_to_response(response, session_id)
+    session_cookie.attach_to_response(response, session_id)
 
     response.status_code = 200
     response.body = b"session created"
@@ -128,31 +125,31 @@ async def create_session(request: Request, response: Response) -> Response:
 
 
 @app.post("/delete-session")
-async def delete_session(response: Response, session_id: uuid.UUID = Depends(cookie)):
+async def delete_session(response: Response, session_id: uuid.UUID = Depends(session_cookie)):
     await backend.delete(session_id)
-    cookie.delete_from_response(response)
+    session_cookie.delete_from_response(response)
     response.status_code = 200
     response.body = b"session deleted"
     return response
 
 
-@app.get("/status", dependencies=[Depends(cookie)])
-async def get_status(session_data: SessionData = Depends(verifier)) -> dict[str, str]:
+@app.get("/status", dependencies=[Depends(session_cookie)])
+async def get_status() -> dict[str, str]:
     """Health check endpoint."""
     if not app.state.agent:
         raise HTTPException(status_code=500, detail="Agent not initialized")
     
     return {"status": "ok"}
 
-@app.post("/invoke")
-async def invoke(user_input: UserInput) -> ChatMessage:
+@app.post("/invoke", dependencies=[Depends(session_cookie)])
+async def invoke(user_input: UserInput, opey_context: Annotated[OpeyContext, Depends()]) -> ChatMessage:
     """
     Invoke the agent with user input to retrieve a final response.
 
     Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
     is also attached to messages for recording feedback.
     """
-    agent: CompiledStateGraph = app.state.agent
+    agent: CompiledStateGraph = opey_context.graph
     kwargs, run_id = _parse_input(user_input)
     try:
         response = await agent.ainvoke(**kwargs)
@@ -165,13 +162,13 @@ async def invoke(user_input: UserInput) -> ChatMessage:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def message_generator(user_input: StreamInput) -> AsyncGenerator[str, None]:
+async def opey_message_generator(user_input: StreamInput, opey_context: Annotated[OpeyContext, Depends()]) -> AsyncGenerator[str, None]:
     """
     Generate a stream of messages from the agent.
 
     This is the workhorse method for the /stream endpoint.
     """
-    agent: CompiledStateGraph = app.state.agent
+    agent: CompiledStateGraph = opey_context.graph
     kwargs, run_id = _parse_input(user_input)
     config = kwargs["config"]
 
@@ -217,8 +214,8 @@ def _sse_response_example() -> dict[int, Any]:
     }
 
 
-@app.post("/stream", response_class=StreamingResponse, responses=_sse_response_example())
-async def stream_agent(user_input: StreamInput) -> StreamingResponse:
+@app.post("/stream", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
+async def stream_agent(user_input: StreamInput, message_generator: Annotated[AsyncGenerator[str, None], Depends(opey_message_generator)]) -> StreamingResponse:
     """
     Stream the agent's response to a user input, including intermediate messages and tokens.
 
@@ -230,8 +227,8 @@ async def stream_agent(user_input: StreamInput) -> StreamingResponse:
     return StreamingResponse(message_generator(user_input), media_type="text/event-stream")
 
 
-@app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example())
-async def user_approval(user_approval_response: ToolCallApproval, thread_id: str) -> StreamingResponse:
+@app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
+async def user_approval(user_approval_response: ToolCallApproval, thread_id: str, message_generator: Annotated[AsyncGenerator[str, None], Depends(opey_message_generator)]) -> StreamingResponse:
     print(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
     
     agent: CompiledStateGraph = app.state.agent
@@ -265,7 +262,7 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
     return StreamingResponse(message_generator(user_input), media_type="text/event-stream")
 
 
-@app.post("/feedback")
+@app.post("/feedback", dependencies=[Depends(session_cookie)])
 async def feedback(feedback: Feedback) -> FeedbackResponse:
     """
     Record feedback for a run to LangSmith.

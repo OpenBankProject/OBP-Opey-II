@@ -18,7 +18,7 @@ if not (secret_key := os.getenv("SESSION_SECRET_KEY")):
     raise ValueError("SESSION_SECRET_KEY environment variable must be set")
     
 # Uses UUID
-cookie = SessionCookie(
+session_cookie = SessionCookie(
     cookie_name="session",
     identifier="session_verifier",
     auto_error=True,
@@ -64,7 +64,7 @@ class BasicVerifier(SessionVerifier[UUID, SessionData]):
         return True
 
 
-verifier = BasicVerifier(
+session_verifier = BasicVerifier(
     identifier="session_verifier",
     auto_error=True,
     backend=backend,
