@@ -52,7 +52,7 @@ class AuthConfig:
 # Define differnt auth types here
 class OBPConsentAuth(BaseAuth):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, consent_jwt: str | None = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         # Load the base URI and consumer key from the environment variables
@@ -60,6 +60,8 @@ class OBPConsentAuth(BaseAuth):
         if not self.base_uri:
             raise ValueError('OBP_BASE_URL not set in environment variables')
 
+        if consent_jwt:
+            self.token = consent_jwt
         # Get the consumer key from the environment variables
         self.opey_consumer_key = os.getenv('OBP_CONSUMER_KEY')
         if not self.opey_consumer_key:
@@ -68,7 +70,7 @@ class OBPConsentAuth(BaseAuth):
         self.current_user_url = self.base_uri + '/obp/v5.1.0/users/current' # type: ignore
  
     # Asynchronous method to check if the token is valid
-    async def acheck_auth(self, token: str) -> bool:
+    async def acheck_auth(self, token: str | None = None) -> bool:
         """
         Asynchronously verifies the authentication of a user by checking the validity of a consent JWT against the OBP API.
         This function makes a GET request to the current user endpoint with the consent JWT and consumer key in the headers.
@@ -81,6 +83,11 @@ class OBPConsentAuth(BaseAuth):
             No exceptions are explicitly raised, but network-related exceptions from the requests 
             library may occur during the API call.
         """
+        if not token and not self.token:
+            raise ValueError('Token is required')
+        
+        if not token:
+            token = self.token
 
         headers = self.construct_headers(token)
 
@@ -93,12 +100,15 @@ class OBPConsentAuth(BaseAuth):
                 logger.error(f'Error checking OBP consent: {await response.text()}')
                 return False
             
-    def construct_headers(self, token: str) -> Dict[str, str]:
+    def construct_headers(self, token: str | None = None) -> Dict[str, str]:
         """
         Constructs the necessary HTTP auth headers for a given auth method
         """
-        if not token:
+        if not token and not self.token:
             raise ValueError('Token is required')
+        
+        if not token:
+            token = self.token
 
         headers = {
             'Consent-JWT': token,

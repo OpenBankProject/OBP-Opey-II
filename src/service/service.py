@@ -267,8 +267,12 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
         is_tool_call_approval=True,
     )
 
+    async def stream_generator():
+        async for msg in opey_message_generator(user_input, opey_context):
+            yield msg
 
-    return StreamingResponse(opey_message_generator(user_input, opey_context), media_type="text/event-stream")
+
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
 
 @app.post("/feedback", dependencies=[Depends(session_cookie)])
