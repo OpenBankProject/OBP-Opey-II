@@ -11,7 +11,6 @@ from typing import Any, AsyncGenerator
 import uuid
 import json
 from langchain_core.runnables import RunnableConfig
-from langchain_core.messages import ChatMessage
 from langchain_core.runnables.schema import StreamEvent
 
 def _parse_input(user_input: UserInput) -> tuple[dict[str, Any], uuid.UUID]:

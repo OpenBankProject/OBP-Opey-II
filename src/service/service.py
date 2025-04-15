@@ -1,8 +1,7 @@
 import json
 import os
-from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from typing import Any, Annotated
+from typing import Any, Annotated, AsyncGenerator
 import uuid
 import logging
 
@@ -19,6 +18,7 @@ from auth.auth import OBPConsentAuth, AuthConfig
 from auth.session import session_cookie, backend, session_verifier, SessionData
 
 from service.opey_session import OpeyContext
+from service.checkpointer import checkpointers, get_global_checkpointer
 
 from .streaming import (
     _parse_input,
@@ -47,10 +47,13 @@ else:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-   yield
+    async with AsyncSqliteSaver.from_conn_string('checkpoints.db') as sql_checkpointer:
+        checkpointers['aiosql'] = sql_checkpointer
+        yield
 
 
 app = FastAPI(lifespan=lifespan)
+
 
 # Setup CORS policy
 if cors_allowed_origins := os.getenv("CORS_ALLOWED_ORIGINS"):
@@ -118,6 +121,7 @@ async def create_session(request: Request, response: Response) -> Response:
     await backend.create(session_id, session_data)
     session_cookie.attach_to_response(response, session_id)
 
+    print(response.headers)
     response.status_code = 200
     response.body = b"session created"
 
@@ -162,12 +166,15 @@ async def invoke(user_input: UserInput, opey_context: Annotated[OpeyContext, Dep
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def opey_message_generator(user_input: StreamInput, opey_context: Annotated[OpeyContext, Depends()]) -> AsyncGenerator[str, None]:
+async def opey_message_generator(user_input: StreamInput, opey_context: OpeyContext) -> AsyncGenerator[str, None]:
     """
     Generate a stream of messages from the agent.
 
     This is the workhorse method for the /stream endpoint.
     """
+
+    logger.debug(f"Received stream request: {user_input}")
+
     agent: CompiledStateGraph = opey_context.graph
     kwargs, run_id = _parse_input(user_input)
     config = kwargs["config"]
@@ -215,20 +222,22 @@ def _sse_response_example() -> dict[int, Any]:
 
 
 @app.post("/stream", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
-async def stream_agent(user_input: StreamInput, message_generator: Annotated[AsyncGenerator[str, None], Depends(opey_message_generator)]) -> StreamingResponse:
+async def stream_agent(user_input: StreamInput, opey_context: Annotated[OpeyContext, Depends()]) -> StreamingResponse:
     """
     Stream the agent's response to a user input, including intermediate messages and tokens.
 
     Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
     is also attached to all messages for recording feedback.
     """
-    logger.debug(f"Received stream request: {user_input}")
+    async def stream_generator():
+        async for msg in opey_message_generator(user_input, opey_context):
+            yield msg
 
-    return StreamingResponse(message_generator(user_input), media_type="text/event-stream")
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
 
 @app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
-async def user_approval(user_approval_response: ToolCallApproval, thread_id: str, message_generator: Annotated[AsyncGenerator[str, None], Depends(opey_message_generator)]) -> StreamingResponse:
+async def user_approval(user_approval_response: ToolCallApproval, thread_id: str, opey_context: Annotated[OpeyContext, Depends()]) -> StreamingResponse:
     print(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
     
     agent: CompiledStateGraph = app.state.agent
@@ -259,7 +268,7 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
     )
 
 
-    return StreamingResponse(message_generator(user_input), media_type="text/event-stream")
+    return StreamingResponse(opey_message_generator(user_input, opey_context), media_type="text/event-stream")
 
 
 @app.post("/feedback", dependencies=[Depends(session_cookie)])
