@@ -17,30 +17,38 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class OpeyContext:
+class OpeySession:
     """
     Class to manage Opey sessions.
     """
     def __init__(self, session_data: Annotated[SessionData, Depends(session_verifier)], checkpointer: Annotated[AsyncSqliteSaver, Depends(get_global_checkpointer)]):
+        # Get consent_jwt from the session data
         self.consent_jwt = session_data.consent_jwt
 
+        # Set up a new auth module to store the consent_jwt, then pass this to the OBP requests module
+        # This is so that the OBP requests module can use the consent_jwt to authenticate requests
+        # to the OBP API
         self.auth = OBPConsentAuth(consent_jwt=self.consent_jwt)
         self.obp_requests = OBPRequestsModule(auth=self.auth)
 
+        # Need to create the OBP requests langchain tool here, as it relies on the consent_jwt header being set
         self.obp_requests_tool = self.obp_requests.langchain_tool
 
+        # Set options for Opey to be used without any OBP tools
         if os.getenv("DISABLE_OBP_CALLING") == "true":
             logger.info("Disabling OBP tools: Calls to the OBP-API will not be available")
+
             tools = [endpoint_retrieval_tool, glossary_retrieval_tool]
-            self.graph = compile_opey_graph_with_tools(tools)
 
         elif os.getenv("DISABLE_OBP_CALLING") == "false":
             logger.info("Enabling OBP tools: Calls to the OBP-API will be available")
-            tools = [endpoint_retrieval_tool, glossary_retrieval_tool, self.obp_requests_tool]
-            self.graph = compile_opey_graph_with_tools(tools)
 
+            tools = [endpoint_retrieval_tool, glossary_retrieval_tool, self.obp_requests_tool]
+            
         else:
             raise ValueError("DISABLE_OBP_CALLING must be set to 'true' or 'false'")
+        
+        self.graph = compile_opey_graph_with_tools(tools)
 
         self.graph.checkpointer = checkpointer
         

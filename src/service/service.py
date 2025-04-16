@@ -17,7 +17,7 @@ from langsmith import Client as LangsmithClient
 from auth.auth import OBPConsentAuth, AuthConfig
 from auth.session import session_cookie, backend, session_verifier, SessionData
 
-from service.opey_session import OpeyContext
+from service.opey_session import OpeySession
 from service.checkpointer import checkpointers, get_global_checkpointer
 
 from .streaming import (
@@ -138,22 +138,22 @@ async def delete_session(response: Response, session_id: uuid.UUID = Depends(ses
 
 
 @app.get("/status", dependencies=[Depends(session_cookie)])
-async def get_status(opey_context: Annotated[OpeyContext, Depends()]) -> dict[str, str]:
+async def get_status(opey_session: Annotated[OpeySession, Depends()]) -> dict[str, str]:
     """Health check endpoint."""
-    if not opey_context.graph:
+    if not opey_session.graph:
         raise HTTPException(status_code=500, detail="Agent not initialized")
     
     return {"status": "ok"}
 
 @app.post("/invoke", dependencies=[Depends(session_cookie)])
-async def invoke(user_input: UserInput, opey_context: Annotated[OpeyContext, Depends()]) -> ChatMessage:
+async def invoke(user_input: UserInput, opey_session: Annotated[OpeySession, Depends()]) -> ChatMessage:
     """
     Invoke the agent with user input to retrieve a final response.
 
     Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
     is also attached to messages for recording feedback.
     """
-    agent: CompiledStateGraph = opey_context.graph
+    agent: CompiledStateGraph = opey_session.graph
     kwargs, run_id = _parse_input(user_input)
     try:
         response = await agent.ainvoke(**kwargs)
@@ -166,7 +166,7 @@ async def invoke(user_input: UserInput, opey_context: Annotated[OpeyContext, Dep
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def opey_message_generator(user_input: StreamInput, opey_context: OpeyContext) -> AsyncGenerator[str, None]:
+async def opey_message_generator(user_input: StreamInput, opey_session: OpeySession) -> AsyncGenerator[str, None]:
     """
     Generate a stream of messages from the agent.
 
@@ -175,7 +175,7 @@ async def opey_message_generator(user_input: StreamInput, opey_context: OpeyCont
 
     logger.debug(f"Received stream request: {user_input}")
 
-    agent: CompiledStateGraph = opey_context.graph
+    agent: CompiledStateGraph = opey_session.graph
     kwargs, run_id = _parse_input(user_input)
     config = kwargs["config"]
 
@@ -222,7 +222,7 @@ def _sse_response_example() -> dict[int, Any]:
 
 
 @app.post("/stream", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
-async def stream_agent(user_input: StreamInput, opey_context: Annotated[OpeyContext, Depends()]) -> StreamingResponse:
+async def stream_agent(user_input: StreamInput, opey_session: Annotated[OpeySession, Depends()]) -> StreamingResponse:
     """
     Stream the agent's response to a user input, including intermediate messages and tokens.
 
@@ -230,14 +230,14 @@ async def stream_agent(user_input: StreamInput, opey_context: Annotated[OpeyCont
     is also attached to all messages for recording feedback.
     """
     async def stream_generator():
-        async for msg in opey_message_generator(user_input, opey_context):
+        async for msg in opey_message_generator(user_input, opey_session):
             yield msg
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
 
 @app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
-async def user_approval(user_approval_response: ToolCallApproval, thread_id: str, opey_context: Annotated[OpeyContext, Depends()]) -> StreamingResponse:
+async def user_approval(user_approval_response: ToolCallApproval, thread_id: str, opey_session: Annotated[OpeySession, Depends()]) -> StreamingResponse:
     print(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
     
     agent: CompiledStateGraph = app.state.agent
@@ -268,7 +268,7 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
     )
 
     async def stream_generator():
-        async for msg in opey_message_generator(user_input, opey_context):
+        async for msg in opey_message_generator(user_input, opey_session):
             yield msg
 
 

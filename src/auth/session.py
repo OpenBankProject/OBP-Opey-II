@@ -11,7 +11,9 @@ from pydantic import BaseModel
 class SessionData(BaseModel):
     consent_jwt: str
 
-cookie_params = CookieParameters()
+cookie_params = CookieParameters(
+    secure=True,
+)
 
 # Get secret key from environment variable
 if not (secret_key := os.getenv("SESSION_SECRET_KEY")):
