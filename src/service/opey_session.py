@@ -5,50 +5,94 @@ from auth.session import session_verifier, SessionData
 from auth.auth import OBPConsentAuth
 from fastapi import Depends
 
-from agent import opey_graph, opey_graph_no_obp_tools, compile_opey_graph_with_tools
+from agent import compile_opey_graph_with_tools, compile_opey_graph_with_tools_no_HIL
 from agent.components.tools import endpoint_retrieval_tool, glossary_retrieval_tool
 
 from agent.utils.obp import OBPRequestsModule
 from service.checkpointer import get_global_checkpointer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langchain_core.runnables.graph import MermaidDrawMethod
+
 
 import os
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('uvicorn.info')
 
 class OpeySession:
     """
     Class to manage Opey sessions.
     """
-    def __init__(self, session_data: Annotated[SessionData, Depends(session_verifier)], checkpointer: Annotated[AsyncSqliteSaver, Depends(get_global_checkpointer)]):
+    def __init__(self, session_data: Annotated[SessionData, Depends(session_verifier)], checkpointer: Annotated[BaseCheckpointSaver, Depends(get_global_checkpointer)]):
         # Get consent_jwt from the session data
         self.consent_jwt = session_data.consent_jwt
-
-        # Set up a new auth module to store the consent_jwt, then pass this to the OBP requests module
-        # This is so that the OBP requests module can use the consent_jwt to authenticate requests
-        # to the OBP API
         self.auth = OBPConsentAuth(consent_jwt=self.consent_jwt)
-        self.obp_requests = OBPRequestsModule(auth=self.auth)
 
-        # Need to create the OBP requests langchain tool here, as it relies on the consent_jwt header being set
-        self.obp_requests_tool = self.obp_requests.langchain_tool
+        obp_api_mode = os.getenv("OBP_API_MODE")
 
-        # Set options for Opey to be used without any OBP tools
-        if os.getenv("DISABLE_OBP_CALLING") == "true":
-            logger.info("Disabling OBP tools: Calls to the OBP-API will not be available")
+        if obp_api_mode != "NONE":
+            # Initialize the OBPRequestsModule with the auth object
+            self.obp_requests = OBPRequestsModule(self.auth)
 
-            tools = [endpoint_retrieval_tool, glossary_retrieval_tool]
+        # Base tools that all modes should have:
+        base_tools = [endpoint_retrieval_tool, glossary_retrieval_tool]
+        # Initialize the graph with the appropriate tools based on the OBP API mode
+        match obp_api_mode:
+            case "NONE":
+                logger.info("OBP API mode set to NONE: Calls to the OBP-API will not be available")
+                tools = base_tools
+                self.graph = compile_opey_graph_with_tools_no_HIL(tools)
 
-        elif os.getenv("DISABLE_OBP_CALLING") == "false":
-            logger.info("Enabling OBP tools: Calls to the OBP-API will be available")
+            case "SAFE":
+                logger.info("OBP API mode set to SAFE: GET requests to the OBP-API will be available")
+                tools = base_tools + [self.obp_requests.get_langchain_tool('safe')]
+                # We don't need Human in the loop for SAFE mode, as only GET requests are made
 
-            tools = [endpoint_retrieval_tool, glossary_retrieval_tool, self.obp_requests_tool]
-            
-        else:
-            raise ValueError("DISABLE_OBP_CALLING must be set to 'true' or 'false'")
-        
-        self.graph = compile_opey_graph_with_tools(tools)
+                logger.info("Compiling graph with request tool: %s", tools[-1])
+                self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+
+            case "DANGEROUS":
+                logger.info("OBP API mode set to DANGEROUS: All requests to the OBP-API will be available subject to user approval.")
+                tools = base_tools + [self.obp_requests.get_langchain_tool('dangerous')]
+                self.graph = compile_opey_graph_with_tools(tools)
+
+            case "TEST":
+                logger.info("OBP API mode set to TEST: All requests to the OBP-API will be available AND WILL BE APPROVED BY DEFAULT. DO NOT USE IN PRODUCTION.")
+                tools = base_tools + [self.obp_requests.get_langchain_tool('test')]
+                self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+
+            case _:
+                logger.error(f"OBP API mode set to {obp_api_mode}: Unknown OBP API mode. Defaulting to NONE.")
+                tools = base_tools
+                self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+
 
         self.graph.checkpointer = checkpointer
+    
+    
+    def get_threads_for_user(self):
+        """
+        Get the threads for the user
+        Returns:
+            List of threads for the user
+        """
+        raise NotImplementedError("This method is not implemented yet")
         
+
+    def generate_mermaid_diagram(self, path: str):
+        """
+        Generate a mermaid diagram from the agent graph
+        path (str): The path to save the diagram
+        """
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+            graph_png = self.graph.get_graph().draw_mermaid_png(
+                draw_method=MermaidDrawMethod.API,
+                output_file_path=path,
+            )
+            return graph_png
+        except Exception as e:
+            print("Error generating mermaid diagram:", e)
+            return None 

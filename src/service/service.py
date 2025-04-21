@@ -25,7 +25,6 @@ from .streaming import (
     _process_stream_event,
 )
 
-from agent import opey_graph, opey_graph_no_obp_tools
 from schema import (
     ChatMessage,
     Feedback,
@@ -38,15 +37,11 @@ from schema import (
 
 logger = logging.getLogger()
 
-if os.getenv("DISABLE_OBP_CALLING") == "true":
-    logger.info("Disabling OBP tools: Calls to the OBP-API will not be available")
-    opey_instance = opey_graph_no_obp_tools
-else:
-    logger.info("Enabling OBP tools: Calls to the OBP-API will be available")
-    opey_instance = opey_graph
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Ensures that the checkpointer is created and closed properly, and that only this one is used
+    # for the whole app
     async with AsyncSqliteSaver.from_conn_string('checkpoints.db') as sql_checkpointer:
         checkpointers['aiosql'] = sql_checkpointer
         yield
@@ -240,7 +235,7 @@ async def stream_agent(user_input: StreamInput, opey_session: Annotated[OpeySess
 async def user_approval(user_approval_response: ToolCallApproval, thread_id: str, opey_session: Annotated[OpeySession, Depends()]) -> StreamingResponse:
     print(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
     
-    agent: CompiledStateGraph = app.state.agent
+    agent: CompiledStateGraph = opey_session.agent
 
     agent_state = await agent.aget_state({"configurable": {"thread_id": thread_id}})
 
