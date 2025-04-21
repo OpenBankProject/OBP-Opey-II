@@ -1,6 +1,6 @@
 # Opey Agent
 
-## (WIP)
+
 
 An agentic version of the Opey chatbot for Open Bank Project that uses the [LangGraph](https://www.langchain.com/langgraph) framework
 
@@ -89,4 +89,31 @@ If you want to have metrics and tracing for the agent from LangSmith. Obtain a [
 LANGCHAIN_TRACING_V2="true"
 LANGCHAIN_API_KEY="lsv2_pt_..."
 LANGCHAIN_PROJECT="langchain-opey" # or whatever name you want
+```
+
+## Docker
+
+To run using docker simply run `docker compose up` (you'll need to have the [docker compose plugin](https://docs.docker.com/compose/install/linux/))
+
+### Running with a local OBP-API
+In some instances (when developing mostly) you'll be trying to do this with a local instance of OBP i.e. running at `http://127.0.0.1:8080` on the host machine. 
+
+In that case you'll need to change `OBP_BASE_URL` in the _environment variables_ to be your computer's IP address rather than localhost. 
+
+First get your IP address, in linux this is 
+```
+ip a
+```
+replace `127.0.0.1` or `localhost` in your `OBP_BASE_URL` with your host machine's IP
+
+```
+OBP_BASE_URL="http://127.0.0.1:8080"
+```
+becomes 
+```
+OBP_BASE_URL="http://<your IP address>:8080"
+```
+i.e. 
+```
+OBP_BASE_URL="http://192.168.0.112:8080"
 ```
