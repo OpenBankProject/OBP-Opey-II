@@ -7,8 +7,8 @@ services:
       - "5000:5000"
     env_file:
       - .env
-    # depends_on:
-    #   - weaviate
+#     depends_on:
+#       - weaviate
 
 #   weaviate:
 #     command:
@@ -34,4 +34,4 @@ services:
 #       CLUSTER_HOSTNAME: 'node1'
 # volumes:
 #   weaviate_data:
-...
+# ...

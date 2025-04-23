@@ -46,7 +46,8 @@ class OBPRequestsModule:
     async def async_obp_get_requests(self, path: str):
         """
         Exectues a GET request to the OpenBankProject (OBP) API.
-        ONLY GET requests are allowed in this mode.
+        ONLY GET requests are allowed in this mode, but OBP supports all kinds of requests.
+        This is a tool that only allows GET requests to be made to the OBP API as a safety measure.
         Args:
             path (str): The API endpoint path to send the request to.
         Returns:
