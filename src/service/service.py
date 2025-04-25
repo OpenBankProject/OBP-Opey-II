@@ -1,32 +1,30 @@
 import json
 import os
-import warnings
-from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from typing import Any, Optional
-from socket import AF_INET
+from typing import Any, Annotated, AsyncGenerator
 import uuid
-import asyncio
 import logging
-import aiohttp
 
 from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langchain_core.runnables import RunnableConfig
-from langchain_core.runnables.schema import StreamEvent
 from langchain_core.messages import ToolMessage
 from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client as LangsmithClient
 
-from utils.obp_utils import obp_requests
-from .auth import OBPConsentAuth, AuthTypes
+from auth.auth import OBPConsentAuth, AuthConfig
+from auth.session import session_cookie, backend, session_verifier, SessionData
 
-from agent import opey_graph, opey_graph_no_obp_tools
-from agent.components.chains import QueryFormulatorOutput
-from starlette.background import BackgroundTask
+from service.opey_session import OpeySession
+from service.checkpointer import checkpointers, get_global_checkpointer
+
+from .streaming import (
+    _parse_input,
+    _process_stream_event,
+)
+
 from schema import (
     ChatMessage,
     Feedback,
@@ -35,58 +33,22 @@ from schema import (
     UserInput,
     convert_message_content_to_string,
     ToolCallApproval,
-    ConsentAuthBody,
-    AuthResponse,
 )
 
 logger = logging.getLogger()
 
-if os.getenv("DISABLE_OBP_CALLING") == "true":
-    logger.info("Disabling OBP tools: Calls to the OBP-API will not be available")
-    opey_instance = opey_graph_no_obp_tools
-else:
-    logger.info("Enabling OBP tools: Calls to the OBP-API will be available")
-    opey_instance = opey_graph
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-
-    # Init the aiohttp client
-    logger.info("Starting up")
-    await SingletonAiohttp.get_aiohttp_client()
-    # Construct agent with Sqlite checkpointer
-    async with AsyncSqliteSaver.from_conn_string("checkpoints.db") as saver:
-        opey_instance.checkpointer = saver
-        app.state.agent = opey_instance
+    # Ensures that the checkpointer is created and closed properly, and that only this one is used
+    # for the whole app
+    async with AsyncSqliteSaver.from_conn_string('checkpoints.db') as sql_checkpointer:
+        checkpointers['aiosql'] = sql_checkpointer
         yield
-    # context manager will clean up the AsyncSqliteSaver on exit
-
-    # Close the aiohttp client
-    logger.info("Shutting down")
-    await SingletonAiohttp.close_aiohttp_client()
-
-# Construct an async requests client to use across the app for requests, to OBP or external APIs
-CONNECTION_POOL_LIMIT=100
-class SingletonAiohttp:
-    aiohttp_client: Optional[aiohttp.ClientSession] = None
-
-    @classmethod
-    async def get_aiohttp_client(cls) -> aiohttp.ClientSession:
-        if cls.aiohttp_client is None:
-            #connector = aiohttp.TCPConnector(family=AF_INET, limit_per_host=CONNECTION_POOL_LIMIT)
-            cls.aiohttp_client = aiohttp.ClientSession()
-
-        return cls.aiohttp_client
-
-    @classmethod
-    async def close_aiohttp_client(cls) -> None:
-        if cls.aiohttp_client:
-            await cls.aiohttp_client.close()
-            cls.aiohttp_client = None
-
 
 
 app = FastAPI(lifespan=lifespan)
+
 
 # Setup CORS policy
 if cors_allowed_origins := os.getenv("CORS_ALLOWED_ORIGINS"):
@@ -102,7 +64,7 @@ else:
 
 # Define Allowed Authentication methods,
 # Currently only OBP consent is allowed
-auth = AuthTypes({
+auth_config = AuthConfig({
     "obp_consent": OBPConsentAuth(),
 })
 
@@ -110,148 +72,83 @@ auth = AuthTypes({
 obp_base_url = os.getenv('OBP_BASE_URL')
 jwk_url = f'{obp_base_url}/obp/v5.1.0/certs'
 
-@app.middleware("http")
-async def check_auth_header(request: Request, call_next: Callable) -> Response:
-    request_body = await request.body()
-    logger.debug("This is coming from the auth middleware")
-    logger.debug(f"Request: {request_body}")
+# @app.middleware("http")
+# async def check_auth_header(request: Request, call_next: Callable) -> Response:
+#     request_body = await request.body()
+#     logger.debug("This is coming from the auth middleware")
+#     logger.debug(f"Request: {request_body}")
 
-    # Check if the request has a consent JWT in the headers
-    if request.headers.get("Consent-JWT"):
-        token = request.headers.get("Consent-JWT")
-        if not await auth.obp_consent.acheck_auth(token):
-            return Response(status_code=401, content="Invalid token")
-    else:
+#     # Check if the request has a consent JWT in the headers
+#     if request.headers.get("Consent-JWT"):
+#         token = request.headers.get("Consent-JWT")
+#         if not await auth_config.obp_consent.acheck_auth(token):
+#             return Response(status_code=401, content="Invalid token")
+#     else:
+#         return Response(status_code=401, content="Missing Authorization headers, Must be one of ['Consent-JWT']")
+
+#     # TODO: Add more auth methods here if needed
+        
+#     response = await call_next(request)
+#     logger.debug(f"Response: {response}")
+#     return response
+
+@app.post("/create-session")
+async def create_session(request: Request, response: Response) -> Response:
+    """
+    Create a session for the user using the OBP consent JWT.
+    """
+    # Get the consent JWT from the request
+    consent_jwt = request.headers.get("Consent-JWT")
+    if not consent_jwt:
         return Response(status_code=401, content="Missing Authorization headers, Must be one of ['Consent-JWT']")
 
-    # TODO: Add more auth methods here if needed
-        
-    response = await call_next(request)
-    logger.debug(f"Response: {response}")
+    # Check if the consent JWT is valid
+    if not await auth_config.obp_consent.acheck_auth(consent_jwt):
+        return Response(status_code=401, content="Invalid Consent-JWT")
+
+    session_id = uuid.uuid4()
+
+    # Create a session using the OBP consent JWT
+    session_data = SessionData(
+        consent_jwt=consent_jwt,
+    )
+
+    await backend.create(session_id, session_data)
+    session_cookie.attach_to_response(response, session_id)
+
+    print(response.headers)
+    response.status_code = 200
+    response.body = b"session created"
+
     return response
 
 
-# @app.middleware("http")
-# async def log_request_response(request: Request, call_next: Callable):
-#     request_body = await request.body()
-
-#     response = await call_next(request)
-#     chunks = []
-#     async for chunk in response.body_iterator:
-#         chunks.append(chunk)
-#     res_body = b''.join(chunks)
-
-#     logger.info(f"Request: {request.method} {request.headers} {request.url} {request_body}")
-#     logger.info(f"Response: {response.status_code} {res_body}")
-#     return response
+@app.post("/delete-session")
+async def delete_session(response: Response, session_id: uuid.UUID = Depends(session_cookie)):
+    await backend.delete(session_id)
+    session_cookie.delete_from_response(response)
+    response.status_code = 200
+    response.body = b"session deleted"
+    return response
 
 
-def _parse_input(user_input: UserInput) -> tuple[dict[str, Any], uuid.UUID]:
-    run_id = uuid.uuid4()
-    thread_id = user_input.thread_id or str(uuid.uuid4())
-    # If this is a tool call approval, we don't need to send any input to the agent.
-    if user_input.is_tool_call_approval:
-        _input = None
-    else:
-        input_message = ChatMessage(type="human", content=user_input.message)
-        _input = {"messages": [input_message.to_langchain()]}
-    
-    kwargs = {
-        "input": _input,
-        "config": RunnableConfig(
-            configurable={"thread_id": thread_id}, run_id=run_id
-        ),
-    }
-    return kwargs, run_id
-
-
-def _remove_tool_calls(content: str | list[str | dict]) -> str | list[str | dict]:
-    """Remove tool calls from content."""
-    if isinstance(content, str):
-        return content
-    # Currently only Anthropic models stream tool calls, using content item type tool_use.
-    return [
-        content_item
-        for content_item in content
-        if isinstance(content_item, str) or content_item["type"] != "tool_use"
-    ]
-
-    
-async def _process_stream_event(event: StreamEvent, user_input: StreamInput, run_id: str) -> AsyncGenerator[str, None]:
-    """Helper to process stream events consistently"""
-    if not event:
-        return
-    
-    # Handle messages after node execution
-    if (
-        event["event"] == "on_chain_end"
-        and any(t.startswith("graph:step:") for t in event.get("tags", []))
-        and event["data"].get("output") is not None
-        and "messages" in event["data"]["output"]
-        and event["metadata"].get("langgraph_node", "") not in ["human_review", "summarize_conversation"]
-    ):
-        new_messages = event["data"]["output"]["messages"]
-        if not isinstance(new_messages, list):
-            new_messages = [new_messages]
-
-        # This is a proper hacky way to make sure that no messages are sent from the retreiaval decider node
-        if event["metadata"].get("langgraph_node", "") == "retrieval_decider":
-            print(f"Retrieval decider node returned text content, erasing...")
-            erase_content = True
-        else:
-            erase_content = False
-            
-        for message in new_messages:
-            if erase_content:
-                message.content = ""
-            try:
-                chat_message = ChatMessage.from_langchain(message)
-                chat_message.run_id = str(run_id)
-            except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'content': f'Error parsing message: {e}'})}\n\n"
-                continue
-            
-            # We need this first if statement to avoid returning the user input, which langchain does for some reason
-            if not (chat_message.type == "human" and chat_message.content == user_input.message):
-                chat_message.pretty_print()
-
-                if chat_message.type == "tool":
-                    tool_message_dict = {'type': 'tool', 'content': chat_message.model_dump()}
-                    yield f"data: {json.dumps(tool_message_dict)}\n\n"
-                
-                else:
-                    yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
-
-    # Handle tokens streamed from LLMs
-    if (
-        event["event"] == "on_chat_model_stream"
-        and user_input.stream_tokens
-        and event['metadata'].get('langgraph_node', '') != "transform_query"
-        and event['metadata'].get('langgraph_node', '') != "retrieval_decider"
-        and event['metadata'].get('langgraph_node', '') != "summarize_conversation"
-    ):
-        content = _remove_tool_calls(event["data"]["chunk"].content)
-        if content:
-            yield f"data: {json.dumps({'type': 'token', 'content': convert_message_content_to_string(content)})}\n\n"
-
-
-@app.get("/status")
-async def get_status() -> dict[str, str]:
+@app.get("/status", dependencies=[Depends(session_cookie)])
+async def get_status(opey_session: Annotated[OpeySession, Depends()]) -> dict[str, str]:
     """Health check endpoint."""
-    if not app.state.agent:
+    if not opey_session.graph:
         raise HTTPException(status_code=500, detail="Agent not initialized")
     
     return {"status": "ok"}
 
-@app.post("/invoke")
-async def invoke(user_input: UserInput) -> ChatMessage:
+@app.post("/invoke", dependencies=[Depends(session_cookie)])
+async def invoke(user_input: UserInput, opey_session: Annotated[OpeySession, Depends()]) -> ChatMessage:
     """
     Invoke the agent with user input to retrieve a final response.
 
     Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
     is also attached to messages for recording feedback.
     """
-    agent: CompiledStateGraph = app.state.agent
+    agent: CompiledStateGraph = opey_session.graph
     kwargs, run_id = _parse_input(user_input)
     try:
         response = await agent.ainvoke(**kwargs)
@@ -264,13 +161,16 @@ async def invoke(user_input: UserInput) -> ChatMessage:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def message_generator(user_input: StreamInput) -> AsyncGenerator[str, None]:
+async def opey_message_generator(user_input: StreamInput, opey_session: OpeySession) -> AsyncGenerator[str, None]:
     """
     Generate a stream of messages from the agent.
 
     This is the workhorse method for the /stream endpoint.
     """
-    agent: CompiledStateGraph = app.state.agent
+
+    logger.debug(f"Received stream request: {user_input}")
+
+    agent: CompiledStateGraph = opey_session.graph
     kwargs, run_id = _parse_input(user_input)
     config = kwargs["config"]
 
@@ -302,25 +202,6 @@ async def message_generator(user_input: StreamInput) -> AsyncGenerator[str, None
     yield "data: [DONE]\n\n"
 
 
-async def raw_message_generator(user_input: StreamInput) -> AsyncGenerator[str, None]:
-    agent: CompiledStateGraph = app.state.agent
-    kwargs, run_id = _parse_input(user_input)
-    config = kwargs["config"]
-
-    print(f"------------START STREAM-----------\n\n")
-    # Process streamed events from the graph and yield messages over the SSE stream.
-    try:
-        async for event in agent.astream_events(**kwargs, version="v2"):
-            print(event)
-            data = "{}".format(event)
-            yield f"data: {data}\n\n"
-    except Exception as e:
-        print(f"Error in raw_message_generator: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': f'Error in raw_message_generator: {e}'})}\n\n"
-    
-    yield "data: [DONE]\n\n"
-
-
 def _sse_response_example() -> dict[int, Any]:
     return {
         status.HTTP_200_OK: {
@@ -335,33 +216,26 @@ def _sse_response_example() -> dict[int, Any]:
     }
 
 
-@app.post("/stream", response_class=StreamingResponse, responses=_sse_response_example())
-async def stream_agent(user_input: StreamInput) -> StreamingResponse:
+@app.post("/stream", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
+async def stream_agent(user_input: StreamInput, opey_session: Annotated[OpeySession, Depends()]) -> StreamingResponse:
     """
     Stream the agent's response to a user input, including intermediate messages and tokens.
 
     Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
     is also attached to all messages for recording feedback.
     """
-    logger.debug(f"Received stream request: {user_input}")
+    async def stream_generator():
+        async for msg in opey_message_generator(user_input, opey_session):
+            yield msg
 
-    return StreamingResponse(message_generator(user_input), media_type="text/event-stream")
-
-@app.post("/stream-langchain", response_class=StreamingResponse)
-async def stream_agent_langchain(user_input: StreamInput) -> StreamingResponse:
-    """
-    Stream the agent's response in raw langchain LCEL format.
-    """
-
-    return StreamingResponse(raw_message_generator(user_input), media_type="text/event-stream")
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
 
-
-@app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example())
-async def user_approval(user_approval_response: ToolCallApproval, thread_id: str) -> StreamingResponse:
+@app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
+async def user_approval(user_approval_response: ToolCallApproval, thread_id: str, opey_session: Annotated[OpeySession, Depends()]) -> StreamingResponse:
     print(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
     
-    agent: CompiledStateGraph = app.state.agent
+    agent: CompiledStateGraph = opey_session.agent
 
     agent_state = await agent.aget_state({"configurable": {"thread_id": thread_id}})
 
@@ -388,11 +262,15 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
         is_tool_call_approval=True,
     )
 
+    async def stream_generator():
+        async for msg in opey_message_generator(user_input, opey_session):
+            yield msg
 
-    return StreamingResponse(message_generator(user_input), media_type="text/event-stream")
+
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
 
-@app.post("/feedback")
+@app.post("/feedback", dependencies=[Depends(session_cookie)])
 async def feedback(feedback: Feedback) -> FeedbackResponse:
     """
     Record feedback for a run to LangSmith.

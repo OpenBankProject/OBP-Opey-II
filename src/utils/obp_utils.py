@@ -57,7 +57,46 @@ def get_headers(**kwargs):
     else:
         return None
 
-async def obp_requests(method: str, path: str, body: str, **kwargs):
+def sync_obp_requests(method: str, path: str, body: str, **kwargs):
+    """
+    Executes a request to the OpenBankProject (OBP) API.
+    Args:
+        method (str): The HTTP method to use for the request (e.g., 'GET', 'POST').
+        path (str): The API endpoint path to send the request to.
+        body (str): The JSON body to include in the request. If empty, no body is sent.
+    Returns:
+        dict: The JSON response from the OBP API if the request is successful.
+        dict: The error response from the OBP API if the request fails.
+    Raises:
+        ValueError: If the response status code is not 200.
+    Example:
+        response = obp_requests('GET', '/obp/v4.0.0/banks', '')
+        print(response)
+    """
+    url = f"{obp_base_url}{path}"
+    headers = get_headers(**kwargs)
+    
+    if body == '':
+        json_body = None
+    else:
+        json_body = json.loads(body)
+        
+    try:
+        r = requests.request(method, url, data=json.dumps(json_body), headers=headers)
+    except Exception as e:
+        print(f"Error fetching data from {url}: {e}")
+        return
+    
+    
+    if r == None:
+        raise ValueError("No response received from OBP")
+     
+
+    print("Response from OBP:\n", r.status_code, r.json())
+    
+    return r
+
+async def async_obp_requests(method: str, path: str, body: str, **kwargs):
     
     # TODO: Add more descriptive docstring, I think this is required for the llm to know when to call this tool
     """

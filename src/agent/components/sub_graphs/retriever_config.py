@@ -12,6 +12,12 @@ def setup_chroma_vector_store(chroma_collection_name: str) -> Chroma:
     embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 
     chroma_directory = os.getenv("CHROMADB_DIRECTORY")
+    if not chroma_directory:
+        raise ValueError("Could not find CHROMADB_DIRECTORY in environment variables")
+    
+    # Check if the directory exists
+    if not os.path.exists(chroma_directory):
+        raise ValueError(f"Chroma directory {chroma_directory} does not exist")
 
     vector_store = Chroma(
         collection_name=chroma_collection_name,

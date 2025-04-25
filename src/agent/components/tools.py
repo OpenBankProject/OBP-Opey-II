@@ -7,14 +7,19 @@ from langchain_core.tools import tool
 
 from typing import Any
 
-from agent.utils.config import obp_base_url, get_headers
+from auth import OBPConsentAuth
+from auth.session import backend
+
+from agent.utils.config import obp_base_url
 from agent.components.sub_graphs.endpoint_retrieval.endpoint_retrieval_graph import endpoint_retrieval_graph
 from agent.components.sub_graphs.glossary_retrieval.glossary_retrieval_graph import glossary_retrieval_graph
 
-
-async def _async_request(method: str, url: str, body: Any | None, headers: dict[str, str] | None = None):
+async def _async_request(method: str, url: str, body: Any | None):
     try:
         async with aiohttp.ClientSession() as session:
+            auth = OBPConsentAuth(session)
+            # construct the headers using the auth object
+            headers = auth.construct_headers()
             async with session.request(method, url, json=body, headers=headers) as response:
                 json_response = await response.json()
                 status = response.status
@@ -45,7 +50,6 @@ async def obp_requests(method: str, path: str, body: str):
         print(response)
     """
     url = f"{obp_base_url}{path}"
-    headers = get_headers()
     
     if body == '':
         json_body = None
@@ -53,7 +57,7 @@ async def obp_requests(method: str, path: str, body: str):
         json_body = json.loads(body)
         
     try:
-        response = await _async_request(method, url, json_body, headers=headers)
+        response = await _async_request(method, url, json_body)
     except Exception as e:
         print(f"Error fetching data from {url}: {e}")
         return

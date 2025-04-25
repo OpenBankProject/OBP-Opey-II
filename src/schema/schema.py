@@ -100,6 +100,11 @@ class ChatMessage(BaseModel):
         default=None,
         examples=["call_Jja7J89XsjrOLA5r!MEOW!SL"],
     )
+    tool_status: str | None = Field(
+        description="Tool status of the message.",
+        default=None,
+        examples=["success", "error"],
+    )
     run_id: str | None = Field(
         description="Run ID of the message.",
         default=None,
@@ -132,11 +137,18 @@ class ChatMessage(BaseModel):
                     ai_message.tool_calls = message.tool_calls
                 return ai_message
             case ToolMessage():
+                tool_status = original["data"].get("status")
+                if tool_status is None:
+                    print(
+                        f"Tool status is None for message {message}, falling back to success."
+                    )
+                    tool_status = "success"
                 tool_message = cls(
                     type="tool",
                     content=convert_message_content_to_dict(message.content), # we need a smarter way to process content from tool messages, i.e. if it is a valid dict, leave it as so, otherwise convert to string
                     tool_call_id=message.tool_call_id,
                     original=original,
+                    tool_status=tool_status,
                 )
                 return tool_message
             case _:

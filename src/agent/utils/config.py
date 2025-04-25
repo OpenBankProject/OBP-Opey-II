@@ -1,6 +1,7 @@
 import os
 import requests
 from dotenv import load_dotenv
+from auth import OBPConsentAuth, OBPDirectLoginAuth
 
 load_dotenv()
 
@@ -24,6 +25,7 @@ def get_direct_login_token():
     else:
         print("Error fetching token:", response.json())
         return None
+    
 
 def get_headers():
     token = get_direct_login_token()
