@@ -95,6 +95,3 @@ async def test_endpoint_retrieval_tool_calling(user_question):
         t.log_feedback(key='score', score=score_result.score)
         t.log_feedback(key='feedback', score=score_result.feedback)
 
-
-
-    
