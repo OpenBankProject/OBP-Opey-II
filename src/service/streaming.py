@@ -97,6 +97,7 @@ async def _process_stream_event(event: StreamEvent, user_input: StreamInput, run
     if (
         event["event"] == "on_chat_model_stream"
         and user_input.stream_tokens
+        and event["metadata"].get('langgraph_node', '') != "grade_documents"
         and event['metadata'].get('langgraph_node', '') != "transform_query"
         and event['metadata'].get('langgraph_node', '') != "retrieval_decider"
         and event['metadata'].get('langgraph_node', '') != "summarize_conversation"
