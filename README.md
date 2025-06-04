@@ -95,6 +95,17 @@ LANGCHAIN_PROJECT="langchain-opey" # or whatever name you want
 
 To run using docker simply run `docker compose up` (you'll need to have the [docker compose plugin](https://docs.docker.com/compose/install/linux/))
 
+### OBP API configuration
+
+The following props are required in OBP API:
+```
+skip_consent_sca_for_consumer_id_pairs=[{ \
+    "grantor_consumer_id": "<api explorer consumer id>",\
+    "grantee_consumer_id": "<opey consumer id>" \
+}]
+```
+Consumer IDs will be shown on consumer registration or via the "Get Consumers" endpoint.
+
 ### Running with a local OBP-API
 In some instances (when developing mostly) you'll be trying to do this with a local instance of OBP i.e. running at `http://127.0.0.1:8080` on the host machine. 
 
