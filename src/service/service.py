@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Annotated, AsyncGenerator
 import uuid
 import logging
+import json
 
 from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
 from fastapi.responses import StreamingResponse
@@ -12,6 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain_core.messages import ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client as LangsmithClient
 
@@ -22,10 +24,8 @@ from auth.usage_tracker import usage_tracker
 from service.opey_session import OpeySession
 from service.checkpointer import checkpointers, get_global_checkpointer
 
-from .streaming import (
-    _parse_input,
-    _process_stream_event,
-)
+from .streaming import StreamManager
+from .streaming.events import StreamEventFactory
 
 from schema import (
     ChatMessage,
@@ -239,43 +239,26 @@ async def invoke(user_input: UserInput, request: Request, opey_session: Annotate
 
 async def opey_message_generator(user_input: StreamInput, opey_session: OpeySession) -> AsyncGenerator[str, None]:
     """
-    Generate a stream of messages from the agent.
+    Generate a stream of messages from the agent using the new streaming system.
 
     This is the workhorse method for the /stream endpoint.
     """
 
     logger.debug(f"Received stream request: {user_input}")
 
-    agent: CompiledStateGraph = opey_session.graph
-    kwargs, run_id = _parse_input(user_input)
-    config = kwargs["config"]
+    # Parse input to get config
+    thread_id = user_input.thread_id or str(uuid.uuid4())
+    config = {
+        "configurable": {"thread_id": thread_id}
+    }
 
     print(f"------------START STREAM-----------\n\n")
-    # Process streamed events from the graph and yield messages over the SSE stream.
-    async for event in agent.astream_events(**kwargs, version="v2"):
-        async for msg in _process_stream_event(event, user_input, str(run_id)):
-            yield msg
 
-    # Interruption for human in the loop
-    # Wait for user approval via HTTP request
-    agent_state = await agent.aget_state(config)
-    messages = agent_state.values.get("messages", [])
-    print(f"next node: {agent_state.next}")
-    tool_call_message = messages[-1] if messages else None
+    # Use the new stream manager
+    stream_manager = StreamManager(opey_session)
 
-    if not tool_call_message or not tool_call_message.tool_calls:
-        pass
-    else:
-        print(f"Tool call message: {tool_call_message}\n")
-        tool_call = tool_call_message.tool_calls[0]
-        print(f"Waiting for approval of tool call: {tool_call}\n")
-
-        tool_approval_message = ChatMessage(type="tool", tool_approval_request=True, tool_call_id=tool_call["id"], content="", tool_calls=[tool_call])
-
-        yield f"data: {json.dumps({'type': 'message', 'content': tool_approval_message.model_dump()})}\n\n"
-
-
-    yield "data: [DONE]\n\n"
+    async for stream_event in stream_manager.stream_response(user_input, config):
+        yield stream_manager.to_sse_format(stream_event)
 
 
 def _sse_response_example() -> dict[int, Any]:
@@ -314,37 +297,26 @@ async def stream_agent(user_input: StreamInput, request: Request, opey_session: 
 async def user_approval(user_approval_response: ToolCallApproval, thread_id: str, opey_session: Annotated[OpeySession, Depends()]) -> StreamingResponse:
     print(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
 
-    agent: CompiledStateGraph = opey_session.agent
-
-    agent_state = await agent.aget_state({"configurable": {"thread_id": thread_id}})
-
-    if user_approval_response.approval == "deny":
-        # Answer as if we were the obp requests tool node
-        await agent.aupdate_state(
-            {"configurable": {"thread_id": thread_id}},
-            {"messages": [ToolMessage(content="User denied request to OBP API", tool_call_id=user_approval_response.tool_call_id)]},
-            as_node="tools",
-        )
-    else:
-        # If approved, just continue to the OBP requests node
-        await agent.aupdate_state(
-            {"configurable": {"thread_id": thread_id}},
-            values=None,
-            as_node="human_review",
-        )
-
-    print(f"[DEBUG] Agent state: {agent_state}\n")
-
+    # Create stream input for approval continuation
     user_input = StreamInput(
         message="",
         thread_id=thread_id,
         is_tool_call_approval=True,
     )
 
-    async def stream_generator():
-        async for msg in opey_message_generator(user_input, opey_session):
-            yield msg
+    # Use the new stream manager for approval handling
+    stream_manager = StreamManager(opey_session)
 
+    approved = user_approval_response.approval == "approve"
+
+    async def stream_generator():
+        async for stream_event in stream_manager.continue_after_approval(
+            thread_id=thread_id,
+            tool_call_id=user_approval_response.tool_call_id,
+            approved=approved,
+            stream_input=user_input
+        ):
+            yield stream_manager.to_sse_format(stream_event)
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
 

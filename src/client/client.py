@@ -7,6 +7,7 @@ from typing import Any, Literal
 import httpx
 
 from schema import ChatMessage, Feedback, StreamInput, UserInput, ToolCallApproval
+from typing import Union
 
 
 class AgentClient:
@@ -89,7 +90,7 @@ class AgentClient:
             return ChatMessage.model_validate(response.json())
         raise Exception(f"Error: {response.status_code} - {response.text}")
 
-    def _parse_stream_line(self, line: str) -> ChatMessage | str | None:
+    def _parse_stream_line(self, line: str) -> Union[ChatMessage, dict, str, None]:
         line = line.strip()
         print(line)
         if line.startswith("data: "):
@@ -100,23 +101,72 @@ class AgentClient:
                 parsed = json.loads(data)
             except Exception as e:
                 raise Exception(f"Error JSON parsing message from server: {e}")
-            match parsed["type"]:
-                case "message":
-                    # Convert the JSON formatted message to an AnyMessage
-                    try:
-                        return ChatMessage.model_validate(parsed["content"])
-                    except Exception as e:
-                        raise Exception(f"Server returned invalid message: {e}")
-                case "token":
-                    # Yield the str token directly
-                    return parsed["content"]
-                case "approval_request":
-                    # Yield the approval request directly
-                    return parsed
-                case "keep_alive":
-                    return parsed
+
+            event_type = parsed.get("type")
+
+            # Handle new event types
+            match event_type:
+                case "assistant_start":
+                    return {"type": "assistant_start"}
+                case "assistant_token":
+                    return parsed["content"]  # Return token content directly
+                case "assistant_end":
+                    # Convert to ChatMessage for backward compatibility
+                    chat_msg = ChatMessage(
+                        type="ai",
+                        content=parsed["content"],
+                        tool_calls=parsed.get("tool_calls", []),
+                        run_id=None
+                    )
+                    return chat_msg
+                case "tool_start":
+                    return {
+                        "type": "tool_start",
+                        "tool_name": parsed["tool_name"],
+                        "tool_call_id": parsed["tool_call_id"],
+                        "tool_input": parsed["tool_input"]
+                    }
+                case "tool_token":
+                    return {
+                        "type": "tool_token",
+                        "tool_call_id": parsed["tool_call_id"],
+                        "content": parsed["content"]
+                    }
+                case "tool_end":
+                    # Convert to ChatMessage for backward compatibility
+                    chat_msg = ChatMessage(
+                        type="tool",
+                        content=parsed["tool_output"],
+                        tool_call_id=parsed["tool_call_id"],
+                        tool_status=parsed["status"],
+                        run_id=None
+                    )
+                    return chat_msg
                 case "error":
-                    raise Exception(parsed["content"])
+                    raise Exception(parsed["error_message"])
+                case "approval_request":
+                    return {
+                        "type": "approval_request",
+                        "tool_name": parsed["tool_name"],
+                        "tool_call_id": parsed["tool_call_id"],
+                        "tool_input": parsed["tool_input"],
+                        "message": parsed["message"]
+                    }
+                case "keep_alive":
+                    return {"type": "keep_alive"}
+                case "stream_end":
+                    return None
+                case _:
+                    # Fallback for backward compatibility with old event format
+                    if event_type == "message":
+                        try:
+                            return ChatMessage.model_validate(parsed["content"])
+                        except Exception as e:
+                            raise Exception(f"Server returned invalid message: {e}")
+                    elif event_type == "token":
+                        return parsed["content"]
+                    else:
+                        return parsed
         return None
 
     def stream(
@@ -125,7 +175,7 @@ class AgentClient:
         model: str | None = None,
         thread_id: str | None = None,
         stream_tokens: bool = True,
-    ) -> Generator[ChatMessage | str, None, None]:
+    ) -> Generator[Union[ChatMessage, dict, str], None, None]:
         """
         Stream the agent's response synchronously.
 
@@ -160,8 +210,8 @@ class AgentClient:
                     parsed = self._parse_stream_line(line)
                     if parsed is None:
                         break
-                    # On receiving an approval request, we need to yeild it to streamlit and stop streaming
-                    if isinstance(parsed, dict) and parsed["type"] == "approval_request":
+                    # On receiving an approval request, we need to yield it to streamlit and stop streaming
+                    if isinstance(parsed, dict) and parsed.get("type") == "approval_request":
                         yield parsed
                         break
                     yield parsed
@@ -172,7 +222,7 @@ class AgentClient:
         model: str | None = None,
         thread_id: str | None = None,
         stream_tokens: bool = True,
-    ) -> AsyncGenerator[ChatMessage | str, None]:
+    ) -> AsyncGenerator[Union[ChatMessage, dict, str], None]:
         """
         Stream the agent's response asynchronously.
 
@@ -215,7 +265,7 @@ class AgentClient:
                         yield parsed
 
     async def approve_request_and_stream(self, thread_id: str, user_input: ToolCallApproval):
-        print(f"request: {user_input}")    
+        print(f"request: {user_input}")
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",

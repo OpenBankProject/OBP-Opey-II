@@ -9,6 +9,7 @@ from streamlit.runtime.scriptrunner import get_script_run_ctx
 from PIL import Image
 from client import AgentClient
 from schema import ChatMessage, ToolCallApproval
+from typing import Union
 
 from utils.utils import generate_mermaid_diagram
 
@@ -86,7 +87,7 @@ async def main() -> None:
             except Exception as e:
                 st.error(f"Error generating architecture diagram: {e}")
                 st.write("Graph diagram not available at this time")
-            
+
 
         if st.button(":material/schema: Architecture", use_container_width=True):
             architecture_dialog()
@@ -169,7 +170,7 @@ async def main() -> None:
                 thread_id=get_script_run_ctx().session_id,
             )
             await draw_messages(stream, thread_id=get_script_run_ctx().session_id, is_new=True)
-        
+
         else:
             response = await agent_client.ainvoke(
                 message=user_input,
@@ -187,7 +188,7 @@ async def main() -> None:
 
 
 async def draw_messages(
-    messages_agen: AsyncGenerator[ChatMessage | str | dict, None],
+    messages_agen: AsyncGenerator[Union[ChatMessage, str, dict], None],
     thread_id: str,
     is_new: bool = False,
 ) -> None:
@@ -224,8 +225,9 @@ async def draw_messages(
 
     # Iterate over the messages and draw them
     while msg := await anext(messages_agen, None):
-        # str message represents an intermediate token being streamed
+        # Handle different event types from the new streaming system
         if isinstance(msg, str):
+            # str message represents an intermediate token being streamed
             # If placeholder is empty, this is the first token of a new message
             if not streaming_placeholder:
                 if last_message_type != "ai":
@@ -237,11 +239,58 @@ async def draw_messages(
             streaming_content += msg
             streaming_placeholder.write(streaming_content)
             continue
-        
+
         if isinstance(msg, dict):
-            if msg["type"] == "keep_alive":
+            # Handle new event types
+            event_type = msg.get("type")
+
+            if event_type == "keep_alive":
                 continue
-                
+            elif event_type == "assistant_start":
+                # Initialize streaming for assistant response
+                if last_message_type != "ai":
+                    last_message_type = "ai"
+                    st.session_state.last_message = st.chat_message("ai", avatar=OPEY_AVATAR)
+                continue
+            elif event_type == "tool_start":
+                # Handle tool start event
+                pending_tool_calls = st.session_state.pending_tool_calls
+                tool_call_id = msg["tool_call_id"]
+                tool_name = msg["tool_name"]
+                tool_input = msg["tool_input"]
+
+                if last_message_type != "ai":
+                    last_message_type = "ai"
+                    st.session_state.last_message = st.chat_message("ai", avatar=OPEY_AVATAR)
+
+                with st.session_state.last_message:
+                    status = st.status(
+                        f"Tool Call: {tool_name}",
+                        state="running" if is_new else "complete",
+                    )
+                    pending_tool_calls[tool_call_id] = status
+                    status.write("Input:")
+                    status.write(tool_input)
+                continue
+            elif event_type == "tool_token":
+                # Handle streaming tokens from tool execution
+                # For now, we don't display these separately
+                continue
+            elif event_type == "approval_request":
+                # Handle approval request
+                print("Received approval request")
+                st.session_state.approval_tool_call = {
+                    "id": msg["tool_call_id"],
+                    "name": msg["tool_name"],
+                    "args": msg["tool_input"]
+                }
+                st.session_state.approval_pending = True
+                st.session_state.approval_thread_id = thread_id
+                continue
+            elif event_type == "error":
+                # Handle error events
+                st.error(f"Error: {msg.get('error_message', 'Unknown error')}")
+                continue
 
         if not isinstance(msg, ChatMessage):
             st.error(f"Unexpected message type: {type(msg)}")
@@ -272,13 +321,15 @@ async def draw_messages(
                             streaming_placeholder = None
                         else:
                             st.write(msg.content)
-                    
-                    
-                    #if msg.original["metadata"]["langgraph_node"] in ["retrieve_endpoints"]
 
 
                     #if msg.original["metadata"]["langgraph_node"] in ["retrieve_endpoints"]
 
+
+                    #if msg.original["metadata"]["langgraph_node"] in ["retrieve_endpoints"]
+
+                    # Tool calls are now handled by tool_start events, so we don't need this here anymore
+                    # Keep this for backward compatibility with old event format
                     if msg.tool_calls:
                         # Create a status container for each tool call and store the
                         # status container by ID to ensure results are mapped to the
@@ -286,25 +337,25 @@ async def draw_messages(
                         print(f"Received tool calls: {msg.tool_calls}")
                         pending_tool_calls = st.session_state.pending_tool_calls
                         for tool_call in msg.tool_calls:
-                            status = st.status(
-                                f"""Tool Call: {tool_call["name"]}""",
-                                state="running" if is_new else "complete",
-                            )
-                            pending_tool_calls[tool_call["id"]] = status
-                            status.write("Input:")
-                            status.write(tool_call["args"])
-
+                            if tool_call["id"] not in pending_tool_calls:  # Avoid duplicates
+                                status = st.status(
+                                    f"""Tool Call: {tool_call["name"]}""",
+                                    state="running" if is_new else "complete",
+                                )
+                                pending_tool_calls[tool_call["id"]] = status
+                                status.write("Input:")
+                                status.write(tool_call["args"])
 
                         print(f"Waiting for {len(pending_tool_calls)} call(s) to finish\n")
-                        
+
             case "tool":
                 pending_tool_calls = st.session_state.pending_tool_calls
                 completed_tool_calls = st.session_state.completed_tool_calls
                 print(f"Received tool message: {msg}")
                 if msg.tool_call_id in pending_tool_calls.keys() and not st.session_state.approval_pending:
                     if msg.tool_approval_request:
-                        print("Received tool approval request")
-                        st.session_state.approval_tool_call = msg.tool_calls[0]
+                        print("Received tool approval request (legacy format)")
+                        st.session_state.approval_tool_call = msg.tool_calls[0] if msg.tool_calls else {"id": msg.tool_call_id}
                         st.session_state.approval_pending = True
                         st.session_state.approval_thread_id = thread_id
                     else:
@@ -313,8 +364,11 @@ async def draw_messages(
                         status = pending_tool_calls[msg.tool_call_id]
                         status.write("Output:")
                         try:
-                            json_formatted = json.loads(msg.content)
-                        except ValueError as e:
+                            if isinstance(msg.content, dict):
+                                json_formatted = msg.content
+                            else:
+                                json_formatted = json.loads(msg.content)
+                        except (ValueError, TypeError) as e:
                             print(f"Error parsing tool output as JSON: {e}")
                             json_formatted = msg.content
 
