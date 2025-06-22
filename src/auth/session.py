@@ -6,10 +6,14 @@ from fastapi_sessions.backends.implementations import InMemoryBackend
 from fastapi_sessions.session_verifier import SessionVerifier
 from fastapi import HTTPException
 from pydantic import BaseModel
+from typing import Optional
 
 # Set up sessions to use consents
 class SessionData(BaseModel):
-    consent_jwt: str
+    consent_jwt: Optional[str] = None
+    is_anonymous: bool = False
+    token_usage: int = 0
+    request_count: int = 0
 
 cookie_params = CookieParameters(
     secure=True,
@@ -18,7 +22,7 @@ cookie_params = CookieParameters(
 # Get secret key from environment variable
 if not (secret_key := os.getenv("SESSION_SECRET_KEY")):
     raise ValueError("SESSION_SECRET_KEY environment variable must be set")
-    
+
 # Uses UUID
 session_cookie = SessionCookie(
     cookie_name="session",

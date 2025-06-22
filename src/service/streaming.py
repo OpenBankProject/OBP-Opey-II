@@ -22,7 +22,7 @@ def _parse_input(user_input: UserInput) -> tuple[dict[str, Any], uuid.UUID]:
     else:
         input_message = ChatMessage(type="human", content=user_input.message)
         _input = {"messages": [input_message.to_langchain()]}
-    
+
     kwargs = {
         "input": _input,
         "config": RunnableConfig(
@@ -43,12 +43,12 @@ def _remove_tool_calls(content: str | list[str | dict]) -> str | list[str | dict
         if isinstance(content_item, str) or content_item["type"] != "tool_use"
     ]
 
-    
+
 async def _process_stream_event(event: StreamEvent, user_input: StreamInput, run_id: str) -> AsyncGenerator[str, None]:
     """Helper to process stream events consistently"""
     if not event:
         return
-    
+
     # Handle messages after node execution
     if (
         event["event"] == "on_chain_end"
@@ -67,7 +67,7 @@ async def _process_stream_event(event: StreamEvent, user_input: StreamInput, run
             erase_content = True
         else:
             erase_content = False
-            
+
         for message in new_messages:
             if erase_content:
                 message.content = ""
@@ -77,7 +77,7 @@ async def _process_stream_event(event: StreamEvent, user_input: StreamInput, run
             except Exception as e:
                 yield f"data: {json.dumps({'type': 'error', 'content': f'Error parsing message: {e}'})}\n\n"
                 continue
-            
+
             # We need this first if statement to avoid returning the user input, which langchain does for some reason
             if not (chat_message.type == "human" and chat_message.content == user_input.message):
                 chat_message.pretty_print()
@@ -89,7 +89,7 @@ async def _process_stream_event(event: StreamEvent, user_input: StreamInput, run
 
                     tool_message_dict = {'type': 'tool', 'content': chat_message.model_dump()}
                     yield f"data: {json.dumps(tool_message_dict)}\n\n"
-                
+
                 else:
                     yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
 
@@ -104,4 +104,11 @@ async def _process_stream_event(event: StreamEvent, user_input: StreamInput, run
     ):
         content = _remove_tool_calls(event["data"]["chunk"].content)
         if content:
+            # Track token usage - approximate by counting content length
+            # This is a rough estimate since we don't have exact token counts from streaming
+            token_estimate = len(convert_message_content_to_string(content)) // 4  # Rough token estimation
+            if hasattr(user_input, '_session_data') and user_input._session_data:
+                from auth.usage_tracker import usage_tracker
+                usage_tracker.update_token_usage(user_input._session_data, token_estimate)
+
             yield f"data: {json.dumps({'type': 'token', 'content': convert_message_content_to_string(content)})}\n\n"

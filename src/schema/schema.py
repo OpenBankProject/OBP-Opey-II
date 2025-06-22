@@ -218,3 +218,67 @@ class AuthResponse(BaseModel):
     success: bool = Field(
         description="Whether Auth was successful or not"
     )
+
+class SessionCreateResponse(BaseModel):
+    message: str = Field(
+        description="Message about session creation"
+    )
+    session_type: Literal["authenticated", "anonymous"] = Field(
+        description="Type of session created"
+    )
+    usage_limits: dict[str, Any] = Field(
+        description="Usage limits for the session (for anonymous sessions)",
+        default={}
+    )
+
+class UsageInfoResponse(BaseModel):
+    session_type: Literal["authenticated", "anonymous"] = Field(
+        description="Type of session"
+    )
+    unlimited_usage: bool = Field(
+        description="Whether the session has unlimited usage",
+        default=False
+    )
+    tokens_used: int = Field(
+        description="Number of tokens used",
+        default=0
+    )
+    token_limit: int = Field(
+        description="Maximum tokens allowed",
+        default=0
+    )
+    tokens_remaining: int = Field(
+        description="Number of tokens remaining",
+        default=0
+    )
+    requests_made: int = Field(
+        description="Number of requests made",
+        default=0
+    )
+    request_limit: int = Field(
+        description="Maximum requests allowed",
+        default=0
+    )
+    requests_remaining: int = Field(
+        description="Number of requests remaining",
+        default=0
+    )
+    approaching_token_limit: bool = Field(
+        description="Whether approaching token limit (80%)",
+        default=False
+    )
+    approaching_request_limit: bool = Field(
+        description="Whether approaching request limit (80%)",
+        default=False
+    )
+
+class SessionUpgradeResponse(BaseModel):
+    message: str = Field(
+        description="Message about session upgrade"
+    )
+    session_type: Literal["authenticated"] = Field(
+        description="Type of session after upgrade"
+    )
+    previous_usage: dict[str, int] = Field(
+        description="Previous usage statistics before upgrade"
+    )

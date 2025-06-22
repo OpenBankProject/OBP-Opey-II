@@ -27,7 +27,7 @@ async def run_summary_chain(state: OpeyGraphState):
     total_tokens = state["total_tokens"]
     if not total_tokens:
         raise ValueError("Total tokens not found in state")
-    
+
     summary = state.get("conversation_summary", "")
     if summary:
         summary_system_message = f"""This is a summary of the conversation so far:\n {summary}\n
@@ -84,12 +84,12 @@ async def run_summary_chain(state: OpeyGraphState):
         msg.pretty_print()
     delete_messages = [RemoveMessage(id=message.id) for message in messages if message not in trimmed_messages]
 
-    # Reset total tokens count, this is fine to do even though messages remain in the state as the tokens are counted 
+    # Reset total tokens count, this is fine to do even though messages remain in the state as the tokens are counted
     # at the run of the Opey node
     total_tokens = 0
 
     return {"messages": delete_messages, "conversation_summary": summary, "total_tokens": total_tokens}
-    
+
 async def run_opey(state: OpeyGraphState):
 
     # Check if we have a convesration summary
@@ -117,7 +117,7 @@ async def run_opey(state: OpeyGraphState):
 
 async def return_message(state: OpeyGraphState):
     """
-    This dummy function is used as a node so that we can route to the message summary node in case that Opey 
+    This dummy function is used as a node so that we can route to the message summary node in case that Opey
     """
     pass
 

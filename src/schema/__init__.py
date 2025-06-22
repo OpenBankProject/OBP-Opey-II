@@ -9,6 +9,9 @@ from schema.schema import (
     ToolCallApproval,
     ConsentAuthBody,
     AuthResponse,
+    SessionCreateResponse,
+    UsageInfoResponse,
+    SessionUpgradeResponse,
 )
 
 __all__ = [
@@ -22,4 +25,7 @@ __all__ = [
     "ToolCallApproval",
     "ConsentAuthBody",
     "AuthResponse",
+    "SessionCreateResponse",
+    "UsageInfoResponse",
+    "SessionUpgradeResponse",
 ]
