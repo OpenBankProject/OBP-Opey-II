@@ -31,7 +31,7 @@ The new system provides clear, semantic event types:
 ### Assistant Events
 - `assistant_start` - Emitted when the assistant begins responding
 - `assistant_token` - Individual tokens streamed from the assistant
-- `assistant_end` - Emitted when the assistant completes its response
+- `assistant_complete` - Emitted when the assistant completes its response
 
 ### Tool Events
 - `tool_start` - Emitted when a tool execution begins
@@ -166,7 +166,7 @@ new_event = migrator.old_to_new_format(old_event)
 }
 
 {
-  "type": "assistant_end",
+  "type": "assistant_complete",
   "content": "Complete response",
   "tool_calls": [],
   "timestamp": null
@@ -212,7 +212,7 @@ new_event = migrator.old_to_new_format(old_event)
 class CustomEvent(BaseStreamEvent):
     type: Literal["custom"] = "custom"
     custom_data: str
-    
+
     def to_sse_data(self) -> str:
         return f"data: {self.model_dump_json()}\n\n"
 ```
@@ -282,7 +282,7 @@ python -m pytest test_streaming_system.py
 
 1. **Update event handling**:
    - Replace `event.type === "token"` with `event.type === "assistant_token"`
-   - Replace `event.type === "message"` with `event.type === "assistant_end"`
+   - Replace `event.type === "message"` with `event.type === "assistant_complete"`
    - Add handlers for new event types like `tool_start` and `tool_end`
 
 2. **Use structured data**:
@@ -311,7 +311,7 @@ python -m pytest test_streaming_system.py
    ```python
    # Old way
    yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
-   
+
    # New way
    event = StreamEventFactory.assistant_token(token)
    yield event.to_sse_data()

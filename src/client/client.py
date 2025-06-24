@@ -110,7 +110,7 @@ class AgentClient:
                     return {"type": "assistant_start"}
                 case "assistant_token":
                     return parsed["content"]  # Return token content directly
-                case "assistant_end":
+                case "assistant_complete":
                     # Convert to ChatMessage for backward compatibility
                     chat_msg = ChatMessage(
                         type="ai",

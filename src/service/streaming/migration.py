@@ -1,3 +1,4 @@
+import uuid
 from typing import Dict, Any, Union
 from langchain_core.messages import BaseMessage
 
@@ -33,7 +34,7 @@ class StreamEventMigrator:
                     "content": event.content
                 }
 
-            case "assistant_end":
+            case "assistant_complete":
                 # Convert to old message format
                 chat_message = ChatMessage(
                     type="ai",
@@ -110,7 +111,8 @@ class StreamEventMigrator:
         match event_type:
             case "token":
                 return StreamEventFactory.assistant_token(
-                    content=old_event["content"]
+                    content=old_event["content"],
+                    message_id=old_event.get("run_id", str(uuid.uuid4()))
                 )
 
             case "message":
@@ -119,8 +121,9 @@ class StreamEventMigrator:
                     msg_type = content_data.get("type", "ai")
 
                     if msg_type == "ai":
-                        return StreamEventFactory.assistant_end(
+                        return StreamEventFactory.assistant_complete(
                             content=content_data.get("content", ""),
+                            message_id=old_event.get("run_id", str(uuid.uuid4())),
                             tool_calls=content_data.get("tool_calls", [])
                         )
                     elif msg_type == "tool":

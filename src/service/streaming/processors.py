@@ -1,10 +1,14 @@
 import json
+import uuid
+import logging
 from typing import AsyncGenerator, Optional, Dict, Any
 from langchain_core.runnables.schema import StreamEvent as LangGraphStreamEvent
 from langchain_core.messages import AIMessage, ToolMessage
 
 from .events import StreamEvent, StreamEventFactory
 from schema import StreamInput, convert_message_content_to_string
+
+logger = logging.getLogger(__name__)
 
 
 class BaseEventProcessor:
@@ -27,11 +31,12 @@ class AssistantEventProcessor(BaseEventProcessor):
         self.assistant_started = False
         self.streaming_content = ""
         self.current_tool_calls = []
+        self.current_message_id = None
 
     async def process(self, event: LangGraphStreamEvent) -> AsyncGenerator[StreamEvent, None]:
         """Process assistant-related events"""
 
-        # Handle AI message completion (assistant_end)
+        # Handle AI message completion (assistant_complete)
         if (
             event["event"] == "on_chain_end"
             and any(t.startswith("graph:step:") for t in event.get("tags", []))
@@ -45,13 +50,31 @@ class AssistantEventProcessor(BaseEventProcessor):
 
             for message in messages:
                 if isinstance(message, AIMessage):
-                    content = convert_message_content_to_string(message.content)
-                    tool_calls = getattr(message, 'tool_calls', [])
+                    try:
+                        content = convert_message_content_to_string(message.content)
+                        tool_calls = getattr(message, 'tool_calls', [])
 
-                    yield StreamEventFactory.assistant_end(
-                        content=content,
-                        tool_calls=tool_calls
-                    )
+                        # Extract message ID, fallback to generating one if not available
+                        message_id = getattr(message, 'id', None) or str(uuid.uuid4())
+
+                        yield StreamEventFactory.assistant_complete(
+                            content=content,
+                            message_id=message_id,
+                            tool_calls=tool_calls
+                        )
+                    except Exception as e:
+                        error_msg = f"Error processing assistant message completion: {str(e)}"
+                        logger.error(error_msg, exc_info=True, extra={
+                            "event_type": "assistant_complete_error",
+                            "message_id": getattr(message, 'id', None),
+                            "event_metadata": event.get("metadata", {})
+                        })
+                        yield StreamEventFactory.error(
+                            error_message=error_msg,
+                            error_code="assistant_processing_error",
+                            for_message_id=getattr(message, 'id', None),
+                            details={"original_event": event}
+                        )
 
         # Handle streaming tokens (assistant_token)
         if (
@@ -59,18 +82,39 @@ class AssistantEventProcessor(BaseEventProcessor):
             and self.stream_input.stream_tokens
             and self._should_stream_tokens(event)
         ):
-            content = event["data"]["chunk"].content
-            if content:
-                # Send assistant_start if this is the first token
-                if not self.assistant_started:
-                    self.assistant_started = True
-                    yield StreamEventFactory.assistant_start()
+            try:
+                content = event["data"]["chunk"].content
+                if content:
+                    # Initialize message ID for streaming if not already set
+                    if not self.current_message_id:
+                        # Try to get message ID from the chunk if available, otherwise generate one
+                        chunk = event["data"]["chunk"]
+                        self.current_message_id = getattr(chunk, 'id', None) or str(uuid.uuid4())
 
-                token_content = convert_message_content_to_string(content)
-                if token_content:
-                    yield StreamEventFactory.assistant_token(
-                        content=token_content
-                    )
+                    # Send assistant_start if this is the first token
+                    if not self.assistant_started:
+                        self.assistant_started = True
+                        yield StreamEventFactory.assistant_start(message_id=self.current_message_id)
+
+                    token_content = convert_message_content_to_string(content)
+                    if token_content:
+                        yield StreamEventFactory.assistant_token(
+                            content=token_content,
+                            message_id=self.current_message_id
+                        )
+            except Exception as e:
+                error_msg = f"Error processing assistant token stream: {str(e)}"
+                logger.error(error_msg, exc_info=True, extra={
+                    "event_type": "assistant_token_error",
+                    "message_id": self.current_message_id,
+                    "event_metadata": event.get("metadata", {})
+                })
+                yield StreamEventFactory.error(
+                    error_message=error_msg,
+                    error_code="assistant_streaming_error",
+                    for_message_id=self.current_message_id,
+                    details={"original_event": event}
+                )
 
     def _should_stream_tokens(self, event: LangGraphStreamEvent) -> bool:
         """Determine if tokens should be streamed for this event"""
@@ -83,6 +127,13 @@ class AssistantEventProcessor(BaseEventProcessor):
 
         node_name = event["metadata"].get("langgraph_node", "")
         return node_name not in excluded_nodes
+
+    def reset_for_new_message(self):
+        """Reset state for a new message"""
+        self.assistant_started = False
+        self.streaming_content = ""
+        self.current_tool_calls = []
+        self.current_message_id = None
 
 
 class ToolEventProcessor(BaseEventProcessor):
@@ -110,16 +161,32 @@ class ToolEventProcessor(BaseEventProcessor):
             for message in messages:
                 if isinstance(message, AIMessage) and hasattr(message, 'tool_calls') and message.tool_calls:
                     for tool_call in message.tool_calls:
-                        self.pending_tool_calls[tool_call["id"]] = {
-                            "name": tool_call["name"],
-                            "input": tool_call["args"]
-                        }
+                        try:
+                            self.pending_tool_calls[tool_call["id"]] = {
+                                "name": tool_call["name"],
+                                "input": tool_call["args"]
+                            }
 
-                        yield StreamEventFactory.tool_start(
-                            tool_name=tool_call["name"],
-                            tool_call_id=tool_call["id"],
-                            tool_input=tool_call["args"]
-                        )
+                            yield StreamEventFactory.tool_start(
+                                tool_name=tool_call["name"],
+                                tool_call_id=tool_call["id"],
+                                tool_input=tool_call["args"]
+                            )
+                        except Exception as e:
+                            error_msg = f"Error processing tool start: {str(e)}"
+                            logger.error(error_msg, exc_info=True, extra={
+                                "event_type": "tool_start_error",
+                                "tool_call_id": tool_call.get("id"),
+                                "tool_name": tool_call.get("name"),
+                                "message_id": getattr(message, 'id', None),
+                                "event_metadata": event.get("metadata", {})
+                            })
+                            yield StreamEventFactory.error(
+                                error_message=error_msg,
+                                error_code="tool_start_error",
+                                for_message_id=getattr(message, 'id', None),
+                                details={"tool_call": tool_call, "original_event": event}
+                            )
 
         # Handle tool completion (tool_end)
         if (
@@ -137,28 +204,52 @@ class ToolEventProcessor(BaseEventProcessor):
                 if isinstance(message, ToolMessage):
                     tool_call_id = message.tool_call_id
                     if tool_call_id in self.pending_tool_calls:
-                        tool_info = self.pending_tool_calls[tool_call_id]
-
-                        # Determine status from message
-                        status = "success"
-                        if hasattr(message, 'status') and message.status == "error":
-                            status = "error"
-
-                        # Try to parse tool output
                         try:
-                            tool_output = json.loads(message.content) if isinstance(message.content, str) else message.content
-                        except (json.JSONDecodeError, TypeError):
-                            tool_output = message.content
+                            tool_info = self.pending_tool_calls[tool_call_id]
 
-                        yield StreamEventFactory.tool_end(
-                            tool_name=tool_info["name"],
-                            tool_call_id=tool_call_id,
-                            tool_output=tool_output,
-                            status=status
-                        )
+                            # Determine status from message
+                            status = "success"
+                            if hasattr(message, 'status') and message.status == "error":
+                                status = "error"
 
-                        # Remove from pending
-                        del self.pending_tool_calls[tool_call_id]
+                            # Try to parse tool output
+                            try:
+                                tool_output = json.loads(message.content) if isinstance(message.content, str) else message.content
+                            except (json.JSONDecodeError, TypeError):
+                                tool_output = message.content
+
+                            # Log tool completion for monitoring
+                            if status == "error":
+                                logger.warning(f"Tool execution failed", extra={
+                                    "event_type": "tool_execution_failed",
+                                    "tool_call_id": tool_call_id,
+                                    "tool_name": tool_info["name"],
+                                    "tool_output": tool_output
+                                })
+
+                            yield StreamEventFactory.tool_end(
+                                tool_name=tool_info["name"],
+                                tool_call_id=tool_call_id,
+                                tool_output=tool_output,
+                                status=status
+                            )
+
+                            # Remove from pending
+                            del self.pending_tool_calls[tool_call_id]
+                        except Exception as e:
+                            error_msg = f"Error processing tool completion: {str(e)}"
+                            logger.error(error_msg, exc_info=True, extra={
+                                "event_type": "tool_end_error",
+                                "tool_call_id": tool_call_id,
+                                "message_id": getattr(message, 'id', None),
+                                "event_metadata": event.get("metadata", {})
+                            })
+                            yield StreamEventFactory.error(
+                                error_message=error_msg,
+                                error_code="tool_end_error",
+                                for_message_id=getattr(message, 'id', None),
+                                details={"tool_call_id": tool_call_id, "original_event": event}
+                            )
 
 
 class ApprovalEventProcessor(BaseEventProcessor):
@@ -182,18 +273,41 @@ class ErrorEventProcessor(BaseEventProcessor):
         # Handle various error conditions from LangGraph
         if event["event"] == "on_chain_error":
             error_data = event["data"]
+            error_message = str(error_data.get("error", "An error occurred"))
+            message_id = error_data.get("id")
+
+            # Log the chain error
+            logger.error(f"LangGraph chain error: {error_message}", extra={
+                "event_type": "langgraph_chain_error",
+                "message_id": message_id,
+                "event_metadata": event.get("metadata", {}),
+                "error_data": error_data
+            })
+
             yield StreamEventFactory.error(
-                error_message=str(error_data.get("error", "An error occurred")),
+                error_message=error_message,
                 error_code="chain_error",
-                details={"event_metadata": event["metadata"]}
+                for_message_id=message_id,
+                details={"event_metadata": event.get("metadata", {}), "error_data": error_data}
             )
 
         elif event["event"] == "on_tool_error":
             error_data = event["data"]
+            error_message = f"Tool error: {error_data.get('error', 'Unknown tool error')}"
+            tool_name = event.get("metadata", {}).get("tool_name")
+
+            # Log the tool error
+            logger.error(f"LangGraph tool error: {error_message}", extra={
+                "event_type": "langgraph_tool_error",
+                "tool_name": tool_name,
+                "event_metadata": event.get("metadata", {}),
+                "error_data": error_data
+            })
+
             yield StreamEventFactory.error(
-                error_message=f"Tool error: {error_data.get('error', 'Unknown tool error')}",
+                error_message=error_message,
                 error_code="tool_error",
-                details={"tool_name": event["metadata"].get("tool_name"), "event_metadata": event["metadata"]}
+                details={"tool_name": tool_name, "event_metadata": event.get("metadata", {}), "error_data": error_data}
             )
 
 
@@ -221,11 +335,20 @@ class StreamEventOrchestrator:
                     yield stream_event
 
         except Exception as e:
+            # Log the processor error
+            error_msg = f"Error processing stream event: {str(e)}"
+            logger.error(error_msg, exc_info=True, extra={
+                "event_type": "stream_processor_error",
+                "event_name": event.get("event"),
+                "event_metadata": event.get("metadata", {}),
+                "processor_count": len(self.processors)
+            })
+
             # If any processor fails, emit an error event
             yield StreamEventFactory.error(
-                error_message=f"Error processing stream event: {str(e)}",
+                error_message=error_msg,
                 error_code="processing_error",
-                details={"original_event": event}
+                details={"original_event": event, "processor_count": len(self.processors)}
             )
 
     def get_tool_processor(self) -> ToolEventProcessor:
@@ -234,3 +357,16 @@ class StreamEventOrchestrator:
             if isinstance(processor, ToolEventProcessor):
                 return processor
         raise RuntimeError("Tool processor not found")
+
+    def get_assistant_processor(self) -> AssistantEventProcessor:
+        """Get the assistant processor for special operations"""
+        for processor in self.processors:
+            if isinstance(processor, AssistantEventProcessor):
+                return processor
+        raise RuntimeError("Assistant processor not found")
+
+    def reset_for_new_conversation(self):
+        """Reset all processors for a new conversation"""
+        for processor in self.processors:
+            if hasattr(processor, 'reset_for_new_message'):
+                processor.reset_for_new_message()

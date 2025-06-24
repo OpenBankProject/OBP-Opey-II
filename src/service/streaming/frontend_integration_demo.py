@@ -50,8 +50,8 @@ class FrontendStreamHandler:
                 self.handle_assistant_start(event)
             case "assistant_token":
                 self.handle_assistant_token(event)
-            case "assistant_end":
-                self.handle_assistant_end(event)
+            case "assistant_complete":
+                self.handle_assistant_complete(event)
             case "tool_start":
                 self.handle_tool_start(event)
             case "tool_end":
@@ -77,7 +77,7 @@ class FrontendStreamHandler:
         print(f"  💬 UI: Append token '{token}' to response")
         print(f"      Current response: '{self.current_response}'")
 
-    def handle_assistant_end(self, event: StreamEvent):
+    def handle_assistant_complete(self, event: StreamEvent):
         """Complete assistant response and show any tool calls."""
         self.ui_state["assistant_typing"] = False
         content = event.data.get("content", "")
@@ -230,7 +230,7 @@ async def simulate_conversation_flow():
         StreamEvent("assistant_token", {"content": " endpoints.", "run_id": "demo-123"}, "opey"),
 
         # Assistant completes with tool call
-        StreamEvent("assistant_end", {
+        StreamEvent("assistant_complete", {
             "content": "I'll help you find account endpoints.",
             "tool_calls": [{"name": "retrieve_endpoints", "id": "call_123", "args": {"query": "account endpoints"}}],
             "run_id": "demo-123"
@@ -267,7 +267,7 @@ async def simulate_conversation_flow():
         StreamEvent("assistant_token", {"content": " account", "run_id": "demo-123"}, "opey"),
         StreamEvent("assistant_token", {"content": " endpoints!", "run_id": "demo-123"}, "opey"),
 
-        StreamEvent("assistant_end", {
+        StreamEvent("assistant_complete", {
             "content": " Here are the account endpoints!",
             "tool_calls": [],
             "run_id": "demo-123"
@@ -300,7 +300,7 @@ async def simulate_approval_flow():
         StreamEvent("assistant_token", {"content": " bank", "run_id": "approval-123"}, "opey"),
         StreamEvent("assistant_token", {"content": " account.", "run_id": "approval-123"}, "opey"),
 
-        StreamEvent("assistant_end", {
+        StreamEvent("assistant_complete", {
             "content": "I'll create a bank account.",
             "tool_calls": [{"name": "obp_requests", "id": "dangerous_call", "args": {"method": "POST", "path": "/accounts"}}],
             "run_id": "approval-123"
@@ -336,7 +336,7 @@ async def simulate_approval_flow():
         StreamEvent("assistant_token", {"content": " created", "run_id": "approval-123"}, "opey"),
         StreamEvent("assistant_token", {"content": " successfully!", "run_id": "approval-123"}, "opey"),
 
-        StreamEvent("assistant_end", {
+        StreamEvent("assistant_complete", {
             "content": " Account created successfully!",
             "tool_calls": [],
             "run_id": "approval-123"
@@ -385,7 +385,7 @@ const StreamingChat: React.FC = () => {
         updateCurrentMessage(event.data.content);
         break;
 
-      case 'assistant_end':
+      case 'assistant_complete':
         setUiState(prev => ({ ...prev, assistantTyping: false }));
         finalizeMessage(event.data.content);
         break;

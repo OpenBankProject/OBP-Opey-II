@@ -21,7 +21,7 @@ The original streaming implementation in `service/streaming.py` had several issu
 ```
 service/streaming/
 ├── events.py           # Event definitions and factory
-├── processors.py       # Event processors with single responsibilities  
+├── processors.py       # Event processors with single responsibilities
 ├── stream_manager.py   # Main streaming interface
 ├── migration.py        # Backward compatibility utilities
 └── __init__.py         # Module exports
@@ -31,7 +31,7 @@ service/streaming/
 
 #### 1. Event System (`events.py`)
 - **Type-safe events** using Pydantic models
-- **Clear event types**: `assistant_start`, `assistant_token`, `assistant_end`, `tool_start`, `tool_end`, `error`, `approval_request`, `stream_end`
+- **Clear event types**: `assistant_start`, `assistant_token`, `assistant_complete`, `tool_start`, `tool_end`, `error`, `approval_request`, `stream_end`
 - **Factory pattern** for consistent event creation
 - **Built-in SSE formatting** with `to_sse_data()` method
 
@@ -63,7 +63,7 @@ service/streaming/
 }
 
 {
-  "type": "message", 
+  "type": "message",
   "content": {
     "type": "ai",
     "content": "Full response",
@@ -81,8 +81,8 @@ service/streaming/
 }
 
 {
-  "type": "assistant_end",
-  "content": "Full response", 
+  "type": "assistant_complete",
+  "content": "Full response",
   "tool_calls": [],
   "timestamp": null
 }
@@ -162,7 +162,7 @@ Comprehensive test suite validates:
 
 ### New Files
 - `service/streaming/events.py` - Event definitions
-- `service/streaming/processors.py` - Event processors  
+- `service/streaming/processors.py` - Event processors
 - `service/streaming/stream_manager.py` - Main streaming interface
 - `service/streaming/migration.py` - Backward compatibility
 - `service/streaming/__init__.py` - Module exports
@@ -184,7 +184,7 @@ If you have custom clients consuming the streaming API:
 
 1. **Event Type Changes**:
    - `"token"` → `"assistant_token"`
-   - `"message"` → `"assistant_end"` (for AI responses)
+   - `"message"` → `"assistant_complete"` (for AI responses)
    - New event types: `"tool_start"`, `"tool_end"`, `"assistant_start"`
 
 2. **Event Structure Changes**:
@@ -203,7 +203,7 @@ This refactoring significantly improves the maintainability, extensibility, and 
 
 The system is now:
 - ✅ **Type-safe** with Pydantic models
-- ✅ **Maintainable** with clear separation of concerns  
+- ✅ **Maintainable** with clear separation of concerns
 - ✅ **Extensible** with pluggable processors
 - ✅ **Testable** with isolated components
 - ✅ **User-friendly** with clear event semantics

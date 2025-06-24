@@ -49,7 +49,7 @@ async def basic_streaming_example():
         StreamEventFactory.assistant_token(" access", run_id=run_id),
         StreamEventFactory.assistant_token(" the", run_id=run_id),
         StreamEventFactory.assistant_token(" banks!", run_id=run_id),
-        StreamEventFactory.assistant_end(
+        StreamEventFactory.assistant_complete(
             content="Hello there! You can access the banks!",
             tool_calls=[],
             run_id=run_id
@@ -72,7 +72,7 @@ async def basic_streaming_example():
                 assistant_response += event.content
                 print(f"  💬 Token: '{event.content}'")
 
-            case "assistant_end":
+            case "assistant_complete":
                 print(f"  ✅ Assistant finished: '{event.content}'")
 
             case "tool_start":
@@ -120,7 +120,7 @@ async def frontend_integration_example():
                 run_id="frontend-123"
             ),
             StreamEventFactory.assistant_token(" You can use the account endpoint.", run_id="frontend-123"),
-            StreamEventFactory.assistant_end(
+            StreamEventFactory.assistant_complete(
                 content="I'll help you with the OBP API. You can use the account endpoint.",
                 run_id="frontend-123"
             ),
@@ -161,8 +161,8 @@ async def frontend_integration_example():
                     self.on_assistant_start(event_data)
                 case "assistant_token":
                     self.on_assistant_token(event_data)
-                case "assistant_end":
-                    self.on_assistant_end(event_data)
+                case "assistant_complete":
+                    self.on_assistant_complete(event_data)
                 case "tool_start":
                     self.on_tool_start(event_data)
                 case "tool_end":
@@ -181,7 +181,7 @@ async def frontend_integration_example():
             self.current_response += token
             print(f"💬 {token}", end="", flush=True)
 
-        def on_assistant_end(self, event):
+        def on_assistant_complete(self, event):
             print("\n✅ Assistant response complete")
             print(f"Full response: {event['content']}")
 
@@ -306,7 +306,7 @@ async def approval_workflow_example():
                             run_id=run_id
                         ),
                         StreamEventFactory.assistant_token(" Account created successfully!", run_id=run_id),
-                        StreamEventFactory.assistant_end(
+                        StreamEventFactory.assistant_complete(
                             content="I'll create a new bank account for you. Account created successfully!",
                             run_id=run_id
                         )
@@ -320,7 +320,7 @@ async def approval_workflow_example():
                                 print(f"✅ Operation completed: {cont_event.tool_output}")
                             case "assistant_token":
                                 print(f"💬 {cont_event.content}")
-                            case "assistant_end":
+                            case "assistant_complete":
                                 print(f"✅ Final response: {cont_event.content}")
                 else:
                     print("❌ Operation cancelled by user")

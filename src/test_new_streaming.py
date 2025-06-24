@@ -7,7 +7,7 @@ from service.streaming import (
     StreamManager,
     AssistantStartEvent,
     AssistantTokenEvent,
-    AssistantEndEvent,
+    AssistantCompleteEvent,
     ToolStartEvent,
     ToolEndEvent,
     ErrorEvent,
@@ -23,16 +23,16 @@ async def test_event_creation():
     print("=== Testing Event Creation ===")
 
     # Test assistant events
-    start_event = StreamEventFactory.assistant_start(run_id="test-123")
+    start_event = StreamEventFactory.assistant_start(message_id="test-123")
     print(f"Assistant start: {start_event.model_dump()}")
 
-    token_event = StreamEventFactory.assistant_token("Hello", run_id="test-123")
+    token_event = StreamEventFactory.assistant_token("Hello", message_id="test-123")
     print(f"Assistant token: {token_event.model_dump()}")
 
-    end_event = StreamEventFactory.assistant_end(
+    end_event = StreamEventFactory.assistant_complete(
         content="Hello world!",
-        tool_calls=[{"name": "test_tool", "id": "call_123", "args": {}}],
-        run_id="test-123"
+        message_id="test-123",
+        tool_calls=[{"name": "test_tool", "id": "call_123", "args": {}}]
     )
     print(f"Assistant end: {end_event.model_dump()}")
 
@@ -78,10 +78,10 @@ async def test_sse_formatting():
     print("\n=== Testing SSE Formatting ===")
 
     events = [
-        StreamEventFactory.assistant_start(run_id="test-123"),
-        StreamEventFactory.assistant_token("Hello", run_id="test-123"),
-        StreamEventFactory.assistant_token(" world!", run_id="test-123"),
-        StreamEventFactory.assistant_end("Hello world!", run_id="test-123"),
+        StreamEventFactory.assistant_start(message_id="test-123"),
+        StreamEventFactory.assistant_token("Hello", message_id="test-123"),
+        StreamEventFactory.assistant_token(" world!", message_id="test-123"),
+        StreamEventFactory.assistant_complete("Hello world!", message_id="test-123"),
         StreamEventFactory.stream_end()
     ]
 
@@ -159,10 +159,10 @@ async def mock_streaming_scenario():
 
         # Assistant finishes
         full_response = "I'll help you with the OBP API. You can use the /banks endpoint."
-        yield StreamEventFactory.assistant_end(
+        yield StreamEventFactory.assistant_complete(
             content=full_response,
-            tool_calls=[],
-            run_id=run_id
+            message_id=run_id,
+            tool_calls=[]
         ).to_sse_data()
 
         # Stream ends
@@ -204,9 +204,9 @@ async def test_event_types():
     print("\n=== Testing Event Types ===")
 
     event_types = [
-        ("assistant_start", StreamEventFactory.assistant_start()),
-        ("assistant_token", StreamEventFactory.assistant_token("test")),
-        ("assistant_end", StreamEventFactory.assistant_end("test")),
+        ("assistant_start", StreamEventFactory.assistant_start("test-msg-id")),
+        ("assistant_token", StreamEventFactory.assistant_token("test", "test-msg-id")),
+        ("assistant_complete", StreamEventFactory.assistant_complete("test", "test-msg-id")),
         ("tool_start", StreamEventFactory.tool_start("tool", "id", {})),
         ("tool_end", StreamEventFactory.tool_end("tool", "id", "output")),
         ("error", StreamEventFactory.error("error")),

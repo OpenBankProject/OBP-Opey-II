@@ -1,12 +1,13 @@
 from typing import Any, Dict, Literal, Union, Optional
 from pydantic import BaseModel, Field
+from datetime import datetime
 from abc import ABC, abstractmethod
 
 
 class BaseStreamEvent(BaseModel, ABC):
     """Base class for all stream events"""
     type: str
-    timestamp: Optional[float] = None
+    timestamp: Optional[float] = datetime.now().timestamp()
 
     @abstractmethod
     def to_sse_data(self) -> str:
@@ -17,6 +18,7 @@ class BaseStreamEvent(BaseModel, ABC):
 class AssistantStartEvent(BaseStreamEvent):
     """Event fired when the assistant starts responding"""
     type: Literal["assistant_start"] = "assistant_start"
+    message_id: str
 
     def to_sse_data(self) -> str:
         return f"data: {self.model_dump_json()}\n\n"
@@ -25,15 +27,17 @@ class AssistantStartEvent(BaseStreamEvent):
 class AssistantTokenEvent(BaseStreamEvent):
     """Event fired for each token from the assistant"""
     type: Literal["assistant_token"] = "assistant_token"
+    message_id: str
     content: str = Field(description="The token content")
 
     def to_sse_data(self) -> str:
         return f"data: {self.model_dump_json()}\n\n"
 
 
-class AssistantEndEvent(BaseStreamEvent):
+class AssistantCompleteEvent(BaseStreamEvent):
     """Event fired when the assistant finishes responding"""
-    type: Literal["assistant_end"] = "assistant_end"
+    type: Literal["assistant_complete"] = "assistant_complete"
+    message_id: str
     content: str = Field(description="The complete response content")
     tool_calls: Optional[list] = Field(default=[], description="Any tool calls made by the assistant")
 
@@ -78,6 +82,7 @@ class ErrorEvent(BaseStreamEvent):
     """Event fired when an error occurs"""
     type: Literal["error"] = "error"
     error_message: str = Field(description="Human readable error message")
+    for_message_id: Optional[str] = Field(description="The message ID which the error is related to.")
     error_code: Optional[str] = Field(default=None, description="Machine readable error code")
     details: Optional[Dict[str, Any]] = Field(default=None, description="Additional error details")
 
@@ -117,7 +122,7 @@ class StreamEndEvent(BaseStreamEvent):
 StreamEvent = Union[
     AssistantStartEvent,
     AssistantTokenEvent,
-    AssistantEndEvent,
+    AssistantCompleteEvent,
     ToolStartEvent,
     ToolTokenEvent,
     ToolEndEvent,
@@ -132,16 +137,16 @@ class StreamEventFactory:
     """Factory class for creating stream events"""
 
     @staticmethod
-    def assistant_start() -> AssistantStartEvent:
-        return AssistantStartEvent()
+    def assistant_start(message_id: str) -> AssistantStartEvent:
+        return AssistantStartEvent(message_id=message_id)
 
     @staticmethod
-    def assistant_token(content: str) -> AssistantTokenEvent:
-        return AssistantTokenEvent(content=content)
+    def assistant_token(content: str, message_id: str) -> AssistantTokenEvent:
+        return AssistantTokenEvent(content=content, message_id=message_id)
 
     @staticmethod
-    def assistant_end(content: str, tool_calls: Optional[list] = None) -> AssistantEndEvent:
-        return AssistantEndEvent(content=content, tool_calls=tool_calls or [])
+    def assistant_complete(content: str, message_id: str, tool_calls: Optional[list] = None) -> AssistantCompleteEvent:
+        return AssistantCompleteEvent(content=content, message_id=message_id, tool_calls=tool_calls or [])
 
     @staticmethod
     def tool_start(tool_name: str, tool_call_id: str, tool_input: Dict[str, Any]) -> ToolStartEvent:
@@ -173,10 +178,12 @@ class StreamEventFactory:
     def error(
         error_message: str,
         error_code: Optional[str] = None,
+        for_message_id: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None
     ) -> ErrorEvent:
         return ErrorEvent(
             error_message=error_message,
+            for_message_id=for_message_id,
             error_code=error_code,
             details=details
         )
