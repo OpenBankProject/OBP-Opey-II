@@ -30,6 +30,7 @@ logger = logging.getLogger('opey.session')
 class OpeySession:
     """
     Class to manage Opey sessions.
+    Depends first on the authentication layer, i.e. session_verifier
     """
     def __init__(self, request: Request, session_data: Annotated[SessionData, Depends(session_verifier)], session_id: Annotated[UUID, Depends(session_cookie)], checkpointer: Annotated[BaseCheckpointSaver, Depends(get_global_checkpointer)]):
         # Store session data and check usage limits for anonymous sessions

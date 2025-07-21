@@ -4,7 +4,6 @@ from contextlib import asynccontextmanager
 from typing import Any, Annotated, AsyncGenerator
 import uuid
 import logging
-import json
 
 from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
 from fastapi.responses import StreamingResponse
@@ -12,20 +11,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langchain_core.messages import ToolMessage
-from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client as LangsmithClient
 
 from auth.auth import OBPConsentAuth, AuthConfig
-from auth.session import session_cookie, backend, session_verifier, SessionData
-from auth.usage_tracker import usage_tracker
+from auth.session import session_cookie, backend, SessionData
 
 from service.opey_session import OpeySession
-from service.checkpointer import checkpointers, get_global_checkpointer
+from service.checkpointer import checkpointers
 
 from .streaming import StreamManager
-from .streaming.events import StreamEventFactory
 
 from schema import (
     ChatMessage,
@@ -97,29 +92,7 @@ auth_config = AuthConfig({
     "obp_consent": OBPConsentAuth(),
 })
 
-# Middleware for checking the Authorization header, i.e. OBP consent
 obp_base_url = os.getenv('OBP_BASE_URL')
-jwk_url = f'{obp_base_url}/obp/v5.1.0/certs'
-
-# @app.middleware("http")
-# async def check_auth_header(request: Request, call_next: Callable) -> Response:
-#     request_body = await request.body()
-#     logger.debug("This is coming from the auth middleware")
-#     logger.debug(f"Request: {request_body}")
-
-#     # Check if the request has a consent JWT in the headers
-#     if request.headers.get("Consent-JWT"):
-#         token = request.headers.get("Consent-JWT")
-#         if not await auth_config.obp_consent.acheck_auth(token):
-#             return Response(status_code=401, content="Invalid token")
-#     else:
-#         return Response(status_code=401, content="Missing Authorization headers, Must be one of ['Consent-JWT']")
-
-#     # TODO: Add more auth methods here if needed
-
-#     response = await call_next(request)
-#     logger.debug(f"Response: {response}")
-#     return response
 
 @app.post("/create-session")
 async def create_session(request: Request, response: Response):
