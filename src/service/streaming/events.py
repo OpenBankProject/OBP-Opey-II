@@ -6,7 +6,6 @@ from abc import ABC, abstractmethod
 
 class BaseStreamEvent(BaseModel, ABC):
     """Base class for all stream events"""
-    type: str
     timestamp: Optional[float] = datetime.now().timestamp()
 
     @abstractmethod
@@ -19,6 +18,7 @@ class AssistantStartEvent(BaseStreamEvent):
     """Event fired when the assistant starts responding"""
     type: Literal["assistant_start"] = "assistant_start"
     message_id: str
+    run_id: str = Field(description="Unique identifier for this run")
 
     def to_sse_data(self) -> str:
         return f"data: {self.model_dump_json()}\n\n"
@@ -38,6 +38,7 @@ class AssistantCompleteEvent(BaseStreamEvent):
     """Event fired when the assistant finishes responding"""
     type: Literal["assistant_complete"] = "assistant_complete"
     message_id: str
+    run_id: str = Field(description="Unique identifier for this run")
     content: str = Field(description="The complete response content")
     tool_calls: Optional[list] = Field(default=[], description="Any tool calls made by the assistant")
 
@@ -137,16 +138,16 @@ class StreamEventFactory:
     """Factory class for creating stream events"""
 
     @staticmethod
-    def assistant_start(message_id: str) -> AssistantStartEvent:
-        return AssistantStartEvent(message_id=message_id)
+    def assistant_start(message_id: str, run_id: str) -> AssistantStartEvent:
+        return AssistantStartEvent(message_id=message_id, run_id=run_id)
 
     @staticmethod
     def assistant_token(content: str, message_id: str) -> AssistantTokenEvent:
         return AssistantTokenEvent(content=content, message_id=message_id)
 
     @staticmethod
-    def assistant_complete(content: str, message_id: str, tool_calls: Optional[list] = None) -> AssistantCompleteEvent:
-        return AssistantCompleteEvent(content=content, message_id=message_id, tool_calls=tool_calls or [])
+    def assistant_complete(content: str, message_id: str, run_id: str, tool_calls: Optional[list] = None) -> AssistantCompleteEvent:
+        return AssistantCompleteEvent(content=content, message_id=message_id, run_id=run_id, tool_calls=tool_calls or [])
 
     @staticmethod
     def tool_start(tool_name: str, tool_call_id: str, tool_input: Dict[str, Any]) -> ToolStartEvent:

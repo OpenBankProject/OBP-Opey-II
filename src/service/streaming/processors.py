@@ -32,6 +32,7 @@ class AssistantEventProcessor(BaseEventProcessor):
         self.streaming_content = ""
         self.current_tool_calls = []
         self.current_message_id = None
+        self.run_id = None
 
     async def process(self, event: LangGraphStreamEvent) -> AsyncGenerator[StreamEvent, None]:
         """Process assistant-related events"""
@@ -56,10 +57,12 @@ class AssistantEventProcessor(BaseEventProcessor):
 
                         # Extract message ID, fallback to generating one if not available
                         message_id = getattr(message, 'id', None) or str(uuid.uuid4())
+                        run_id = self.run_id or event.get("run_id", None)
 
                         yield StreamEventFactory.assistant_complete(
                             content=content,
                             message_id=message_id,
+                            run_id=run_id,
                             tool_calls=tool_calls
                         )
                     except Exception as e:
@@ -94,7 +97,10 @@ class AssistantEventProcessor(BaseEventProcessor):
                     # Send assistant_start if this is the first token
                     if not self.assistant_started:
                         self.assistant_started = True
-                        yield StreamEventFactory.assistant_start(message_id=self.current_message_id)
+                        if not self.run_id:
+                            grabbed_run_id = event.get("run_id", None)
+                            self.run_id = grabbed_run_id
+                        yield StreamEventFactory.assistant_start(message_id=self.current_message_id, run_id=self.run_id)
 
                     token_content = convert_message_content_to_string(content)
                     if token_content:
@@ -134,6 +140,7 @@ class AssistantEventProcessor(BaseEventProcessor):
         self.streaming_content = ""
         self.current_tool_calls = []
         self.current_message_id = None
+        self.run_id = None
 
 
 class ToolEventProcessor(BaseEventProcessor):
@@ -157,6 +164,10 @@ class ToolEventProcessor(BaseEventProcessor):
             messages = event["data"]["output"]["messages"]
             if not isinstance(messages, list):
                 messages = [messages]
+
+
+            grabbed_run_id = event.get("run_id", None)
+            print(f"Grabbed run_id from tool: {grabbed_run_id}")  # Debugging line
 
             for message in messages:
                 if isinstance(message, AIMessage) and hasattr(message, 'tool_calls') and message.tool_calls:
@@ -199,6 +210,9 @@ class ToolEventProcessor(BaseEventProcessor):
             messages = event["data"]["output"]["messages"]
             if not isinstance(messages, list):
                 messages = [messages]
+
+            grabbed_run_id = event.get("run_id", None)
+            print(f"Grabbed run_id from tool completion: {grabbed_run_id}") 
 
             for message in messages:
                 if isinstance(message, ToolMessage):

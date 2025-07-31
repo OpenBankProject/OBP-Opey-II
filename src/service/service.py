@@ -19,6 +19,7 @@ from auth.session import session_cookie, backend, SessionData
 
 from service.opey_session import OpeySession
 from service.checkpointer import checkpointers
+from service.redis_client import get_redis_client, redis_clients
 
 from .streaming import StreamManager
 
@@ -61,6 +62,10 @@ class SessionUpdateMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Initialize redis client
+    redis_client = await get_redis_client()
+    redis_clients['default'] = redis_client
+    
     # Ensures that the checkpointer is created and closed properly, and that only this one is used
     # for the whole app
     async with AsyncSqliteSaver.from_conn_string('checkpoints.db') as sql_checkpointer:
@@ -88,9 +93,8 @@ else:
 
 # Define Allowed Authentication methods,
 # Currently only OBP consent is allowed
-auth_config = AuthConfig({
-    "obp_consent": OBPConsentAuth(),
-})
+auth_config = AuthConfig()
+auth_config.register_auth_strategy("obp_consent", OBPConsentAuth())
 
 obp_base_url = os.getenv('OBP_BASE_URL')
 
@@ -135,7 +139,7 @@ async def create_session(request: Request, response: Response):
         )
 
     # Check if the consent JWT is valid
-    if not await auth_config.obp_consent.acheck_auth(consent_jwt):
+    if not await auth_config.auth_strategies["obp_consent"].acheck_auth(consent_jwt):
         raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
 
     session_id = uuid.uuid4()
@@ -334,7 +338,7 @@ async def upgrade_session(request: Request, response: Response, session_id: uuid
         raise HTTPException(status_code=400, detail="Missing Consent-JWT header")
 
     # Check if the consent JWT is valid
-    if not await auth_config.obp_consent.acheck_auth(consent_jwt):
+    if not await auth_config.auth_strategies["obp_consent"].acheck_auth(consent_jwt):
         raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
 
     # Get current session data

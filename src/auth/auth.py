@@ -45,9 +45,22 @@ class BaseAuth():
 
 class AuthConfig:
     # This class is used to store different types of authentication methods
-    def __init__(self, auth_types: Dict[str, BaseAuth]):
-        for key, value in auth_types.items():
-            setattr(self, key, value)
+
+
+    def __init__(self):
+        self.auth_strategies = {}
+
+    def register_auth_strategy(self, name: str, auth_strategy: BaseAuth):
+        """
+        Register a new authentication strategy.
+        
+        Args:
+            name (str): The name of the authentication strategy.
+            auth_strategy (BaseAuth): An instance of a class that inherits from BaseAuth.
+        """
+        if not isinstance(auth_strategy, BaseAuth):
+            raise TypeError(f"{name} must be an instance of BaseAuth")
+        self.auth_strategies[name] = auth_strategy
 
 # Define differnt auth types here
 class OBPConsentAuth(BaseAuth):
