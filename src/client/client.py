@@ -36,18 +36,26 @@ class AgentClient:
     def _ensure_session(self) -> None:
         """Ensure a session exists by calling /create-session if needed."""
         if not self._session_created:
+            print(f"Creating session at {self.base_url}/create-session")
             response = self._client.post(f"{self.base_url}/create-session", headers=self._headers)
+            print(f"Session creation response: {response.status_code}")
+            print(f"Session cookies received: {response.cookies}")
             if response.status_code == 200:
                 self._session_created = True
+                print("Session created successfully")
             else:
                 raise Exception(f"Failed to create session: {response.status_code} - {response.text}")
 
     async def _aensure_session(self) -> None:
         """Ensure a session exists by calling /create-session if needed (async)."""
         if not self._session_created:
+            print(f"Creating async session at {self.base_url}/create-session")
             response = await self._async_client.post(f"{self.base_url}/create-session", headers=self._headers)
+            print(f"Async session creation response: {response.status_code}")
+            print(f"Async session cookies received: {response.cookies}")
             if response.status_code == 200:
                 self._session_created = True
+                print("Async session created successfully")
             else:
                 raise Exception(f"Failed to create session: {response.status_code} - {response.text}")
 

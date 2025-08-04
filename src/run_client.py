@@ -26,7 +26,13 @@ async def amain() -> None:
         if isinstance(message, str):
             print(message, flush=True, end="|")
         elif isinstance(message, ChatMessage):
-            message.pretty_print()
+            print(f"\n{message.content}")
+        elif isinstance(message, dict):
+            # Handle streaming events like assistant_start, keep_alive, etc.
+            if message.get("type") in ["assistant_start", "keep_alive"]:
+                continue  # Skip these events silently
+            else:
+                print(f"Stream event: {message.get('type', 'unknown')}")
         else:
             print(f"ERROR: Unknown type - {type(message)}")
 
@@ -52,6 +58,12 @@ for message in client.stream("Share a quick fun fact?"):
     if isinstance(message, str):
         print(message, flush=True, end="|")
     elif isinstance(message, ChatMessage):
-        message.pretty_print()
+        print(f"\n{message.content}")
+    elif isinstance(message, dict):
+        # Handle streaming events like assistant_start, keep_alive, etc.
+        if message.get("type") in ["assistant_start", "keep_alive"]:
+            continue  # Skip these events silently
+        else:
+            print(f"Stream event: {message.get('type', 'unknown')}")
     else:
         print(f"ERROR: Unknown type - {type(message)}")

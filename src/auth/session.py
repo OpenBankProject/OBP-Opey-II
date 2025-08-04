@@ -15,8 +15,11 @@ class SessionData(BaseModel):
     token_usage: int = 0
     request_count: int = 0
 
+# For development, allow insecure cookies over HTTP
+secure_cookies = os.getenv("SECURE_COOKIES", "true").lower() == "true"
+
 cookie_params = CookieParameters(
-    secure=True,
+    secure=secure_cookies,
 )
 
 # Get secret key from environment variable

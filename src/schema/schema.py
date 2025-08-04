@@ -163,6 +163,11 @@ class ChatMessage(BaseModel):
         match self.type:
             case "human":
                 return HumanMessage(content=self.content)
+            case "ai":
+                ai_msg = AIMessage(content=self.content)
+                if self.tool_calls:
+                    ai_msg.tool_calls = self.tool_calls
+                return ai_msg
             case _:
                 raise NotImplementedError(f"Unsupported message type: {self.type}")
 

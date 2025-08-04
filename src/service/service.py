@@ -21,6 +21,7 @@ from service.opey_session import OpeySession
 from service.checkpointer import checkpointers
 
 from .streaming import StreamManager
+from .streaming_legacy import _parse_input
 
 from schema import (
     ChatMessage,
