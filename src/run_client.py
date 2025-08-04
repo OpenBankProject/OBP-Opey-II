@@ -1,12 +1,21 @@
 #### ASYNC ####
 import asyncio
+import os
+import sys
 
 from client import AgentClient
 from schema import ChatMessage
 
 
 async def amain() -> None:
-    client = AgentClient()
+    # Check for command line argument first, then environment variable, then default
+    if len(sys.argv) > 1:
+        base_url = sys.argv[1]
+    else:
+        base_url = os.getenv("AGENT_BASE_URL", "http://localhost:5000")
+    
+    print(f"Connecting to agent service at: {base_url}")
+    client = AgentClient(base_url=base_url)
 
     print("Chat example:")
     response = await client.ainvoke("Tell me a brief joke?")
@@ -25,7 +34,14 @@ async def amain() -> None:
 asyncio.run(amain())
 
 #### SYNC ####
-client = AgentClient()
+# Check for command line argument first, then environment variable, then default
+if len(sys.argv) > 1:
+    base_url = sys.argv[1]
+else:
+    base_url = os.getenv("AGENT_BASE_URL", "http://localhost:5000")
+
+print(f"Connecting to agent service at: {base_url}")
+client = AgentClient(base_url=base_url)
 
 print("Chat example:")
 response = client.invoke("Tell me a brief joke?")
