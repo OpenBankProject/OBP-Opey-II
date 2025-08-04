@@ -189,6 +189,11 @@ async def invoke(user_input: UserInput, request: Request, opey_session: Annotate
     Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
     is also attached to messages for recording feedback.
     """
+
+
+    logger.info(f"Hello from invoke\n")
+
+
     # Update request count for usage tracking
     opey_session.update_request_count()
 

@@ -1,8 +1,7 @@
-from concurrent.futures import thread
 import json
 import os
 from collections.abc import AsyncGenerator, Generator
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 
@@ -23,6 +22,9 @@ class AgentClient:
         self.base_url = base_url
         self.auth_secret = os.getenv("AUTH_SECRET")
         self.timeout = timeout
+        self._client = httpx.Client(timeout=timeout)
+        self._async_client = httpx.AsyncClient(timeout=timeout)
+        self._session_created = False
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -30,6 +32,36 @@ class AgentClient:
         if self.auth_secret:
             headers["Authorization"] = f"Bearer {self.auth_secret}"
         return headers
+
+    def _ensure_session(self) -> None:
+        """Ensure a session exists by calling /create-session if needed."""
+        if not self._session_created:
+            response = self._client.post(f"{self.base_url}/create-session", headers=self._headers)
+            if response.status_code == 200:
+                self._session_created = True
+            else:
+                raise Exception(f"Failed to create session: {response.status_code} - {response.text}")
+
+    async def _aensure_session(self) -> None:
+        """Ensure a session exists by calling /create-session if needed (async)."""
+        if not self._session_created:
+            response = await self._async_client.post(f"{self.base_url}/create-session", headers=self._headers)
+            if response.status_code == 200:
+                self._session_created = True
+            else:
+                raise Exception(f"Failed to create session: {response.status_code} - {response.text}")
+
+    def __del__(self):
+        """Clean up clients on deletion."""
+        try:
+            self._client.close()
+        except:
+            pass
+        try:
+            # Note: This won't work for async client, but we'll handle it in context managers
+            pass
+        except:
+            pass
 
     async def ainvoke(
         self, message: str, model: str | None = None, thread_id: str | None = None
@@ -45,21 +77,18 @@ class AgentClient:
         Returns:
             AnyMessage: The response from the agent
         """
+        await self._aensure_session()
         request = UserInput(message=message)
         if thread_id:
             request.thread_id = thread_id
-        if model:
-            request.model = model
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.base_url}/invoke",
-                json=request.model_dump(),
-                headers=self._headers,
-                timeout=self.timeout,
-            )
-            if response.status_code == 200:
-                return ChatMessage.model_validate(response.json())
-            raise Exception(f"Error: {response.status_code} - {response.text}")
+        response = await self._async_client.post(
+            f"{self.base_url}/invoke",
+            json=request.model_dump(),
+            headers=self._headers,
+        )
+        if response.status_code == 200:
+            return ChatMessage.model_validate(response.json())
+        raise Exception(f"Error: {response.status_code} - {response.text}")
 
     def invoke(
         self, message: str, model: str | None = None, thread_id: str | None = None
@@ -75,16 +104,14 @@ class AgentClient:
         Returns:
             ChatMessage: The response from the agent
         """
+        self._ensure_session()
         request = UserInput(message=message)
         if thread_id:
             request.thread_id = thread_id
-        if model:
-            request.model = model
-        response = httpx.post(
+        response = self._client.post(
             f"{self.base_url}/invoke",
             json=request.model_dump(),
             headers=self._headers,
-            timeout=self.timeout,
         )
         if response.status_code == 200:
             return ChatMessage.model_validate(response.json())
@@ -193,15 +220,15 @@ class AgentClient:
         Returns:
             Generator[ChatMessage | str, None, None]: The response from the agent
         """
+        self._ensure_session()
         request = StreamInput(message=message, stream_tokens=stream_tokens)
         if thread_id:
             request.thread_id = thread_id
-        with httpx.stream(
+        with self._client.stream(
             "POST",
             f"{self.base_url}/stream",
             json=request.model_dump(),
             headers=self._headers,
-            timeout=self.timeout,
         ) as response:
             if response.status_code != 200:
                 raise Exception(f"Error: {response.status_code} - {response.text}")
@@ -240,17 +267,16 @@ class AgentClient:
         Returns:
             AsyncGenerator[ChatMessage | str, None]: The response from the agent
         """
+        await self._aensure_session()
         request = StreamInput(message=message, stream_tokens=stream_tokens)
         if thread_id:
             request.thread_id = thread_id
-        async with httpx.AsyncClient() as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/stream",
-                json=request.model_dump(),
-                headers=self._headers,
-                timeout=self.timeout,
-            ) as response:
+        async with self._async_client.stream(
+            "POST",
+            f"{self.base_url}/stream",
+            json=request.model_dump(),
+            headers=self._headers,
+        ) as response:
                 if response.status_code != 200:
                     content = await response.aread()
                     raise Exception(f"Error: {response.status_code} - {content.decode('utf-8')}")
@@ -265,15 +291,14 @@ class AgentClient:
                         yield parsed
 
     async def approve_request_and_stream(self, thread_id: str, user_input: ToolCallApproval):
+        await self._aensure_session()
         print(f"request: {user_input}")
-        async with httpx.AsyncClient() as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/approval/{thread_id}",
-                json=user_input.model_dump(),
-                headers=self._headers,
-                timeout=self.timeout,
-            ) as response:
+        async with self._async_client.stream(
+            "POST",
+            f"{self.base_url}/approval/{thread_id}",
+            json=user_input.model_dump(),
+            headers=self._headers,
+        ) as response:
                 if response.status_code != 200:
                     content = await response.aread()
                     raise Exception(f"Error: {response.status_code} - {content.decode('utf-8')}")
@@ -297,14 +322,13 @@ class AgentClient:
         credentials can be stored and managed in the service rather than the client.
         See: https://api.smith.langchain.com/redoc#tag/feedback/operation/create_feedback_api_v1_feedback_post
         """
+        await self._aensure_session()
         request = Feedback(run_id=run_id, key=key, score=score, kwargs=kwargs)
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.base_url}/feedback",
-                json=request.model_dump(),
-                headers=self._headers,
-                timeout=self.timeout,
-            )
-            if response.status_code != 200:
-                raise Exception(f"Error: {response.status_code} - {response.text}")
-            response.json()
+        response = await self._async_client.post(
+            f"{self.base_url}/feedback",
+            json=request.model_dump(),
+            headers=self._headers,
+        )
+        if response.status_code != 200:
+            raise Exception(f"Error: {response.status_code} - {response.text}")
+        return response.json()
