@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Script to populate ChromaDB with OBP glossary and endpoint documentation.
+This script matches the original working database format.
 """
 
 import os
@@ -16,7 +17,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 from langchain.schema import Document
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 # Load environment variables
 load_dotenv()
@@ -116,9 +116,38 @@ def process_glossary_data(glossary_data: Dict[str, Any]) -> List[Document]:
     print(f"Created {len(documents)} glossary documents")
     return documents
 
+def get_all_obp_tags() -> List[str]:
+    """Get all possible OBP tags for metadata initialization."""
+    return [
+        "Old-Style", "Transaction-Request", "API", "Bank", "Account", "Account-Access",
+        "Direct-Debit", "Standing-Order", "Account-Metadata", "Account-Application",
+        "Account-Public", "Account-Firehose", "FirehoseData", "PublicData", "PrivateData",
+        "Transaction", "Transaction-Firehose", "Counterparty-Metadata", "Transaction-Metadata",
+        "View-Custom", "View-System", "Entitlement", "Role", "Scope", "OwnerViewRequired",
+        "Counterparty", "KYC", "Customer", "Onboarding", "User", "User-Invitation",
+        "Customer-Meeting", "Experimental", "Person", "Card", "Sandbox", "Branch", "ATM",
+        "Product", "Product-Collection", "Open-Data", "Consumer", "Data-Warehouse", "FX",
+        "Customer-Message", "Metric", "Documentation", "Berlin-Group", "Signing Baskets",
+        "UKOpenBanking", "MXOpenFinance", "Aggregate-Metrics", "System-Integrity", "Webhook",
+        "Mocked-Data", "Consent", "Method-Routing", "WebUi-Props", "Endpoint-Mapping",
+        "Rate-Limits", "Counterparty-Limits", "Api-Collection", "Dynamic-Resource-Doc",
+        "Dynamic-Message-Doc", "DAuth", "Dynamic", "Dynamic-Entity", "Dynamic-Entity-Manage",
+        "Dynamic-Endpoint", "Dynamic-Endpoint-Manage", "JSON-Schema-Validation",
+        "Authentication-Type-Validation", "Connector-Method", "Berlin-Group-M", "PSD2",
+        "Account Information Service (AIS)", "Confirmation of Funds Service (PIIS)",
+        "Payment Initiation Service (PIS)", "Directory", "UK-AccountAccess", "UK-Accounts",
+        "UK-Balances", "UK-Beneficiaries", "UK-DirectDebits", "UK-DomesticPayments",
+        "UK-DomesticScheduledPayments", "UK-DomesticStandingOrders", "UK-FilePayments",
+        "UK-FundsConfirmations", "UK-InternationalPayments", "UK-InternationalScheduledPayments",
+        "UK-InternationalStandingOrders", "UK-Offers", "UK-Partys", "UK-Products",
+        "UK-ScheduledPayments", "UK-StandingOrders", "UK-Statements", "UK-Transactions",
+        "AU-Banking"
+    ]
+
 def process_swagger_data(swagger_data: Dict[str, Any]) -> List[Document]:
-    """Process OBP swagger documentation into documents for vector storage."""
+    """Process OBP swagger documentation into documents matching original format."""
     documents = []
+    all_tags = get_all_obp_tags()
 
     # Process paths (endpoints)
     paths = swagger_data.get("paths", {})
@@ -129,141 +158,35 @@ def process_swagger_data(swagger_data: Dict[str, Any]) -> List[Document]:
             if isinstance(details, dict):
                 # Extract key information
                 summary = details.get("summary", "")
-                description = details.get("description", "")
-                tags = details.get("tags", [])
                 operation_id = details.get("operationId", "")
+                tags = details.get("tags", [])
 
-                # Process parameters
-                parameters = details.get("parameters", [])
-                processed_params = []
-                for param in parameters:
-                    param_data = {
-                        "name": param.get("name", ""),
-                        "type": param.get("type", param.get("schema", {}).get("type", "")),
-                        "description": param.get("description", ""),
-                        "required": param.get("required", False)
-                    }
-                    processed_params.append(param_data)
+                # Create the raw JSON content that matches original format
+                # This is a single path object as it appears in swagger
+                path_content = {path: {method: details}}
 
-                # Process responses
-                responses = details.get("responses", {})
-                processed_responses = {}
-                for status_code, response_detail in responses.items():
-                    processed_responses[status_code] = {
-                        "description": response_detail.get("description", "")
-                    }
+                # Convert to JSON string for storage
+                content = json.dumps(path_content)
 
-                # Create structured JSON data
-                endpoint_data = {
-                    "endpoint": f"{method.upper()} {path}",
-                    "summary": summary,
-                    "description": description,
-                    "operation_id": operation_id,
-                    "tags": tags,
-                    "parameters": processed_params,
-                    "responses": processed_responses
-                }
-
-                # Create search-friendly content for embedding
-                search_content_parts = [
-                    f"Endpoint: {method.upper()} {path}",
-                    f"Summary: {summary}" if summary else "",
-                    f"Description: {description}" if description else "",
-                    f"Operation ID: {operation_id}" if operation_id else "",
-                    f"Tags: {', '.join(tags)}" if tags else "",
-                ]
-
-                # Add parameter info for search
-                if processed_params:
-                    search_content_parts.append("Parameters:")
-                    for param in processed_params:
-                        search_content_parts.append(f"- {param['name']} ({param['type']}): {param['description']} {'[Required]' if param['required'] else '[Optional]'}")
-
-                # Add response info for search
-                if processed_responses:
-                    search_content_parts.append("Responses:")
-                    for status_code, response_data in processed_responses.items():
-                        search_content_parts.append(f"- {status_code}: {response_data['description']}")
-
-                search_content = "\n".join([part for part in search_content_parts if part])
-
-                # Create metadata
+                # Create metadata that matches original format
                 metadata = {
-                    "source": "obp_endpoints",
-                    "path": path,
+                    "document_id": f"{method.upper()}-{path.replace('/', '-').replace('{', '').replace('}', '')}",
                     "method": method.upper(),
                     "operation_id": operation_id,
-                    "tags": ", ".join(tags) if tags else "",
-                    "type": "api_endpoint"
+                    "path": path,
+                    "tags": ", ".join(tags) if tags else ""
                 }
 
-                # Store JSON string as page_content for compatibility with existing code
+                # Add OBP tag metadata (all false except for matching tags)
+                for tag in all_tags:
+                    metadata[f"OBP_tag_{tag}"] = tag in tags
+
                 documents.append(Document(
-                    page_content=json.dumps(endpoint_data),
+                    page_content=content,
                     metadata=metadata
                 ))
 
-                # Also store search-friendly version for better retrieval
-                search_metadata = metadata.copy()
-                search_metadata["type"] = "api_endpoint_search"
-                documents.append(Document(
-                    page_content=search_content,
-                    metadata=search_metadata
-                ))
-
-    # Process components/schemas if they exist
-    components = swagger_data.get("components", {})
-    schemas = components.get("schemas", {})
-
-    if schemas:
-        print(f"Processing {len(schemas)} schema definitions...")
-
-        for schema_name, schema_details in schemas.items():
-            # Create structured schema data
-            schema_data = {
-                "schema_name": schema_name,
-                "description": schema_details.get("description", ""),
-                "properties": {}
-            }
-
-            if "properties" in schema_details:
-                for prop_name, prop_details in schema_details["properties"].items():
-                    schema_data["properties"][prop_name] = {
-                        "type": prop_details.get("type", ""),
-                        "description": prop_details.get("description", "")
-                    }
-
-            # Create search-friendly content
-            search_content = f"Schema: {schema_name}\n"
-            if schema_data["description"]:
-                search_content += f"Description: {schema_data['description']}\n"
-
-            if schema_data["properties"]:
-                search_content += "Properties:\n"
-                for prop_name, prop_data in schema_data["properties"].items():
-                    search_content += f"- {prop_name} ({prop_data['type']}): {prop_data['description']}\n"
-
-            metadata = {
-                "source": "obp_endpoints",
-                "schema_name": schema_name,
-                "type": "schema_definition"
-            }
-
-            # Store JSON string as page_content
-            documents.append(Document(
-                page_content=json.dumps(schema_data),
-                metadata=metadata
-            ))
-
-            # Also store search-friendly version
-            search_metadata = metadata.copy()
-            search_metadata["type"] = "schema_definition_search"
-            documents.append(Document(
-                page_content=search_content,
-                metadata=search_metadata
-            ))
-
-    print(f"Created {len(documents)} endpoint/schema documents")
+    print(f"Created {len(documents)} endpoint documents")
     return documents
 
 def setup_vector_store(collection_name: str, chroma_dir: str) -> Chroma:

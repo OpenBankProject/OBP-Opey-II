@@ -38,9 +38,7 @@ async def retrieve_endpoints(state):
     else:
         question = state["question"]
     # Retrieval
-    all_documents = await endpoint_retriever.ainvoke(question)
-    # Filter for only JSON documents (not search documents)
-    documents = [doc for doc in all_documents if doc.metadata.get("type") == "api_endpoint"]
+    documents = await endpoint_retriever.ainvoke(question)
     return {"documents": documents, "total_retries": total_retries}
 
 
