@@ -53,6 +53,11 @@ print("Chat example:")
 response = client.invoke("Tell me a brief joke?")
 response.pretty_print()
 
+print("Tell me who am i :")
+response = client.invoke("Can you tell me who is the current OBP User? Plz call the according obp endpoint. Only return the id for privacy reasons.")
+response.pretty_print()
+
+
 print("\nStream example:")
 for message in client.stream("Share a quick fun fact?"):
     if isinstance(message, str):

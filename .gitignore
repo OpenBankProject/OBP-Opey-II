@@ -2,11 +2,11 @@
 .vscode/
 __pycache__/
 src/data/
+src/data*
 checkpoints.db
 checkpoints.db-shm
 checkpoints.db-wal
 # Byte-compiled / optimized / DLL files
-__pycache__/
 *.py[cod]
 *$py.class
 

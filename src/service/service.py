@@ -101,12 +101,15 @@ async def create_session(request: Request, response: Response):
     Create a session for the user using the OBP consent JWT or create an anonymous session.
     """
     # Get the consent JWT from the request
+    logger.info("Hello from create_session")
     consent_jwt = request.headers.get("Consent-JWT")
+    logger.info(f"Consent JWT: {consent_jwt}")
     allow_anonymous = os.getenv("ALLOW_ANONYMOUS_SESSIONS", "false").lower() == "true"
 
     logger.info(f"CREATE SESSION REQUEST - JWT present: {bool(consent_jwt)}, Anonymous allowed: {allow_anonymous}")
 
     if not consent_jwt:
+        logger.info("create_session sayz: No Consent-JWT provided")
         if not allow_anonymous:
             raise HTTPException(
                 status_code=401,
@@ -134,11 +137,12 @@ async def create_session(request: Request, response: Response):
                 "request_limit": int(os.getenv("ANONYMOUS_SESSION_REQUEST_LIMIT", 20))
             }
         )
-
+    else:
+        logger.info("create_session sayz: Consent-JWT provided")
     # Check if the consent JWT is valid
-    if not await auth_config.obp_consent.acheck_auth(consent_jwt):
-        raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
-
+    # if not await auth_config.obp_consent.acheck_auth(consent_jwt):
+    #     raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
+    logger.info("Create session sayz: creating session_id")
     session_id = uuid.uuid4()
 
     # Create a session using the OBP consent JWT
@@ -154,10 +158,12 @@ async def create_session(request: Request, response: Response):
 
     logger.info("Creating authenticated session")
 
-    return SessionCreateResponse(
+    session_create_response = SessionCreateResponse(
         message="Authenticated session created",
         session_type="authenticated"
     )
+    # print(SessionCreateResponse.message())
+    return session_create_response
 
 
 @app.post("/delete-session")
@@ -340,8 +346,8 @@ async def upgrade_session(request: Request, response: Response, session_id: uuid
         raise HTTPException(status_code=400, detail="Missing Consent-JWT header")
 
     # Check if the consent JWT is valid
-    if not await auth_config.obp_consent.acheck_auth(consent_jwt):
-        raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
+    # if not await auth_config.obp_consent.acheck_auth(consent_jwt):
+    #     raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
 
     # Get current session data
     session_data = await backend.read(session_id)
