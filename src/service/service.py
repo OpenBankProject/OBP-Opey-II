@@ -76,16 +76,58 @@ app.add_middleware(SessionUpdateMiddleware)
 
 
 # Setup CORS policy
-if cors_allowed_origins := os.getenv("CORS_ALLOWED_ORIGINS"):
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_allowed_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    raise ValueError("CORS_ALLOWED_ORIGINS environment variable must be set")
+cors_allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+cors_allowed_origins = [origin.strip() for origin in cors_allowed_origins if origin.strip()]
+
+# Development fallback
+if not cors_allowed_origins:
+    logger.warning("CORS_ALLOWED_ORIGINS not set, using development defaults")
+    cors_allowed_origins = ["http://localhost:5174", "http://localhost:3000", "http://127.0.0.1:5174", "http://127.0.0.1:3000"]
+
+# Configure specific headers and methods for security
+cors_allowed_methods = os.getenv("CORS_ALLOWED_METHODS", "GET,POST,PUT,DELETE,OPTIONS").split(",")
+cors_allowed_methods = [method.strip() for method in cors_allowed_methods if method.strip()]
+
+cors_allowed_headers = os.getenv("CORS_ALLOWED_HEADERS", "Content-Type,Authorization,Consent-JWT").split(",")
+cors_allowed_headers = [header.strip() for header in cors_allowed_headers if header.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_allowed_origins,
+    allow_credentials=True,
+    allow_methods=cors_allowed_methods,
+    allow_headers=cors_allowed_headers,
+)
+
+logger.info(f"CORS configured with origins: {cors_allowed_origins}")
+
+# Add CORS debugging middleware for development
+class CORSDebugMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Log CORS-related headers for debugging
+        origin = request.headers.get("origin")
+        if origin:
+            logger.debug(f"CORS request from origin: {origin}")
+            if origin not in cors_allowed_origins:
+                logger.warning(f"Request from non-allowed origin: {origin}")
+        
+        response = await call_next(request)
+        
+        # Log response CORS headers
+        if origin:
+            cors_headers = {
+                k: v for k, v in response.headers.items() 
+                if k.lower().startswith('access-control-')
+            }
+            if cors_headers:
+                logger.debug(f"CORS response headers: {cors_headers}")
+        
+        return response
+
+# Add debug middleware in development
+if os.getenv("DEBUG_CORS", "false").lower() == "true":
+    app.add_middleware(CORSDebugMiddleware)
+    logger.info("CORS debug middleware enabled")
 
 # Define Allowed Authentication methods,
 # Currently only OBP consent is allowed
@@ -199,7 +241,7 @@ async def invoke(user_input: UserInput, request: Request, opey_session: Annotate
     opey_session.update_request_count()
 
     agent: CompiledStateGraph = opey_session.graph
-    kwargs, run_id = _parse_input(user_input)
+    kwargs, run_id = _parse_input(user_input, str(opey_session.session_id))
     try:
         response = await agent.ainvoke(**kwargs)
         output = ChatMessage.from_langchain(response["messages"][-1])
@@ -226,7 +268,9 @@ async def opey_message_generator(user_input: StreamInput, opey_session: OpeySess
     logger.debug(f"Received stream request: {user_input}")
 
     # Parse input to get config
-    thread_id = user_input.thread_id or str(uuid.uuid4())
+    # Use session_id as default thread_id to maintain conversation continuity
+    thread_id = user_input.thread_id or str(opey_session.session_id)
+    logger.info(f"Thread ID: {thread_id} (from input: {user_input.thread_id}, session: {opey_session.session_id})")
     config = {
         "configurable": {"thread_id": thread_id}
     }
