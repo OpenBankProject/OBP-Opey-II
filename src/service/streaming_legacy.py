@@ -13,9 +13,9 @@ import json
 from langchain_core.runnables import RunnableConfig
 from langchain_core.runnables.schema import StreamEvent
 
-def _parse_input(user_input: UserInput) -> tuple[dict[str, Any], uuid.UUID]:
+def _parse_input(user_input: UserInput, session_id: str = None) -> tuple[dict[str, Any], uuid.UUID]:
     run_id = uuid.uuid4()
-    thread_id = user_input.thread_id or str(uuid.uuid4())
+    thread_id = user_input.thread_id or session_id or str(uuid.uuid4())
     # If this is a tool call approval, we don't need to send any input to the agent.
     if user_input.is_tool_call_approval:
         _input = None
