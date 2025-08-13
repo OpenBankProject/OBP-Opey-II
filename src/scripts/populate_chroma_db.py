@@ -5,6 +5,7 @@ Script to populate ChromaDB with OBP glossary and endpoint documentation.
 
 import os
 import sys
+import json
 import requests
 from typing import List, Dict, Any
 from dotenv import load_dotenv
@@ -118,11 +119,6 @@ def process_glossary_data(glossary_data: Dict[str, Any]) -> List[Document]:
 def process_swagger_data(swagger_data: Dict[str, Any]) -> List[Document]:
     """Process OBP swagger documentation into documents for vector storage."""
     documents = []
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        separators=["\n\n", "\n", " ", ""]
-    )
 
     # Process paths (endpoints)
     paths = swagger_data.get("paths", {})
@@ -139,35 +135,57 @@ def process_swagger_data(swagger_data: Dict[str, Any]) -> List[Document]:
 
                 # Process parameters
                 parameters = details.get("parameters", [])
-                param_info = []
+                processed_params = []
                 for param in parameters:
-                    param_name = param.get("name", "")
-                    param_type = param.get("type", param.get("schema", {}).get("type", ""))
-                    param_desc = param.get("description", "")
-                    param_required = param.get("required", False)
-                    param_info.append(f"- {param_name} ({param_type}): {param_desc} {'[Required]' if param_required else '[Optional]'}")
+                    param_data = {
+                        "name": param.get("name", ""),
+                        "type": param.get("type", param.get("schema", {}).get("type", "")),
+                        "description": param.get("description", ""),
+                        "required": param.get("required", False)
+                    }
+                    processed_params.append(param_data)
 
                 # Process responses
                 responses = details.get("responses", {})
-                response_info = []
+                processed_responses = {}
                 for status_code, response_detail in responses.items():
-                    resp_desc = response_detail.get("description", "")
-                    response_info.append(f"- {status_code}: {resp_desc}")
+                    processed_responses[status_code] = {
+                        "description": response_detail.get("description", "")
+                    }
 
-                # Create comprehensive content
-                content_parts = [
+                # Create structured JSON data
+                endpoint_data = {
+                    "endpoint": f"{method.upper()} {path}",
+                    "summary": summary,
+                    "description": description,
+                    "operation_id": operation_id,
+                    "tags": tags,
+                    "parameters": processed_params,
+                    "responses": processed_responses
+                }
+
+                # Create search-friendly content for embedding
+                search_content_parts = [
                     f"Endpoint: {method.upper()} {path}",
                     f"Summary: {summary}" if summary else "",
                     f"Description: {description}" if description else "",
                     f"Operation ID: {operation_id}" if operation_id else "",
                     f"Tags: {', '.join(tags)}" if tags else "",
-                    "Parameters:" if param_info else "",
-                    "\n".join(param_info) if param_info else "",
-                    "Responses:" if response_info else "",
-                    "\n".join(response_info) if response_info else ""
                 ]
 
-                content = "\n".join([part for part in content_parts if part])
+                # Add parameter info for search
+                if processed_params:
+                    search_content_parts.append("Parameters:")
+                    for param in processed_params:
+                        search_content_parts.append(f"- {param['name']} ({param['type']}): {param['description']} {'[Required]' if param['required'] else '[Optional]'}")
+
+                # Add response info for search
+                if processed_responses:
+                    search_content_parts.append("Responses:")
+                    for status_code, response_data in processed_responses.items():
+                        search_content_parts.append(f"- {status_code}: {response_data['description']}")
+
+                search_content = "\n".join([part for part in search_content_parts if part])
 
                 # Create metadata
                 metadata = {
@@ -175,20 +193,23 @@ def process_swagger_data(swagger_data: Dict[str, Any]) -> List[Document]:
                     "path": path,
                     "method": method.upper(),
                     "operation_id": operation_id,
-                    "tags": ", ".join(tags) if tags else "",  # Convert list to comma-separated string
+                    "tags": ", ".join(tags) if tags else "",
                     "type": "api_endpoint"
                 }
 
-                # Split large content into chunks
-                chunks = text_splitter.split_text(content)
-                for i, chunk in enumerate(chunks):
-                    chunk_metadata = metadata.copy()
-                    chunk_metadata["chunk_id"] = i
+                # Store JSON string as page_content for compatibility with existing code
+                documents.append(Document(
+                    page_content=json.dumps(endpoint_data),
+                    metadata=metadata
+                ))
 
-                    documents.append(Document(
-                        page_content=chunk,
-                        metadata=chunk_metadata
-                    ))
+                # Also store search-friendly version for better retrieval
+                search_metadata = metadata.copy()
+                search_metadata["type"] = "api_endpoint_search"
+                documents.append(Document(
+                    page_content=search_content,
+                    metadata=search_metadata
+                ))
 
     # Process components/schemas if they exist
     components = swagger_data.get("components", {})
@@ -198,17 +219,29 @@ def process_swagger_data(swagger_data: Dict[str, Any]) -> List[Document]:
         print(f"Processing {len(schemas)} schema definitions...")
 
         for schema_name, schema_details in schemas.items():
-            content = f"Schema: {schema_name}\n"
-
-            if "description" in schema_details:
-                content += f"Description: {schema_details['description']}\n"
+            # Create structured schema data
+            schema_data = {
+                "schema_name": schema_name,
+                "description": schema_details.get("description", ""),
+                "properties": {}
+            }
 
             if "properties" in schema_details:
-                content += "Properties:\n"
                 for prop_name, prop_details in schema_details["properties"].items():
-                    prop_type = prop_details.get("type", "")
-                    prop_desc = prop_details.get("description", "")
-                    content += f"- {prop_name} ({prop_type}): {prop_desc}\n"
+                    schema_data["properties"][prop_name] = {
+                        "type": prop_details.get("type", ""),
+                        "description": prop_details.get("description", "")
+                    }
+
+            # Create search-friendly content
+            search_content = f"Schema: {schema_name}\n"
+            if schema_data["description"]:
+                search_content += f"Description: {schema_data['description']}\n"
+
+            if schema_data["properties"]:
+                search_content += "Properties:\n"
+                for prop_name, prop_data in schema_data["properties"].items():
+                    search_content += f"- {prop_name} ({prop_data['type']}): {prop_data['description']}\n"
 
             metadata = {
                 "source": "obp_endpoints",
@@ -216,16 +249,19 @@ def process_swagger_data(swagger_data: Dict[str, Any]) -> List[Document]:
                 "type": "schema_definition"
             }
 
-            # Split schema content if it's large
-            chunks = text_splitter.split_text(content)
-            for i, chunk in enumerate(chunks):
-                chunk_metadata = metadata.copy()
-                chunk_metadata["chunk_id"] = i
+            # Store JSON string as page_content
+            documents.append(Document(
+                page_content=json.dumps(schema_data),
+                metadata=metadata
+            ))
 
-                documents.append(Document(
-                    page_content=chunk,
-                    metadata=chunk_metadata
-                ))
+            # Also store search-friendly version
+            search_metadata = metadata.copy()
+            search_metadata["type"] = "schema_definition_search"
+            documents.append(Document(
+                page_content=search_content,
+                metadata=search_metadata
+            ))
 
     print(f"Created {len(documents)} endpoint/schema documents")
     return documents

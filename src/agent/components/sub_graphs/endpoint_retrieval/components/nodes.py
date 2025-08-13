@@ -31,14 +31,16 @@ async def retrieve_endpoints(state):
     print("---RETRIEVE ENDPOINTS---")
     rewritten_question = state.get("rewritten_question", "")
     total_retries = state.get("total_retries", 0)
-    
+
     if rewritten_question:
         question = state["rewritten_question"]
         total_retries += 1
     else:
         question = state["question"]
     # Retrieval
-    documents = await endpoint_retriever.ainvoke(question)
+    all_documents = await endpoint_retriever.ainvoke(question)
+    # Filter for only JSON documents (not search documents)
+    documents = [doc for doc in all_documents if doc.metadata.get("type") == "api_endpoint"]
     return {"documents": documents, "total_retries": total_retries}
 
 
@@ -58,7 +60,7 @@ async def return_documents(state) -> OutputState:
                 "documentation": json.loads(doc.page_content),
             }
         )
-        
+
 
     return {"output_documents": output_docs}
 
@@ -77,7 +79,7 @@ async def grade_documents(state):
     print("---CHECK DOCUMENT RELEVANCE TO QUESTION---")
     question = state["question"]
     documents = state["documents"]
-    
+
     filtered_docs = []
     # web_search = False
     # glossary_search = False
@@ -95,18 +97,18 @@ async def grade_documents(state):
             print(f"{d.metadata["method"]} - {d.metadata["path"]}", " [NOT RELEVANT]")
             #print("---GRADE: DOCUMENT NOT RELEVANT---")
             continue
-        
+
     # If there are less documents than the threshold then retry query after rewriting question
     retry_threshold = int(retriever_retry_threshold)
-    
+
     if len(filtered_docs) < retry_threshold:
         retry_query=True
     else:
         retry_query=False
-        
+
     #print("Documents: \n", "\n".join(f"{doc.metadata["method"]} - {doc.metadata["path"]}" for doc in filtered_docs))
     return {"documents": documents, "relevant_documents": filtered_docs, "question": question, "retry_query": retry_query}
-              
+
 
 async def transform_query(state):
     """
