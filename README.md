@@ -128,3 +128,63 @@ i.e.
 ```
 OBP_BASE_URL="http://192.168.0.112:8080"
 ```
+
+## Logging Configuration
+
+### Username Logging for OBP API Requests
+
+Opey II automatically logs the username from consent JWTs when making requests to the OBP-API. This feature helps with monitoring and debugging by showing which user is making each API request.
+
+The logging includes:
+- Function name that created the log entry
+- Username extracted from the consent JWT token (with explicit field identification)
+- HTTP method (GET, POST, etc.)
+- Full request URL
+
+Example log output:
+```
+INFO - _extract_username_from_jwt says: User identifier extracted from JWT field 'email': john.doe@example.com
+INFO - _async_request says: Making OBP API request - User identifier is: john.doe@example.com, Method: GET, URL: https://test.openbankproject.com/obp/v4.0.0/users/current
+INFO - async_obp_get_requests says: OBP request successful (status: 200)
+```
+
+### Log Levels
+
+- **INFO**: Shows function name, user identifier extraction details, and request details for each OBP API call
+- **WARNING**: Shows available JWT fields when no user identifier can be found
+
+### JWT User Identification Fields
+
+The system attempts to extract user identifiers from these JWT fields in order (prioritizing human-readable identifiers):
+1. `email`
+2. `name`
+3. `preferred_username`
+4. `username`
+5. `user_name` 
+6. `login`
+7. `sub`
+8. `user_id`
+
+The system will log which field was used for user identification:
+```
+INFO - _extract_username_from_jwt says: User identifier extracted from JWT field 'email': john.doe@example.com
+INFO - _extract_username_from_jwt says: User identifier extracted from JWT field 'sub': 91be7e0b-bf6b-4476-8a89-75850a11313b
+```
+
+If none of these fields are found, the user identifier will be logged as 'unknown':
+```
+WARNING - _extract_username_from_jwt says: No user identifier found in JWT fields, using 'unknown'
+```
+
+### Debugging JWT Structure
+
+When no user identifier can be found in the JWT, the system will log all available JWT fields to help with debugging. The system prioritizes human-readable identifiers like email addresses and display names over system identifiers like UUIDs.
+
+### Function Name Prefixes
+
+All log messages now include the function name that generated the log for easier debugging:
+
+- `_extract_username_from_jwt says:` - JWT user identifier extraction logs
+- `_async_request says:` - HTTP request execution logs  
+- `async_obp_get_requests says:` - GET request specific logs
+- `async_obp_requests says:` - General request method logs

@@ -6,7 +6,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
 
 from agent.utils.model_factory import get_llm
-from agent.components.tools import obp_requests, glossary_retrieval_tool, endpoint_retrieval_tool
+from agent.components.tools import glossary_retrieval_tool, endpoint_retrieval_tool
 
 from pydantic import BaseModel, Field
 
@@ -42,7 +42,7 @@ prompt = ChatPromptTemplate.from_messages(
 #prompt = hub.pull("opey_main_agent")
 
 # LLM
-llm = get_llm(size='medium', temperature=0.7).bind_tools([obp_requests, glossary_retrieval_tool, endpoint_retrieval_tool])
+llm = get_llm(size='medium', temperature=0.7).bind_tools([glossary_retrieval_tool, endpoint_retrieval_tool])
 
 # Chain
 opey_agent = prompt | llm 
