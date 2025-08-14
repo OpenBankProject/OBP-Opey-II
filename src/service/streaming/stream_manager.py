@@ -252,12 +252,8 @@ class StreamManager:
                     "thread_id": thread_id,
                     "tool_call_id": tool_call_id
                 })
-                # Continue to the tools node
-                await self.graph.aupdate_state(
-                    config,
-                    values=None,
-                    as_node="human_review",
-                )
+                # Resume from interrupt - no state change needed for approval
+                pass
             else:
                 logger.info("Tool call denied, injecting denial message", extra={
                     "event_type": "tool_denied",
@@ -289,6 +285,7 @@ class StreamManager:
             last_event_time = start_time
 
             event_count = 0
+            # Use astream_events with minimal input to satisfy graph requirements
             async for langgraph_event in self.graph.astream_events(
                 input={"messages": []},
                 config=config,
@@ -307,7 +304,6 @@ class StreamManager:
                     "langgraph_event_type": langgraph_event.get("event"),
                     "langgraph_node": langgraph_event.get("metadata", {}).get("langgraph_node"),
                     "event_name": langgraph_event.get("name"),
-                    "event_data_keys": list(langgraph_event.get("data", {}).keys()) if langgraph_event.get("data") else [],
                     "time_since_start": round(time_since_start, 2),
                     "time_since_last_event": round(time_since_last, 2)
                 })
@@ -325,15 +321,23 @@ class StreamManager:
                     stream_events_generated = 0
                     async for stream_event in orchestrator.process_event(langgraph_event):
                         stream_events_generated += 1
-                        logger.info("Generated stream event during approval continuation", extra={
+                        
+                        # Critical logging for obp_requests tool execution
+                        tool_name = getattr(stream_event, 'tool_name', None)
+                        if tool_name == 'obp_requests':
+                            logger.error(f"🎯 OBP_REQUESTS_TOOL: {stream_event.type} | TOOL_ID: {getattr(stream_event, 'tool_call_id', 'N/A')}")
+                            if stream_event.type == 'tool_start':
+                                logger.error(f"🚀 OBP_TOOL_STARTING: Input = {getattr(stream_event, 'tool_input', {})}")
+                            elif stream_event.type == 'tool_complete':
+                                logger.error(f"✅ OBP_TOOL_COMPLETE: Output = {getattr(stream_event, 'tool_output', 'NO_OUTPUT')} | Status = {getattr(stream_event, 'status', 'NO_STATUS')}")
+                        
+                        logger.debug("Generated stream event during approval continuation", extra={
                             "event_type": "post_approval_stream_event",
                             "thread_id": thread_id,
                             "stream_event_type": stream_event.type,
+                            "tool_name": tool_name,
                             "langgraph_event_count": event_count,
-                            "stream_events_generated": stream_events_generated,
-                            "tool_name": getattr(stream_event, 'tool_name', None),
-                            "tool_call_id": getattr(stream_event, 'tool_call_id', None),
-                            "message_id": getattr(stream_event, 'message_id', None)
+                            "stream_events_generated": stream_events_generated
                         })
                         yield stream_event
                 except Exception as e:
