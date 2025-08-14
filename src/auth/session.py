@@ -20,6 +20,9 @@ secure_cookies = os.getenv("SECURE_COOKIES", "true").lower() == "true"
 
 cookie_params = CookieParameters(
     secure=secure_cookies,
+    samesite="lax",
+    domain=None,  # Allow cookies on any domain including localhost
+    path="/",
 )
 
 # Get secret key from environment variable

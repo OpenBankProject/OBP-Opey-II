@@ -7,7 +7,9 @@ import httpx
 
 from schema import ChatMessage, Feedback, StreamInput, UserInput, ToolCallApproval
 from typing import Union
+from dotenv import load_dotenv
 
+load_dotenv()
 
 class AgentClient:
     """Client for interacting with the agent service."""
@@ -21,16 +23,22 @@ class AgentClient:
         """
         self.base_url = base_url
         self.auth_secret = os.getenv("AUTH_SECRET")
+        self.consent_jwt = os.getenv("CONSENT_JWT")
         self.timeout = timeout
+        # Create clients for session management
         self._client = httpx.Client(timeout=timeout)
         self._async_client = httpx.AsyncClient(timeout=timeout)
         self._session_created = False
+        self.session_id = None  # Store session ID
+        self.session_cookie = None  # Store session cookie for manual inclusion
 
     @property
     def _headers(self) -> dict[str, str]:
         headers = {}
         if self.auth_secret:
             headers["Authorization"] = f"Bearer {self.auth_secret}"
+        if self.consent_jwt:
+            headers["Consent-JWT"] = self.consent_jwt
         return headers
 
     def _ensure_session(self) -> None:
@@ -42,6 +50,20 @@ class AgentClient:
             print(f"Session cookies received: {response.cookies}")
             if response.status_code == 200:
                 self._session_created = True
+                # Store session cookie value for manual header inclusion
+                for name, value in response.cookies.items():
+                    if name == "session":
+                        self.session_cookie = f"{name}={value}"
+                        print(f"Stored session cookie: {self.session_cookie}")
+                # Try to extract session_id from response data if available
+                try:
+                    data = response.json()
+                    self.session_id = data.get("session_id")
+                    if self.session_id:
+                        print(f"Session ID extracted: {self.session_id}")
+                except:
+                    # If no JSON response or no session_id field, that's okay
+                    print("No session_id in response data, using cookie-based session")
                 print("Session created successfully")
             else:
                 raise Exception(f"Failed to create session: {response.status_code} - {response.text}")
@@ -55,6 +77,20 @@ class AgentClient:
             print(f"Async session cookies received: {response.cookies}")
             if response.status_code == 200:
                 self._session_created = True
+                # Store session cookie value for manual header inclusion
+                for name, value in response.cookies.items():
+                    if name == "session":
+                        self.session_cookie = f"{name}={value}"
+                        print(f"Stored session cookie: {self.session_cookie}")
+                # Try to extract session_id from response data if available
+                try:
+                    data = response.json()
+                    self.session_id = data.get("session_id")
+                    if self.session_id:
+                        print(f"Session ID extracted: {self.session_id}")
+                except:
+                    # If no JSON response or no session_id field, that's okay
+                    print("No session_id in response data, using cookie-based session")
                 print("Async session created successfully")
             else:
                 raise Exception(f"Failed to create session: {response.status_code} - {response.text}")
@@ -66,8 +102,11 @@ class AgentClient:
         except:
             pass
         try:
-            # Note: This won't work for async client, but we'll handle it in context managers
-            pass
+            # Async client cleanup in __del__ is problematic since we can't await
+            # httpx will handle cleanup automatically when the object is garbage collected
+            # Just set the reference to None to help with cleanup
+            if hasattr(self, '_async_client'):
+                self._async_client = None
         except:
             pass
 
@@ -89,11 +128,23 @@ class AgentClient:
         request = UserInput(message=message)
         if thread_id:
             request.thread_id = thread_id
+
+        # Prepare headers with session cookie
+        headers = self._headers.copy()
+        if self.session_cookie:
+            headers["Cookie"] = self.session_cookie
+            print(f"Adding session cookie to headers: {self.session_cookie}")
+
+        print(f"Request headers with cookie: {headers}")
         response = await self._async_client.post(
             f"{self.base_url}/invoke",
             json=request.model_dump(),
-            headers=self._headers,
+            headers=headers,
         )
+        print(f"Request sent to: {response.request.url}")
+        print(f"Request headers sent: {dict(response.request.headers)}")
+        print(f"Response headers: {dict(response.headers)}")
+        print(f"Invoke response status: {response.status_code}")
         if response.status_code == 200:
             return ChatMessage.model_validate(response.json())
         raise Exception(f"Error: {response.status_code} - {response.text}")
@@ -116,10 +167,16 @@ class AgentClient:
         request = UserInput(message=message)
         if thread_id:
             request.thread_id = thread_id
+
+        # Prepare headers with session cookie
+        headers = self._headers.copy()
+        if self.session_cookie:
+            headers["Cookie"] = self.session_cookie
+
         response = self._client.post(
             f"{self.base_url}/invoke",
             json=request.model_dump(),
-            headers=self._headers,
+            headers=headers,
         )
         if response.status_code == 200:
             return ChatMessage.model_validate(response.json())
@@ -232,11 +289,17 @@ class AgentClient:
         request = StreamInput(message=message, stream_tokens=stream_tokens)
         if thread_id:
             request.thread_id = thread_id
+
+        # Prepare headers with session cookie
+        headers = self._headers.copy()
+        if self.session_cookie:
+            headers["Cookie"] = self.session_cookie
+
         with self._client.stream(
             "POST",
             f"{self.base_url}/stream",
             json=request.model_dump(),
-            headers=self._headers,
+            headers=headers,
         ) as response:
             if response.status_code != 200:
                 raise Exception(f"Error: {response.status_code} - {response.text}")
@@ -279,11 +342,17 @@ class AgentClient:
         request = StreamInput(message=message, stream_tokens=stream_tokens)
         if thread_id:
             request.thread_id = thread_id
+
+        # Prepare headers with session cookie
+        headers = self._headers.copy()
+        if self.session_cookie:
+            headers["Cookie"] = self.session_cookie
+
         async with self._async_client.stream(
             "POST",
             f"{self.base_url}/stream",
             json=request.model_dump(),
-            headers=self._headers,
+            headers=headers,
         ) as response:
                 if response.status_code != 200:
                     content = await response.aread()
@@ -301,11 +370,17 @@ class AgentClient:
     async def approve_request_and_stream(self, thread_id: str, user_input: ToolCallApproval):
         await self._aensure_session()
         print(f"request: {user_input}")
+
+        # Prepare headers with session cookie
+        headers = self._headers.copy()
+        if self.session_cookie:
+            headers["Cookie"] = self.session_cookie
+
         async with self._async_client.stream(
             "POST",
             f"{self.base_url}/approval/{thread_id}",
             json=user_input.model_dump(),
-            headers=self._headers,
+            headers=headers,
         ) as response:
                 if response.status_code != 200:
                     content = await response.aread()
@@ -332,10 +407,16 @@ class AgentClient:
         """
         await self._aensure_session()
         request = Feedback(run_id=run_id, key=key, score=score, kwargs=kwargs)
+
+        # Prepare headers with session cookie
+        headers = self._headers.copy()
+        if self.session_cookie:
+            headers["Cookie"] = self.session_cookie
+
         response = await self._async_client.post(
             f"{self.base_url}/feedback",
             json=request.model_dump(),
-            headers=self._headers,
+            headers=headers,
         )
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} - {response.text}")
