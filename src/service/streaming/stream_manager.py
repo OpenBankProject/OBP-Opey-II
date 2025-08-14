@@ -278,15 +278,63 @@ class StreamManager:
             # Continue streaming the response
             orchestrator = StreamEventOrchestrator(stream_input)
 
+            logger.info("Starting astream_events loop for approval continuation", extra={
+                "event_type": "approval_continuation_astream_start",
+                "thread_id": thread_id,
+                "tool_call_id": tool_call_id
+            })
+
+            import time
+            start_time = time.time()
+            last_event_time = start_time
+
             event_count = 0
             async for langgraph_event in self.graph.astream_events(
-                input=None,
+                input={"messages": []},
                 config=config,
                 version="v2"
             ):
                 event_count += 1
+                current_time = time.time()
+                time_since_start = current_time - start_time
+                time_since_last = current_time - last_event_time
+                last_event_time = current_time
+
+                logger.info("Processing post-approval LangGraph event", extra={
+                    "event_type": "post_approval_langgraph_event",
+                    "thread_id": thread_id,
+                    "event_count": event_count,
+                    "langgraph_event_type": langgraph_event.get("event"),
+                    "langgraph_node": langgraph_event.get("metadata", {}).get("langgraph_node"),
+                    "event_name": langgraph_event.get("name"),
+                    "event_data_keys": list(langgraph_event.get("data", {}).keys()) if langgraph_event.get("data") else [],
+                    "time_since_start": round(time_since_start, 2),
+                    "time_since_last_event": round(time_since_last, 2)
+                })
+
+                # Log warning if tool execution is taking too long
+                if time_since_start > 30 and event_count > 20:
+                    logger.warning("Long-running tool execution detected", extra={
+                        "event_type": "long_running_tool_warning",
+                        "thread_id": thread_id,
+                        "tool_call_id": tool_call_id,
+                        "time_running": round(time_since_start, 2),
+                        "events_processed": event_count
+                    })
                 try:
+                    stream_events_generated = 0
                     async for stream_event in orchestrator.process_event(langgraph_event):
+                        stream_events_generated += 1
+                        logger.info("Generated stream event during approval continuation", extra={
+                            "event_type": "post_approval_stream_event",
+                            "thread_id": thread_id,
+                            "stream_event_type": stream_event.type,
+                            "langgraph_event_count": event_count,
+                            "stream_events_generated": stream_events_generated,
+                            "tool_name": getattr(stream_event, 'tool_name', None),
+                            "tool_call_id": getattr(stream_event, 'tool_call_id', None),
+                            "message_id": getattr(stream_event, 'message_id', None)
+                        })
                         yield stream_event
                 except Exception as e:
                     error_msg = f"Error processing post-approval event: {str(e)}"
@@ -307,12 +355,19 @@ class StreamManager:
                         }
                     )
 
+            logger.info("Approval continuation astream_events loop ended", extra={
+                "event_type": "approval_continuation_astream_end",
+                "thread_id": thread_id,
+                "tool_call_id": tool_call_id,
+                "total_langgraph_events_processed": event_count
+            })
+
             logger.info("Approval continuation completed", extra={
                 "event_type": "approval_continuation_completed",
                 "thread_id": thread_id,
                 "tool_call_id": tool_call_id,
                 "approved": approved,
-                "event_count": event_count
+                "total_langgraph_events_processed": event_count
             })
 
         except Exception as e:
