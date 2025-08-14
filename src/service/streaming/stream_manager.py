@@ -284,12 +284,20 @@ class StreamManager:
             start_time = time.time()
             last_event_time = start_time
 
+            # Debug: Check current graph state before continuation
+            try:
+                current_state = await self.graph.aget_state(config)
+                logger.error(f"🔍 GRAPH_STATE_DEBUG: next={current_state.next}, values={current_state.values}")
+                logger.error(f"🔍 GRAPH_STATE_TASKS: {len(current_state.tasks)} tasks pending")
+            except Exception as e:
+                logger.error(f"🔍 GRAPH_STATE_ERROR: {str(e)}")
+
             event_count = 0
-            # Use astream_events with minimal input to satisfy graph requirements
-            async for langgraph_event in self.graph.astream_events(
-                input={"messages": []},
-                config=config,
-                version="v2"
+            # Use astream to continue the interrupted graph execution from checkpoint
+            # For interrupted graphs, we need to provide empty input to continue
+            async for graph_chunk in self.graph.astream(
+                input={},
+                config=config
             ):
                 event_count += 1
                 current_time = time.time()
@@ -297,13 +305,11 @@ class StreamManager:
                 time_since_last = current_time - last_event_time
                 last_event_time = current_time
 
-                logger.info("Processing post-approval LangGraph event", extra={
-                    "event_type": "post_approval_langgraph_event",
+                logger.info("Processing post-approval graph chunk", extra={
+                    "event_type": "post_approval_graph_chunk",
                     "thread_id": thread_id,
                     "event_count": event_count,
-                    "langgraph_event_type": langgraph_event.get("event"),
-                    "langgraph_node": langgraph_event.get("metadata", {}).get("langgraph_node"),
-                    "event_name": langgraph_event.get("name"),
+                    "graph_nodes": list(graph_chunk.keys()) if graph_chunk else [],
                     "time_since_start": round(time_since_start, 2),
                     "time_since_last_event": round(time_since_last, 2)
                 })
@@ -317,37 +323,67 @@ class StreamManager:
                         "time_running": round(time_since_start, 2),
                         "events_processed": event_count
                     })
+
                 try:
-                    stream_events_generated = 0
-                    async for stream_event in orchestrator.process_event(langgraph_event):
-                        stream_events_generated += 1
-                        
-                        # Critical logging for obp_requests tool execution
-                        tool_name = getattr(stream_event, 'tool_name', None)
-                        if tool_name == 'obp_requests':
-                            logger.error(f"🎯 OBP_REQUESTS_TOOL: {stream_event.type} | TOOL_ID: {getattr(stream_event, 'tool_call_id', 'N/A')}")
-                            if stream_event.type == 'tool_start':
-                                logger.error(f"🚀 OBP_TOOL_STARTING: Input = {getattr(stream_event, 'tool_input', {})}")
-                            elif stream_event.type == 'tool_complete':
-                                logger.error(f"✅ OBP_TOOL_COMPLETE: Output = {getattr(stream_event, 'tool_output', 'NO_OUTPUT')} | Status = {getattr(stream_event, 'status', 'NO_STATUS')}")
-                        
-                        logger.debug("Generated stream event during approval continuation", extra={
-                            "event_type": "post_approval_stream_event",
-                            "thread_id": thread_id,
-                            "stream_event_type": stream_event.type,
-                            "tool_name": tool_name,
-                            "langgraph_event_count": event_count,
-                            "stream_events_generated": stream_events_generated
+                    # Process graph chunk and extract meaningful events
+                    for node_name, node_output in graph_chunk.items():
+                        logger.info(f"Processing node: {node_name}", extra={
+                            "event_type": "node_processing",
+                            "node_name": node_name,
+                            "thread_id": thread_id
                         })
-                        yield stream_event
+                        
+                        # Handle tools node - this is where obp_requests executes
+                        if node_name == "tools":
+                            logger.error(f"🎯 TOOLS_NODE_EXECUTED: Processing tool results")
+                            messages = node_output.get("messages", [])
+                            for message in messages:
+                                if hasattr(message, 'tool_call_id') and hasattr(message, 'content'):
+                                    # Tool execution completed - create tool_end event
+                                    logger.error(f"🚀 TOOL_RESULT: {message.tool_call_id} -> {message.content}")
+                                    tool_end_event = StreamEventFactory.tool_end(
+                                        tool_name="obp_requests",
+                                        tool_call_id=message.tool_call_id,
+                                        tool_output=message.content,
+                                        status="success" if not message.content.startswith("Error") else "error"
+                                    )
+                                    yield tool_end_event
+                        
+                        # Handle assistant responses
+                        elif node_name == "opey":
+                            messages = node_output.get("messages", [])
+                            for message in messages:
+                                if hasattr(message, 'content') and message.content:
+                                    # Assistant response - stream as tokens and complete
+                                    message_id = getattr(message, 'id', f'msg_{event_count}')
+                                    
+                                    # Start assistant response
+                                    yield StreamEventFactory.assistant_start(message_id=message_id)
+                                    
+                                    # Stream content as tokens (simulate streaming)
+                                    content = message.content
+                                    for i, char in enumerate(content):
+                                        if i % 10 == 0 or i == len(content) - 1:  # Send every 10 chars or last char
+                                            token_content = content[max(0, i-9):i+1]
+                                            yield StreamEventFactory.assistant_token(
+                                                content=token_content,
+                                                message_id=message_id
+                                            )
+                                    
+                                    # Complete assistant response
+                                    yield StreamEventFactory.assistant_complete(
+                                        content=content,
+                                        message_id=message_id
+                                    )
+                        
                 except Exception as e:
-                    error_msg = f"Error processing post-approval event: {str(e)}"
+                    error_msg = f"Error processing post-approval graph chunk: {str(e)}"
                     logger.error(error_msg, exc_info=True, extra={
-                        "event_type": "post_approval_event_error",
+                        "event_type": "post_approval_chunk_error",
                         "thread_id": thread_id,
                         "tool_call_id": tool_call_id,
                         "event_count": event_count,
-                        "langgraph_event_type": langgraph_event.get("event")
+                        "graph_chunk": str(graph_chunk) if 'graph_chunk' in locals() else "N/A"
                     })
                     yield StreamEventFactory.error(
                         error_message=error_msg,
@@ -359,11 +395,11 @@ class StreamManager:
                         }
                     )
 
-            logger.info("Approval continuation astream_events loop ended", extra={
+            logger.info("Approval continuation astream loop ended", extra={
                 "event_type": "approval_continuation_astream_end",
                 "thread_id": thread_id,
                 "tool_call_id": tool_call_id,
-                "total_langgraph_events_processed": event_count
+                "total_graph_chunks_processed": event_count
             })
 
             logger.info("Approval continuation completed", extra={
@@ -371,7 +407,7 @@ class StreamManager:
                 "thread_id": thread_id,
                 "tool_call_id": tool_call_id,
                 "approved": approved,
-                "total_langgraph_events_processed": event_count
+                "total_graph_chunks_processed": event_count
             })
 
         except Exception as e:
