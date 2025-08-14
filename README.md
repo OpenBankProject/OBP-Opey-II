@@ -20,11 +20,15 @@ After installing poetry, install the poetry shell plugin with `poetry self add p
 
 ### 2. Creating the vector database
 Create the 'data' folder by running 
-```
-cd src
-mkdir data
+```bash
+mkdir src/data
 ``` 
-Obtain or set up the ChromaDB database within this folder. A script to process OBP swagger documentation for endpoints and glossary and add it to a vector database will be released later.
+Check the README.md in the `src/scripts` directory for more information on how to populate the vector database.
+
+Run the vector database population script to create the vector database collections:
+```bash
+python src/scripts/populate_vector_db.py
+```
 ### 3. Setting up the environemnet 
 First you will need to rename the `.env.example` file to `.env` and change several parameters. You have options on which LLM provider you decide to use for the backend agent system. 
 #### OpenAI
