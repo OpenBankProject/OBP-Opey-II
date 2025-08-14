@@ -1,8 +1,8 @@
-# ChromaDB Population Scripts
+# Vector Db Population Scripts
 
 This directory contains scripts to populate the ChromaDB vector database with OBP data.
 
-## populate_chroma_db.py
+## populate_vector_db.py
 
 Main script that fetches data from OBP endpoints and populates ChromaDB collections.
 
@@ -15,9 +15,10 @@ Main script that fetches data from OBP endpoints and populates ChromaDB collecti
    - `obp_endpoints` - API endpoint documentation and schemas
 
 ### Usage:
+
 from the root directory of the project, run:
 ```bash
-python src/scripts/populate_chroma_db.py
+python src/scripts/populate_vector_db.py
 ```
 
 ### Requirements:
