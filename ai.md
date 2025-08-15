@@ -19,13 +19,10 @@
 - Prepend each log message with "function_name says: " where function_name is the actual function making the log
 - Remove all tick boxes, emojis, and other decorative characters from log messages
 - Use plain text only for clarity and consistency
-- Apply this format to all info!, debug!, warn!, error! messages throughout the codebase
-- Example: info!("run says: Starting sequencer for desktop testing");
 
 ## Development Workflow
 1. Check ai.log first to understand current project state
 2. Run necessary commands/tests
-3. Always ask the user what worked when a grid is involved. Ask the user what they saw when a grid is involved.
 4. Update ai.log with what was done
 5. Provide concise summary to user
 
@@ -33,4 +30,3 @@
 - Prefer working solutions over perfect code
 - Test changes incrementally
 - Document significant findings in ai.log
-- Use appropriate feature flags (--features desktop for grid testing)
