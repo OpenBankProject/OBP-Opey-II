@@ -122,6 +122,5 @@ async def return_message(state: OpeyGraphState):
     pass
 
 async def human_review_node(state):
-    state["current_state"] = "human_review"
     print("Awaiting human approval for tool call...")
-    pass
+    return {"current_state": "human_review"}

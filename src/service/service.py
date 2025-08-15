@@ -319,7 +319,13 @@ async def stream_agent(user_input: StreamInput, request: Request, opey_session: 
         async for msg in opey_message_generator(user_input, opey_session):
             yield msg
 
-    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+    # Get the actual thread_id that was used
+    thread_id = user_input.thread_id or str(opey_session.session_id)
+    
+    # Add thread_id to response headers for frontend synchronization
+    headers = {"X-Thread-ID": thread_id}
+    
+    return StreamingResponse(stream_generator(), media_type="text/event-stream", headers=headers)
 
 
 @app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
