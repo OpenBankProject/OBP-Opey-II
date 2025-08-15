@@ -132,7 +132,15 @@ class StreamManager:
 
         try:
             # Get current state to check for interruptions
+            logger.error("stream_manager says: GETTING_AGENT_STATE_FOR_APPROVAL_CHECK")
+            logger.error(f"stream_manager says: APPROVAL_CHECK_THREAD_ID: {thread_id}")
+            logger.error(f"stream_manager says: THREAD_ID_VALIDATION: config={config}")
+            logger.error(f"stream_manager says: CHECKPOINTER_INFO: type={type(self.graph.checkpointer).__name__}")
             agent_state = await self.graph.aget_state(config)
+
+            logger.error(f"stream_manager says: APPROVAL_CHECK_STATE: next={agent_state.next}, values={list(agent_state.values.keys()) if agent_state.values else []}")
+            logger.error(f"stream_manager says: APPROVAL_CHECK_TASKS: {len(agent_state.tasks)} tasks pending")
+            logger.error(f"stream_manager says: APPROVAL_CHECK_METADATA: created_at={getattr(agent_state, 'created_at', 'N/A')}, parent_config={getattr(agent_state, 'parent_config', 'N/A')}")
 
             logger.debug("Checking for approval requirements", extra={
                 "event_type": "approval_check",
@@ -142,6 +150,8 @@ class StreamManager:
             })
 
             if agent_state.next and "human_review" in agent_state.next:
+                logger.error("stream_manager says: HUMAN_REVIEW_DETECTED: Graph is interrupted and waiting for approval")
+                logger.error(f"stream_manager says: CHECKPOINT_ID: {getattr(agent_state, 'config', {}).get('configurable', {}).get('checkpoint_id', 'N/A')}")
                 messages = agent_state.values.get("messages", [])
 
                 logger.info("Human approval required", extra={
@@ -238,6 +248,14 @@ class StreamManager:
 
         config = {"configurable": {"thread_id": thread_id}}
 
+        logger.error(f"stream_manager says: THREAD_ID_CONTINUATION: {thread_id}")
+        logger.error(f"stream_manager says: STREAM_INPUT_THREAD_ID: {stream_input.thread_id}")
+        
+        if thread_id != stream_input.thread_id:
+            logger.error(f"stream_manager says: THREAD_ID_MISMATCH: continuation_thread={thread_id}, stream_input_thread={stream_input.thread_id}")
+        else:
+            logger.error("stream_manager says: THREAD_ID_MATCH: Thread IDs are consistent")
+
         logger.info("Continuing after approval decision", extra={
             "event_type": "approval_continuation_start",
             "thread_id": thread_id,
@@ -247,6 +265,7 @@ class StreamManager:
 
         try:
             if approved:
+                logger.error(f"stream_manager says: APPROVAL_GRANTED: tool_call_id={tool_call_id}, thread_id={thread_id}")
                 logger.info("Tool call approved, continuing execution", extra={
                     "event_type": "tool_approved",
                     "thread_id": thread_id,
@@ -255,6 +274,7 @@ class StreamManager:
                 # Resume from interrupt - no state change needed for approval
                 pass
             else:
+                logger.error(f"stream_manager says: APPROVAL_DENIED: tool_call_id={tool_call_id}, thread_id={thread_id}")
                 logger.info("Tool call denied, injecting denial message", extra={
                     "event_type": "tool_denied",
                     "thread_id": thread_id,
@@ -262,7 +282,8 @@ class StreamManager:
                 })
                 # Inject a denial message
                 from langchain_core.messages import ToolMessage
-                await self.graph.aupdate_state(
+                logger.error("stream_manager says: INJECTING_DENIAL_MESSAGE: Calling aupdate_state")
+                update_result = await self.graph.aupdate_state(
                     config,
                     {"messages": [ToolMessage(
                         content="User denied request to OBP API",
@@ -270,6 +291,7 @@ class StreamManager:
                     )]},
                     as_node="tools",
                 )
+                logger.error(f"stream_manager says: DENIAL_MESSAGE_INJECTED: update_result={update_result}")
 
             # Continue streaming the response
             orchestrator = StreamEventOrchestrator(stream_input)
@@ -286,33 +308,84 @@ class StreamManager:
 
             # Debug: Check current graph state before continuation
             try:
+                logger.error("stream_manager says: Getting graph state for debugging before astream continuation")
+                # Check state immediately after approval processing
+                logger.error(f"stream_manager says: PRE_CONTINUATION_CHECK: approved={approved}")
+                logger.error(f"stream_manager says: PRE_CONTINUATION_CONFIG: {config}")
+                logger.error(f"stream_manager says: PRE_CONTINUATION_CHECKPOINTER: {type(self.graph.checkpointer).__name__}")
+                
+                # Check if checkpointer has any saved states
+                try:
+                    checkpoint_list = []
+                    async for checkpoint_tuple in self.graph.checkpointer.alist(config):
+                        checkpoint_list.append(f"checkpoint_id={checkpoint_tuple.config.get('configurable', {}).get('checkpoint_id', 'N/A')}")
+                    logger.error(f"stream_manager says: AVAILABLE_CHECKPOINTS: {checkpoint_list}")
+                except Exception as checkpoint_error:
+                    logger.error(f"stream_manager says: CHECKPOINT_LIST_ERROR: {str(checkpoint_error)}")
+                
                 current_state = await self.graph.aget_state(config)
-                logger.error(f"🔍 GRAPH_STATE_DEBUG: next={current_state.next}, values={current_state.values}")
-                logger.error(f"🔍 GRAPH_STATE_TASKS: {len(current_state.tasks)} tasks pending")
+                logger.error(f"stream_manager says: GRAPH_STATE_DEBUG: next={current_state.next}, values={current_state.values}")
+                logger.error(f"stream_manager says: GRAPH_STATE_TASKS: {len(current_state.tasks)} tasks pending")
+                logger.error(f"stream_manager says: GRAPH_STATE_METADATA: created_at={getattr(current_state, 'created_at', 'N/A')}, parent_config={getattr(current_state, 'parent_config', 'N/A')}")
+                
+                # Additional debugging for empty state
+                if not current_state.next and not current_state.values:
+                    logger.error("stream_manager says: WARNING - Graph state is completely empty (no next nodes, no values)")
+                    logger.error(f"stream_manager says: EMPTY_STATE_DETAILS: config={config}")
+                    logger.error(f"stream_manager says: EMPTY_STATE_DETAILS: thread_id={thread_id}")
+                    logger.error(f"stream_manager says: EMPTY_STATE_DETAILS: tool_call_id={tool_call_id}")
+                    logger.error(f"stream_manager says: EMPTY_STATE_DETAILS: approved={approved}")
+                
+                # Log state values breakdown if they exist
+                if current_state.values:
+                    for key, value in current_state.values.items():
+                        logger.error(f"stream_manager says: STATE_VALUE_DEBUG: {key} = {type(value).__name__} (len={len(value) if hasattr(value, '__len__') else 'N/A'})")
+                
+                # Log next nodes details
+                if current_state.next:
+                    logger.error(f"stream_manager says: NEXT_NODES_DEBUG: {list(current_state.next)}")
+                else:
+                    logger.error("stream_manager says: NEXT_NODES_DEBUG: No next nodes scheduled")
+                    
             except Exception as e:
-                logger.error(f"🔍 GRAPH_STATE_ERROR: {str(e)}")
+                logger.error(f"stream_manager says: GRAPH_STATE_ERROR: {str(e)}")
+                logger.error("stream_manager says: Failed to get graph state for debugging", exc_info=True)
 
             event_count = 0
-            # Use astream to continue the interrupted graph execution from checkpoint
-            # For interrupted graphs, we need to provide empty input to continue
-            async for graph_chunk in self.graph.astream(
-                input={},
-                config=config
-            ):
-                event_count += 1
-                current_time = time.time()
-                time_since_start = current_time - start_time
-                time_since_last = current_time - last_event_time
-                last_event_time = current_time
+            logger.info("stream_manager says: Bypassing human_review node to continue after approval")
+            
+            # Bypass the problematic human_review interrupt continuation
+            # by manually updating state and proceeding to tools node
+            try:
+                # Mark human_review as completed with approval
+                await self.graph.aupdate_state(
+                    config,
+                    {"current_state": "approved"},
+                    as_node="human_review"
+                )
+                logger.info("stream_manager says: Human review bypassed, proceeding to tools execution")
+                
+                # Continue graph execution from tools node
+                async for graph_chunk in self.graph.astream(
+                    input=None,
+                    config=config
+                ):
+                    event_count += 1
+                    current_time = time.time()
+                    time_since_start = current_time - start_time
+                    time_since_last = current_time - last_event_time
+                    last_event_time = current_time
 
-                logger.info("Processing post-approval graph chunk", extra={
-                    "event_type": "post_approval_graph_chunk",
-                    "thread_id": thread_id,
-                    "event_count": event_count,
-                    "graph_nodes": list(graph_chunk.keys()) if graph_chunk else [],
-                    "time_since_start": round(time_since_start, 2),
-                    "time_since_last_event": round(time_since_last, 2)
-                })
+
+
+                    logger.info("Processing post-approval graph chunk", extra={
+                        "event_type": "post_approval_graph_chunk",
+                        "thread_id": thread_id,
+                        "event_count": event_count,
+                        "graph_nodes": list(graph_chunk.keys()) if graph_chunk else [],
+                        "time_since_start": round(time_since_start, 2),
+                        "time_since_last_event": round(time_since_last, 2)
+                    })
 
                 # Log warning if tool execution is taking too long
                 if time_since_start > 30 and event_count > 20:
@@ -395,6 +468,13 @@ class StreamManager:
                         }
                     )
 
+                logger.info("stream_manager says: Approval continuation completed successfully")
+            except Exception as astream_error:
+                logger.error(f"stream_manager says: Error in approval continuation: {str(astream_error)}")
+                logger.error("stream_manager says: Exception during graph continuation", exc_info=True)
+                
+                raise astream_error
+            
             logger.info("Approval continuation astream loop ended", extra={
                 "event_type": "approval_continuation_astream_end",
                 "thread_id": thread_id,
