@@ -468,6 +468,7 @@ class StreamManager:
                     for node_name, node_output in graph_chunk.items():
                         logger.error(f"stream_manager says: APPROVAL_FLOW_DEBUG - Processing node: {node_name}")
                         logger.error(f"stream_manager says: APPROVAL_FLOW_DEBUG - Node output keys: {list(node_output.keys()) if isinstance(node_output, dict) else 'Not a dict'}")
+                        logger.error(f"stream_manager says: NODE_NAME_CHECK - Checking if '{node_name}' == 'tools': {node_name == 'tools'}")
                         
                         if isinstance(node_output, dict) and 'messages' in node_output:
                             messages = node_output['messages']
