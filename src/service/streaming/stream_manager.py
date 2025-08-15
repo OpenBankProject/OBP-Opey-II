@@ -1,6 +1,7 @@
 import logging
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Optional, Literal
 from langchain_core.runnables.schema import StreamEvent as LangGraphStreamEvent
+from langchain_core.messages import ToolMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from .events import StreamEvent, StreamEventFactory
@@ -237,6 +238,50 @@ class StreamManager:
 
         return False
 
+    def _analyze_obp_response_status(self, response_content: str) -> Literal["success", "error"]:
+        """Analyze OBP API response content to determine success/error status"""
+        try:
+            # Handle both string and dict responses
+            if isinstance(response_content, str):
+                import json
+                try:
+                    response_data = json.loads(response_content)
+                except json.JSONDecodeError:
+                    # If not JSON, check for common error patterns in string
+                    if any(error_indicator in response_content.lower() for error_indicator in ['error', 'failed', 'unauthorized', 'forbidden']):
+                        return "error"
+                    return "success"
+            else:
+                response_data = response_content
+
+            # Check for explicit error indicators
+            if isinstance(response_data, dict):
+                # Common OBP error patterns
+                if 'error' in response_data or 'message' in response_data:
+                    return "error"
+                
+                # HTTP status code indicators
+                if 'code' in response_data:
+                    code = response_data['code']
+                    if isinstance(code, (int, str)) and str(code).startswith(('4', '5')):
+                        return "error"
+                
+                # Check for successful creation/update patterns
+                if any(success_key in response_data for success_key in ['bank_id', 'user_id', 'account_id', 'transaction_id']):
+                    return "success"
+                
+                # Check for successful list responses
+                if any(list_key in response_data for list_key in ['banks', 'accounts', 'transactions', 'users']):
+                    return "success"
+
+            # Default to success if no error indicators found
+            return "success"
+            
+        except Exception as e:
+            logger.warning(f"Error analyzing OBP response status: {e}")
+            # Default to error if analysis fails
+            return "error"
+
     async def continue_after_approval(
         self,
         thread_id: str,
@@ -357,6 +402,20 @@ class StreamManager:
             # Bypass the problematic human_review interrupt continuation
             # by manually updating state and proceeding to tools node
             try:
+                # Check original state before bypass
+                pre_bypass_state = await self.graph.aget_state(config)
+                if pre_bypass_state.values and "messages" in pre_bypass_state.values:
+                    messages = pre_bypass_state.values["messages"]
+                    logger.error(f"stream_manager says: PRE_BYPASS_STATE - Found {len(messages)} messages")
+                    last_message = messages[-1] if messages else None
+                    if last_message and hasattr(last_message, 'tool_calls'):
+                        tool_calls = last_message.tool_calls
+                        logger.error(f"stream_manager says: PRE_BYPASS_STATE - Last message has {len(tool_calls)} tool calls")
+                        for i, tc in enumerate(tool_calls):
+                            logger.error(f"stream_manager says: PRE_BYPASS_STATE - Tool call {i}: id={tc.get('id', 'no-id')}, name={tc.get('name', 'no-name')}")
+                    else:
+                        logger.error("stream_manager says: PRE_BYPASS_STATE - No tool calls found in last message")
+                    
                 # Mark human_review as completed with approval
                 await self.graph.aupdate_state(
                     config,
@@ -366,6 +425,7 @@ class StreamManager:
                 logger.info("stream_manager says: Human review bypassed, proceeding to tools execution")
                 
                 # Continue graph execution from tools node
+                logger.error("stream_manager says: APPROVAL_FLOW - Starting astream after bypass")
                 async for graph_chunk in self.graph.astream(
                     input=None,
                     config=config
@@ -374,6 +434,11 @@ class StreamManager:
                     current_time = time.time()
                     time_since_start = current_time - start_time
                     time_since_last = current_time - last_event_time
+                    
+                    logger.error(f"stream_manager says: APPROVAL_FLOW - Received graph_chunk #{event_count}")
+                    logger.error(f"stream_manager says: APPROVAL_FLOW - Graph chunk type: {type(graph_chunk)}")
+                    if isinstance(graph_chunk, dict):
+                        logger.error(f"stream_manager says: APPROVAL_FLOW - Graph chunk keys: {list(graph_chunk.keys())}")
                     last_event_time = current_time
 
 
@@ -400,6 +465,19 @@ class StreamManager:
                 try:
                     # Process graph chunk and extract meaningful events
                     for node_name, node_output in graph_chunk.items():
+                        logger.error(f"stream_manager says: APPROVAL_FLOW_DEBUG - Processing node: {node_name}")
+                        logger.error(f"stream_manager says: APPROVAL_FLOW_DEBUG - Node output keys: {list(node_output.keys()) if isinstance(node_output, dict) else 'Not a dict'}")
+                        
+                        if isinstance(node_output, dict) and 'messages' in node_output:
+                            messages = node_output['messages']
+                            # Handle both single message and list of messages
+                            if isinstance(messages, list):
+                                logger.error(f"stream_manager says: APPROVAL_FLOW_DEBUG - Found {len(messages)} messages in {node_name} node")
+                                for i, msg in enumerate(messages):
+                                    logger.error(f"stream_manager says: APPROVAL_FLOW_DEBUG - Message {i}: type={type(msg).__name__}, has_content={hasattr(msg, 'content')}, has_tool_call_id={hasattr(msg, 'tool_call_id')}")
+                            else:
+                                logger.error(f"stream_manager says: APPROVAL_FLOW_DEBUG - Found single message in {node_name} node: type={type(messages).__name__}, has_content={hasattr(messages, 'content')}")
+                        
                         logger.info(f"Processing node: {node_name}", extra={
                             "event_type": "node_processing",
                             "node_name": node_name,
@@ -408,23 +486,63 @@ class StreamManager:
                         
                         # Handle tools node - this is where obp_requests executes
                         if node_name == "tools":
-                            logger.error(f"🎯 TOOLS_NODE_EXECUTED: Processing tool results")
+                            logger.error("stream_manager says: TOOLS_NODE_EXECUTED - Processing tool results")
                             messages = node_output.get("messages", [])
-                            for message in messages:
-                                if hasattr(message, 'tool_call_id') and hasattr(message, 'content'):
-                                    # Tool execution completed - create tool_end event
-                                    logger.error(f"🚀 TOOL_RESULT: {message.tool_call_id} -> {message.content}")
+                            # Ensure messages is always a list for tools node processing
+                            if not isinstance(messages, list):
+                                messages = [messages]
+                            logger.error(f"stream_manager says: TOOLS_NODE_DEBUG - Found {len(messages)} messages")
+                            
+                            # Check if any messages have tool attributes
+                            tool_messages_found = 0
+                            for i, message in enumerate(messages):
+                                logger.error(f"stream_manager says: TOOLS_MSG_DEBUG - Message {i} - type: {type(message).__name__}")
+                                
+                                # Check all attributes to debug the message structure
+                                attrs = dir(message)
+                                relevant_attrs = [attr for attr in attrs if not attr.startswith('_') and attr in ['tool_call_id', 'content', 'name', 'tool_calls']]
+                                logger.error(f"stream_manager says: TOOLS_MSG_DEBUG - Message {i} - relevant attrs: {relevant_attrs}")
+                                
+                                if hasattr(message, 'tool_call_id'):
+                                    logger.error(f"stream_manager says: TOOLS_MSG_DEBUG - Message {i} - tool_call_id: {message.tool_call_id}")
+                                if hasattr(message, 'content'):
+                                    content_preview = str(message.content)[:200] + "..." if len(str(message.content)) > 200 else str(message.content)
+                                    logger.error(f"stream_manager says: TOOLS_MSG_DEBUG - Message {i} - content: {content_preview}")
+                                
+                                if isinstance(message, ToolMessage):
+                                    tool_messages_found += 1
+                                    logger.error(f"stream_manager says: TOOLS_MSG_MATCH - Found tool message {tool_messages_found}: {message.tool_call_id}")
+                                    
+                                    # Enhanced OBP API response analysis
+                                    status = self._analyze_obp_response_status(message.content)
+                                    logger.error(f"stream_manager says: TOOL_RESULT - {message.tool_call_id} -> Status: {status}")
+                                    logger.error(f"stream_manager says: TOOL_EVENT_CREATION - Creating tool_end event for {message.tool_call_id}")
+                                    
+                                    # Explicit cast to ensure type compatibility
+                                    status_typed: Literal["success", "error"] = status
+                                    
                                     tool_end_event = StreamEventFactory.tool_end(
                                         tool_name="obp_requests",
                                         tool_call_id=message.tool_call_id,
                                         tool_output=message.content,
-                                        status="success" if not message.content.startswith("Error") else "error"
+                                        status=status_typed
                                     )
+                                    logger.error("stream_manager says: TOOL_EVENT_YIELDING - About to yield tool_end event")
                                     yield tool_end_event
+                                    logger.error("stream_manager says: TOOL_EVENT_YIELDED - Successfully yielded tool_end event")
+                                else:
+                                    logger.error(f"stream_manager says: TOOLS_MSG_SKIP - Message {i} does not match tool pattern")
+                            
+                            logger.error(f"stream_manager says: TOOLS_NODE_SUMMARY - Total tool messages processed: {tool_messages_found}")
+                            if tool_messages_found == 0:
+                                logger.error("stream_manager says: TOOLS_NODE_WARNING - No tool messages found with both tool_call_id and content")
                         
                         # Handle assistant responses
                         elif node_name == "opey":
                             messages = node_output.get("messages", [])
+                            # Handle single message or list of messages
+                            if not isinstance(messages, list):
+                                messages = [messages]
                             for message in messages:
                                 if hasattr(message, 'content') and message.content:
                                     # Assistant response - stream as tokens and complete
