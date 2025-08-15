@@ -295,6 +295,7 @@ class StreamManager:
 
         logger.error(f"stream_manager says: THREAD_ID_CONTINUATION: {thread_id}")
         logger.error(f"stream_manager says: STREAM_INPUT_THREAD_ID: {stream_input.thread_id}")
+        logger.error(f"stream_manager says: APPROVED_TOOL_CALL_ID: {tool_call_id}")
         
         if thread_id != stream_input.thread_id:
             logger.error(f"stream_manager says: THREAD_ID_MISMATCH: continuation_thread={thread_id}, stream_input_thread={stream_input.thread_id}")
@@ -513,6 +514,38 @@ class StreamManager:
                                     tool_messages_found += 1
                                     logger.error(f"stream_manager says: TOOLS_MSG_MATCH - Found tool message {tool_messages_found}: {message.tool_call_id}")
                                     
+                                    # Check if this tool_call_id matches the approved tool_call_id
+                                    logger.error(f"stream_manager says: TOOL_ID_MATCH_CHECK - Comparing message.tool_call_id='{message.tool_call_id}' with approved tool_call_id='{tool_call_id}'")
+                                    
+                                    if message.tool_call_id != tool_call_id:
+                                        logger.error(f"stream_manager says: TOOL_ID_MISMATCH - Skipping tool message with different ID")
+                                        continue
+                                    
+                                    # Generate tool_start event first (might be missing in approval flow)
+                                    # Get the original tool call from the pre-bypass state
+                                    original_tool_input = {"method": "unknown", "path": "unknown"}
+                                    if 'graph_chunk' in locals() and node_name == "tools":
+                                        # Try to extract tool input from the graph state
+                                        pre_bypass_state = await self.graph.aget_state({"configurable": {"thread_id": thread_id}})
+                                        if pre_bypass_state.values and "messages" in pre_bypass_state.values:
+                                            messages_state = pre_bypass_state.values["messages"]
+                                            for msg in reversed(messages_state):
+                                                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                                                    for tc in msg.tool_calls:
+                                                        if tc.get('id') == message.tool_call_id:
+                                                            original_tool_input = tc.get('args', original_tool_input)
+                                                            break
+                                    
+                                    logger.error("stream_manager says: TOOL_START_CHECK - Generating tool_start event for approval flow")
+                                    tool_start_event = StreamEventFactory.tool_start(
+                                        tool_name="obp_requests",
+                                        tool_call_id=message.tool_call_id,
+                                        tool_input=original_tool_input
+                                    )
+                                    logger.error("stream_manager says: TOOL_START_YIELDING - About to yield tool_start event")
+                                    yield tool_start_event
+                                    logger.error("stream_manager says: TOOL_START_YIELDED - Successfully yielded tool_start event")
+                                    
                                     # Enhanced OBP API response analysis
                                     status = self._analyze_obp_response_status(message.content)
                                     logger.error(f"stream_manager says: TOOL_RESULT - {message.tool_call_id} -> Status: {status}")
@@ -528,6 +561,7 @@ class StreamManager:
                                         status=status_typed
                                     )
                                     logger.error("stream_manager says: TOOL_EVENT_YIELDING - About to yield tool_end event")
+                                    logger.error(f"stream_manager says: TOOL_EVENT_DETAILS - Event type: {type(tool_end_event).__name__}, tool_call_id: {tool_end_event.tool_call_id}")
                                     yield tool_end_event
                                     logger.error("stream_manager says: TOOL_EVENT_YIELDED - Successfully yielded tool_end event")
                                 else:
