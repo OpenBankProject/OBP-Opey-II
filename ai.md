@@ -27,11 +27,12 @@
 
 1. Check ai.log first to understand current project state
 2. Run necessary commands/tests
-3. Update ai.log with what was done
-4. Provide concise summary to user
+4. Update ai.log with what was done
+5. Provide concise summary to user
+6. DO NOT make extra edits that are not relevant to the user's query, stick to the scope of the question
 
 ## Code Standards
-
-- Prefer working solutions over perfect code
+- Use SOLID Design principles where applicable
+- Use clean architecture principles where applicable
 - Test changes incrementally
 - Document significant findings in ai.log
