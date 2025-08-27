@@ -115,6 +115,8 @@ class OBPRequestsModule:
                 async with session.request(method, url, json=body, headers=headers) as response:
                     json_response = await response.json()
                     status = response.status
+                    logger.info(f"_async_request says: Received response with status {status} from {url}")
+                    logger.debug(f"_async_request says: Response content: {json.dumps(json_response, indent=2)}")
                     return json_response, status
 
         except aiohttp.ClientError as e:
