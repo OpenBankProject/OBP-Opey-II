@@ -112,7 +112,7 @@ class OBPConsentAuth(BaseAuth):
 
         headers = {
             'Consent-JWT': token,
-            'Consumer-Key': os.getenv('OPEY_CONSUMER_KEY'),
+            'Consumer-Key': os.getenv('OBP_CONSUMER_KEY'),
         }
 
         return headers
