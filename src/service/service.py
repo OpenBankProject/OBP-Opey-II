@@ -150,9 +150,18 @@ async def create_session(request: Request, response: Response):
 
     logger.info(f"CREATE SESSION REQUEST - JWT present: {bool(consent_jwt)}, Anonymous allowed: {allow_anonymous}")
 
+    # DEBUG: Log detailed request information
+    logger.debug(f"create_session - Request headers: {dict(request.headers)}")
+    if consent_jwt:
+        masked_jwt = f"{consent_jwt[:20]}...{consent_jwt[-10:]}" if len(consent_jwt) > 30 else consent_jwt[:10] + "..." if len(consent_jwt) > 10 else consent_jwt
+        logger.debug(f"create_session - Consent JWT length: {len(consent_jwt)} chars, masked: {masked_jwt}")
+    logger.debug(f"create_session - Environment ALLOW_ANONYMOUS_SESSIONS: {os.getenv('ALLOW_ANONYMOUS_SESSIONS', 'not set')}")
+
     if not consent_jwt:
         logger.info("create_session sayz: No Consent-JWT provided")
+        logger.debug("create_session - No Consent-JWT header found in request")
         if not allow_anonymous:
+            logger.debug("create_session - Anonymous sessions not allowed, returning 401")
             raise HTTPException(
                 status_code=401,
                 detail="Missing Authorization headers, Must be one of ['Consent-JWT']"
@@ -160,6 +169,7 @@ async def create_session(request: Request, response: Response):
 
         # Create anonymous session
         logger.info("Creating anonymous session")
+        logger.debug("create_session - Proceeding to create anonymous session")
         session_id = uuid.uuid4()
         session_data = SessionData(
             consent_jwt=None,
@@ -181,6 +191,7 @@ async def create_session(request: Request, response: Response):
         )
     else:
         logger.info("create_session sayz: Consent-JWT provided")
+        logger.debug("create_session - Processing authenticated session with Consent-JWT")
     # Check if the consent JWT is valid
     # if not await auth_config.obp_consent.acheck_auth(consent_jwt):
     #     raise HTTPException(status_code=401, detail="Invalid Consent-JWT")

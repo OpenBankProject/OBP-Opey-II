@@ -91,13 +91,25 @@ class OBPConsentAuth(BaseAuth):
 
         headers = self.construct_headers(token)
 
+        # DEBUG: Log consent validation attempt
+        masked_token = f"{token[:20]}...{token[-10:]}" if len(token) > 30 else token[:10] + "..." if len(token) > 10 else token
+        logger.debug(f"OBP consent validation - URL: {self.current_user_url}")
+        logger.debug(f"OBP consent validation - Headers (JWT masked): {{'Consent-JWT': '{masked_token}', 'Consumer-Key': '{headers.get('Consumer-Key')}'}}")
+
         client = await self.get_client()
         async with client.get(self.current_user_url, headers=headers) as response:
             if response.status == 200:
-                logger.info(f'OBP consent check successful: {await response.json()}')
+                response_data = await response.json()
+                logger.info(f'OBP consent check successful: {response_data}')
+                logger.debug(f"OBP consent validation successful - Response headers: {dict(response.headers)}")
+                logger.debug(f"OBP consent validation successful - Full response: {response_data}")
                 return True
             else:
-                logger.error(f'Error checking OBP consent: {await response.text()}')
+                error_text = await response.text()
+                logger.error(f'Error checking OBP consent: {error_text}')
+                logger.debug(f"OBP consent validation failed - Status: {response.status}")
+                logger.debug(f"OBP consent validation failed - Response headers: {dict(response.headers)}")
+                logger.debug(f"OBP consent validation failed - Error details: {error_text}")
                 return False
             
     def construct_headers(self, token: str | None = None) -> Dict[str, str]:
@@ -114,6 +126,11 @@ class OBPConsentAuth(BaseAuth):
             'Consent-JWT': token,
             'Consumer-Key': os.getenv('OPEY_CONSUMER_KEY'),
         }
+
+        # DEBUG: Log header construction
+        masked_token = f"{token[:20]}...{token[-10:]}" if len(token) > 30 else token[:10] + "..." if len(token) > 10 else token
+        logger.debug(f"OBPConsentAuth headers constructed - Consumer-Key: {headers.get('Consumer-Key')}")
+        logger.debug(f"OBPConsentAuth headers constructed - JWT length: {len(token)} chars, masked: {masked_token}")
 
         return headers
 
