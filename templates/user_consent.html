@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Information - Opey Consent</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+
+        .header {
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #007bff;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 16px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            background-color: #fafafa;
+        }
+
+        .section h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+        }
+
+        .section h2::before {
+            content: "📋";
+            margin-right: 10px;
+        }
+
+        .consent-section h2::before {
+            content: "🔒";
+        }
+
+
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .info-item {
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #007bff;
+        }
+
+        .info-item .label {
+            font-weight: bold;
+            color: #555;
+            margin-bottom: 5px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .info-item .value {
+            color: #333;
+            font-size: 16px;
+            word-break: break-all;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-present {
+            background-color: #28a745;
+            color: white;
+        }
+
+        .status-missing {
+            background-color: #dc3545;
+            color: white;
+        }
+
+        .status-authenticated {
+            background-color: #007bff;
+            color: white;
+        }
+
+        .status-anonymous {
+            background-color: #6c757d;
+            color: white;
+        }
+
+        .jwt-preview {
+            font-family: 'Courier New', monospace;
+            background-color: #f8f9fa;
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+            font-size: 12px;
+            color: #495057;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #f5c6cb;
+            margin-bottom: 20px;
+        }
+
+        .refresh-btn {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-bottom: 20px;
+            transition: background-color 0.3s;
+        }
+
+        .refresh-btn:hover {
+            background-color: #0056b3;
+        }
+
+        .claims-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-top: 10px;
+        }
+
+        .claims-list .claim {
+            background-color: #e9ecef;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            color: #495057;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                margin: 10px;
+                padding: 20px;
+            }
+
+            .info-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>User Information</h1>
+            <p>This page displays information about your OBP consent being sent to Opey</p>
+        </div>
+
+        <button class="refresh-btn" onclick="loadConsentInfo()">🔄 Refresh Information</button>
+
+        <div id="loading" class="loading">
+            <p>Loading consent information...</p>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div id="content" style="display: none;">
+            <!-- OBP Consent Section -->
+            <div class="section consent-section">
+                <h2>OBP Consent</h2>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="label">Consent Status</div>
+                        <div class="value">
+                            <span id="consentStatus" class="status-badge"></span>
+                        </div>
+                    </div>
+                    <div class="info-item">
+                        <div class="label">Primary User Identifier</div>
+                        <div class="value" id="primaryUser"></div>
+                    </div>
+                    <div class="info-item">
+                        <div class="label">JWT Token Preview</div>
+                        <div class="value">
+                            <div id="jwtPreview" class="jwt-preview"></div>
+                        </div>
+                    </div>
+                    <div class="info-item">
+                        <div class="label">Issuer</div>
+                        <div class="value" id="issuer"></div>
+                    </div>
+                    <div class="info-item">
+                        <div class="label">Subject</div>
+                        <div class="value" id="subject"></div>
+                    </div>
+                    <div class="info-item">
+                        <div class="label">Email</div>
+                        <div class="value" id="email"></div>
+                    </div>
+                    <div class="info-item">
+                        <div class="label">Name</div>
+                        <div class="value" id="name"></div>
+                    </div>
+                    <div class="info-item">
+                        <div class="label">Username</div>
+                        <div class="value" id="username"></div>
+                    </div>
+                    <div class="info-item">
+                        <div class="label">Token Expiry</div>
+                        <div class="value" id="expiry"></div>
+                    </div>
+                    <div class="info-item">
+                        <div class="label">Available Claims</div>
+                        <div class="value">
+                            <div id="claims" class="claims-list"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadConsentInfo() {
+            const loadingEl = document.getElementById('loading');
+            const errorEl = document.getElementById('error');
+            const contentEl = document.getElementById('content');
+
+            // Show loading
+            loadingEl.style.display = 'block';
+            errorEl.style.display = 'none';
+            contentEl.style.display = 'none';
+
+            try {
+                // Get the Consent-JWT from wherever it's stored (localStorage, sessionStorage, or cookie)
+                const consentJWT = localStorage.getItem('consent-jwt') || 
+                                 sessionStorage.getItem('consent-jwt') ||
+                                 getCookie('consent-jwt');
+
+                const headers = {
+                    'Content-Type': 'application/json'
+                };
+
+                // Add Consent-JWT header if available
+                if (consentJWT) {
+                    headers['Consent-JWT'] = consentJWT;
+                }
+
+                const response = await fetch('/user/consent', {
+                    method: 'GET',
+                    headers: headers,
+                    credentials: 'include' // Include cookies for session
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                displayConsentInfo(data);
+
+                // Hide loading and show content
+                loadingEl.style.display = 'none';
+                contentEl.style.display = 'block';
+
+            } catch (error) {
+                console.error('Error loading consent info:', error);
+                errorEl.textContent = `Error loading consent information: ${error.message}`;
+                errorEl.style.display = 'block';
+                loadingEl.style.display = 'none';
+            }
+        }
+
+        function displayConsentInfo(data) {
+            // Consent Status
+            const consentStatusEl = document.getElementById('consentStatus');
+            consentStatusEl.textContent = data.consent_status;
+            consentStatusEl.className = `status-badge status-${data.consent_status}`;
+
+            // Consent Details
+            if (data.consent_details && Object.keys(data.consent_details).length > 0) {
+                const details = data.consent_details;
+                
+                document.getElementById('primaryUser').textContent = details.primary_user_identifier || 'Not available';
+                document.getElementById('jwtPreview').textContent = details.jwt_preview || 'No JWT token';
+                document.getElementById('issuer').textContent = details.issuer || 'Not specified';
+                document.getElementById('subject').textContent = details.subject || 'Not specified';
+                document.getElementById('email').textContent = details.email || 'Not available';
+                document.getElementById('name').textContent = details.name || 'Not available';
+                document.getElementById('username').textContent = details.username || 'Not available';
+                document.getElementById('expiry').textContent = details.expiry_formatted || details.expiry || 'Not specified';
+
+                // Display available claims
+                const claimsEl = document.getElementById('claims');
+                claimsEl.innerHTML = '';
+                if (details.available_claims && details.available_claims.length > 0) {
+                    details.available_claims.forEach(claim => {
+                        const claimEl = document.createElement('span');
+                        claimEl.className = 'claim';
+                        claimEl.textContent = claim;
+                        claimsEl.appendChild(claimEl);
+                    });
+                } else {
+                    claimsEl.textContent = 'No claims available';
+                }
+            } else {
+                // Clear consent details if no consent
+                document.getElementById('primaryUser').textContent = 'No consent token';
+                document.getElementById('jwtPreview').textContent = 'No JWT token present';
+                document.getElementById('issuer').textContent = 'N/A';
+                document.getElementById('subject').textContent = 'N/A';
+                document.getElementById('email').textContent = 'N/A';
+                document.getElementById('name').textContent = 'N/A';
+                document.getElementById('username').textContent = 'N/A';
+                document.getElementById('expiry').textContent = 'N/A';
+                document.getElementById('claims').textContent = 'No claims available';
+            }
+        }
+
+        function getCookie(name) {
+            const value = `; ${document.cookie}`;
+            const parts = value.split(`; ${name}=`);
+            if (parts.length === 2) return parts.pop().split(';').shift();
+            return null;
+        }
+
+        // Load consent info when page loads
+        document.addEventListener('DOMContentLoaded', loadConsentInfo);
+    </script>
+</body>
+</html>

@@ -80,5 +80,13 @@ session_verifier = BasicVerifier(
     identifier="session_verifier",
     auto_error=True,
     backend=backend,
-    auth_http_exception=HTTPException(status_code=403, detail="invalid session"),
+    auth_http_exception=HTTPException(
+        status_code=403,
+        detail={
+            "error": "Authentication required: Please log in to use Opey",
+            "error_code": "session_invalid",
+            "message": "Your session has expired or is invalid. Please refresh the page and log in again.",
+            "action_required": "Please authenticate with the OBP Portal to continue using Opey"
+        }
+    ),
 )

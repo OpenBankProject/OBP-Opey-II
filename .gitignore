@@ -1,4 +1,5 @@
 .env
+ai_env
 .vscode/
 __pycache__/
 src/data/

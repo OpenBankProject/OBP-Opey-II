@@ -170,7 +170,14 @@ class OBPRequestsModule:
             return json_string
         else:
             logger.error(f"async_obp_get_requests says: Error fetching data from OBP (status: {status}): {json_response}")
-            return json_string
+            # Extract error message from response for better error reporting
+            error_msg = "Unknown error"
+            if isinstance(json_response, dict):
+                error_msg = json_response.get('message', json_response.get('error', json_response.get('failMsg', str(json_response))))
+            elif isinstance(json_response, str):
+                error_msg = json_response
+
+            raise Exception(f"OBP API error (status: {status}): {error_msg}")
 
 
 
@@ -227,7 +234,14 @@ class OBPRequestsModule:
             return json_string
         else:
             logger.error(f"async_obp_requests says: Error fetching data from OBP (status: {status}): {json_response}")
-            return json_string
+            # Extract error message from response for better error reporting
+            error_msg = "Unknown error"
+            if isinstance(json_response, dict):
+                error_msg = json_response.get('message', json_response.get('error', json_response.get('failMsg', str(json_response))))
+            elif isinstance(json_response, str):
+                error_msg = json_response
+
+            raise Exception(f"OBP API error (status: {status}): {error_msg}")
 
 
     def get_langchain_tool(self, mode: Literal["safe", "dangerous", "test"]):

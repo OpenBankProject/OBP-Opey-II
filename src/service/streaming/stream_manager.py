@@ -248,7 +248,7 @@ class StreamManager:
                     response_data = json.loads(response_content)
                 except json.JSONDecodeError:
                     # If not JSON, check for common error patterns in string
-                    if any(error_indicator in response_content.lower() for error_indicator in ['error', 'failed', 'unauthorized', 'forbidden']):
+                    if any(error_indicator in response_content.lower() for error_indicator in ['error:', 'exception(', 'failed', 'unauthorized', 'forbidden', 'obp-', 'value too long', 'http 4', 'http 5']):
                         return "error"
                     return "success"
             else:
@@ -259,24 +259,28 @@ class StreamManager:
                 # Common OBP error patterns
                 if 'error' in response_data or 'message' in response_data:
                     return "error"
-                
+
+                # OBP specific error patterns
+                if 'failMsg' in response_data or 'failCode' in response_data:
+                    return "error"
+
                 # HTTP status code indicators
                 if 'code' in response_data:
                     code = response_data['code']
                     if isinstance(code, (int, str)) and str(code).startswith(('4', '5')):
                         return "error"
-                
+
                 # Check for successful creation/update patterns
                 if any(success_key in response_data for success_key in ['bank_id', 'user_id', 'account_id', 'transaction_id']):
                     return "success"
-                
+
                 # Check for successful list responses
                 if any(list_key in response_data for list_key in ['banks', 'accounts', 'transactions', 'users']):
                     return "success"
 
             # Default to success if no error indicators found
             return "success"
-            
+
         except Exception as e:
             logger.warning(f"Error analyzing OBP response status: {e}")
             # Default to error if analysis fails
@@ -296,7 +300,7 @@ class StreamManager:
         logger.error(f"stream_manager says: THREAD_ID_CONTINUATION: {thread_id}")
         logger.error(f"stream_manager says: STREAM_INPUT_THREAD_ID: {stream_input.thread_id}")
         logger.error(f"stream_manager says: APPROVED_TOOL_CALL_ID: {tool_call_id}")
-        
+
         if thread_id != stream_input.thread_id:
             logger.error(f"stream_manager says: THREAD_ID_MISMATCH: continuation_thread={thread_id}, stream_input_thread={stream_input.thread_id}")
         else:
@@ -359,7 +363,7 @@ class StreamManager:
                 logger.error(f"stream_manager says: PRE_CONTINUATION_CHECK: approved={approved}")
                 logger.error(f"stream_manager says: PRE_CONTINUATION_CONFIG: {config}")
                 logger.error(f"stream_manager says: PRE_CONTINUATION_CHECKPOINTER: {type(self.graph.checkpointer).__name__}")
-                
+
                 # Check if checkpointer has any saved states
                 try:
                     checkpoint_list = []
@@ -368,12 +372,12 @@ class StreamManager:
                     logger.error(f"stream_manager says: AVAILABLE_CHECKPOINTS: {checkpoint_list}")
                 except Exception as checkpoint_error:
                     logger.error(f"stream_manager says: CHECKPOINT_LIST_ERROR: {str(checkpoint_error)}")
-                
+
                 current_state = await self.graph.aget_state(config)
                 logger.error(f"stream_manager says: GRAPH_STATE_DEBUG: next={current_state.next}, values={current_state.values}")
                 logger.error(f"stream_manager says: GRAPH_STATE_TASKS: {len(current_state.tasks)} tasks pending")
                 logger.error(f"stream_manager says: GRAPH_STATE_METADATA: created_at={getattr(current_state, 'created_at', 'N/A')}, parent_config={getattr(current_state, 'parent_config', 'N/A')}")
-                
+
                 # Additional debugging for empty state
                 if not current_state.next and not current_state.values:
                     logger.error("stream_manager says: WARNING - Graph state is completely empty (no next nodes, no values)")
@@ -381,25 +385,25 @@ class StreamManager:
                     logger.error(f"stream_manager says: EMPTY_STATE_DETAILS: thread_id={thread_id}")
                     logger.error(f"stream_manager says: EMPTY_STATE_DETAILS: tool_call_id={tool_call_id}")
                     logger.error(f"stream_manager says: EMPTY_STATE_DETAILS: approved={approved}")
-                
+
                 # Log state values breakdown if they exist
                 if current_state.values:
                     for key, value in current_state.values.items():
                         logger.error(f"stream_manager says: STATE_VALUE_DEBUG: {key} = {type(value).__name__} (len={len(value) if hasattr(value, '__len__') else 'N/A'})")
-                
+
                 # Log next nodes details
                 if current_state.next:
                     logger.error(f"stream_manager says: NEXT_NODES_DEBUG: {list(current_state.next)}")
                 else:
                     logger.error("stream_manager says: NEXT_NODES_DEBUG: No next nodes scheduled")
-                    
+
             except Exception as e:
                 logger.error(f"stream_manager says: GRAPH_STATE_ERROR: {str(e)}")
                 logger.error("stream_manager says: Failed to get graph state for debugging", exc_info=True)
 
             event_count = 0
             logger.info("stream_manager says: Bypassing human_review node to continue after approval")
-            
+
             # Bypass the problematic human_review interrupt continuation
             # by manually updating state and proceeding to tools node
             try:
@@ -416,7 +420,7 @@ class StreamManager:
                             logger.error(f"stream_manager says: PRE_BYPASS_STATE - Tool call {i}: id={tc.get('id', 'no-id')}, name={tc.get('name', 'no-name')}")
                     else:
                         logger.error("stream_manager says: PRE_BYPASS_STATE - No tool calls found in last message")
-                    
+
                 # Mark human_review as completed with approval
                 await self.graph.aupdate_state(
                     config,
@@ -424,7 +428,7 @@ class StreamManager:
                     as_node="human_review"
                 )
                 logger.info("stream_manager says: Human review bypassed, proceeding to tools execution")
-                
+
                 # Continue graph execution from tools node
                 logger.error("stream_manager says: APPROVAL_FLOW - Starting astream after bypass")
                 async for graph_chunk in self.graph.astream(
@@ -435,7 +439,7 @@ class StreamManager:
                     current_time = time.time()
                     time_since_start = current_time - start_time
                     time_since_last = current_time - last_event_time
-                    
+
                     logger.error(f"stream_manager says: APPROVAL_FLOW - Received graph_chunk #{event_count}")
                     logger.error(f"stream_manager says: APPROVAL_FLOW - Graph chunk type: {type(graph_chunk)}")
                     if isinstance(graph_chunk, dict):
@@ -469,7 +473,7 @@ class StreamManager:
                         logger.error(f"stream_manager says: APPROVAL_FLOW_DEBUG - Processing node: {node_name}")
                         logger.error(f"stream_manager says: APPROVAL_FLOW_DEBUG - Node output keys: {list(node_output.keys()) if isinstance(node_output, dict) else 'Not a dict'}")
                         logger.error(f"stream_manager says: NODE_NAME_CHECK - Checking if '{node_name}' == 'tools': {node_name == 'tools'}")
-                        
+
                         if isinstance(node_output, dict) and 'messages' in node_output:
                             messages = node_output['messages']
                             # Handle both single message and list of messages
@@ -479,13 +483,13 @@ class StreamManager:
                                     logger.error(f"stream_manager says: APPROVAL_FLOW_DEBUG - Message {i}: type={type(msg).__name__}, has_content={hasattr(msg, 'content')}, has_tool_call_id={hasattr(msg, 'tool_call_id')}")
                             else:
                                 logger.error(f"stream_manager says: APPROVAL_FLOW_DEBUG - Found single message in {node_name} node: type={type(messages).__name__}, has_content={hasattr(messages, 'content')}")
-                        
+
                         logger.info(f"Processing node: {node_name}", extra={
                             "event_type": "node_processing",
                             "node_name": node_name,
                             "thread_id": thread_id
                         })
-                        
+
                         # Handle tools node - this is where obp_requests executes
                         if node_name == "tools":
                             logger.error("stream_manager says: TOOLS_NODE_EXECUTED - Processing tool results")
@@ -494,34 +498,34 @@ class StreamManager:
                             if not isinstance(messages, list):
                                 messages = [messages]
                             logger.error(f"stream_manager says: TOOLS_NODE_DEBUG - Found {len(messages)} messages")
-                            
+
                             # Check if any messages have tool attributes
                             tool_messages_found = 0
                             for i, message in enumerate(messages):
                                 logger.error(f"stream_manager says: TOOLS_MSG_DEBUG - Message {i} - type: {type(message).__name__}")
-                                
+
                                 # Check all attributes to debug the message structure
                                 attrs = dir(message)
                                 relevant_attrs = [attr for attr in attrs if not attr.startswith('_') and attr in ['tool_call_id', 'content', 'name', 'tool_calls']]
                                 logger.error(f"stream_manager says: TOOLS_MSG_DEBUG - Message {i} - relevant attrs: {relevant_attrs}")
-                                
+
                                 if hasattr(message, 'tool_call_id'):
                                     logger.error(f"stream_manager says: TOOLS_MSG_DEBUG - Message {i} - tool_call_id: {message.tool_call_id}")
                                 if hasattr(message, 'content'):
                                     content_preview = str(message.content)[:200] + "..." if len(str(message.content)) > 200 else str(message.content)
                                     logger.error(f"stream_manager says: TOOLS_MSG_DEBUG - Message {i} - content: {content_preview}")
-                                
+
                                 if isinstance(message, ToolMessage):
                                     tool_messages_found += 1
                                     logger.error(f"stream_manager says: TOOLS_MSG_MATCH - Found tool message {tool_messages_found}: {message.tool_call_id}")
-                                    
+
                                     # Check if this tool_call_id matches the approved tool_call_id
                                     logger.error(f"stream_manager says: TOOL_ID_MATCH_CHECK - Comparing message.tool_call_id='{message.tool_call_id}' with approved tool_call_id='{tool_call_id}'")
-                                    
+
                                     if message.tool_call_id != tool_call_id:
                                         logger.error(f"stream_manager says: TOOL_ID_MISMATCH - Skipping tool message with different ID")
                                         continue
-                                    
+
                                     # Generate tool_start event first (might be missing in approval flow)
                                     # Get the original tool call from the pre-bypass state
                                     original_tool_input = {"method": "unknown", "path": "unknown"}
@@ -536,7 +540,7 @@ class StreamManager:
                                                         if tc.get('id') == message.tool_call_id:
                                                             original_tool_input = tc.get('args', original_tool_input)
                                                             break
-                                    
+
                                     logger.error("stream_manager says: TOOL_START_CHECK - Generating tool_start event for approval flow")
                                     tool_start_event = StreamEventFactory.tool_start(
                                         tool_name="obp_requests",
@@ -546,15 +550,41 @@ class StreamManager:
                                     logger.error("stream_manager says: TOOL_START_YIELDING - About to yield tool_start event")
                                     yield tool_start_event
                                     logger.error("stream_manager says: TOOL_START_YIELDED - Successfully yielded tool_start event")
-                                    
+
                                     # Enhanced OBP API response analysis
                                     status = self._analyze_obp_response_status(message.content)
                                     logger.error(f"stream_manager says: TOOL_RESULT - {message.tool_call_id} -> Status: {status}")
                                     logger.error(f"stream_manager says: TOOL_EVENT_CREATION - Creating tool_end event for {message.tool_call_id}")
-                                    
+
+                                    # If this is an error, emit error event first for immediate Portal visibility
+                                    if status == "error":
+                                        logger.error(f"stream_manager says: TOOL_ERROR_DETECTED - Emitting error event for {message.tool_call_id}")
+
+                                        # Format user-friendly error message
+                                        if isinstance(message.content, str) and "OBP API error" in message.content:
+                                            # Extract the actual error message from the exception string
+                                            if "): " in message.content:
+                                                actual_error = message.content.split("): ", 1)[1]
+                                                if actual_error.endswith("')\n Please fix your mistakes."):
+                                                    actual_error = actual_error.replace("')\n Please fix your mistakes.", "")
+                                            else:
+                                                actual_error = message.content
+                                            user_error_msg = f"API Error: {actual_error}"
+                                        else:
+                                            user_error_msg = f"Tool execution failed: {message.content}"
+
+                                        error_event = StreamEventFactory.error(
+                                            error_message=user_error_msg,
+                                            error_code="tool_execution_error",
+                                            details={"tool_call_id": message.tool_call_id, "tool_name": "obp_requests", "tool_output": message.content}
+                                        )
+                                        logger.error(f"stream_manager says: TOOL_ERROR_YIELDING - About to yield error event: {error_event.model_dump_json()}")
+                                        yield error_event
+                                        logger.error(f"stream_manager says: TOOL_ERROR_YIELDED - Successfully yielded error event")
+
                                     # Explicit cast to ensure type compatibility
                                     status_typed: Literal["success", "error"] = status
-                                    
+
                                     tool_end_event = StreamEventFactory.tool_end(
                                         tool_name="obp_requests",
                                         tool_call_id=message.tool_call_id,
@@ -562,16 +592,15 @@ class StreamManager:
                                         status=status_typed
                                     )
                                     logger.error("stream_manager says: TOOL_EVENT_YIELDING - About to yield tool_end event")
-                                    logger.error(f"stream_manager says: TOOL_EVENT_DETAILS - Event type: {type(tool_end_event).__name__}, tool_call_id: {tool_end_event.tool_call_id}")
                                     yield tool_end_event
                                     logger.error("stream_manager says: TOOL_EVENT_YIELDED - Successfully yielded tool_end event")
                                 else:
                                     logger.error(f"stream_manager says: TOOLS_MSG_SKIP - Message {i} does not match tool pattern")
-                            
+
                             logger.error(f"stream_manager says: TOOLS_NODE_SUMMARY - Total tool messages processed: {tool_messages_found}")
                             if tool_messages_found == 0:
                                 logger.error("stream_manager says: TOOLS_NODE_WARNING - No tool messages found with both tool_call_id and content")
-                        
+
                         # Handle assistant responses
                         elif node_name == "opey":
                             messages = node_output.get("messages", [])
@@ -582,10 +611,10 @@ class StreamManager:
                                 if hasattr(message, 'content') and message.content:
                                     # Assistant response - stream as tokens and complete
                                     message_id = getattr(message, 'id', f'msg_{event_count}')
-                                    
+
                                     # Start assistant response
                                     yield StreamEventFactory.assistant_start(message_id=message_id)
-                                    
+
                                     # Stream content as tokens (simulate streaming)
                                     content = message.content
                                     for i, char in enumerate(content):
@@ -595,13 +624,13 @@ class StreamManager:
                                                 content=token_content,
                                                 message_id=message_id
                                             )
-                                    
+
                                     # Complete assistant response
                                     yield StreamEventFactory.assistant_complete(
                                         content=content,
                                         message_id=message_id
                                     )
-                        
+
                 except Exception as e:
                     error_msg = f"Error processing post-approval graph chunk: {str(e)}"
                     logger.error(error_msg, exc_info=True, extra={
@@ -625,9 +654,9 @@ class StreamManager:
             except Exception as astream_error:
                 logger.error(f"stream_manager says: Error in approval continuation: {str(astream_error)}")
                 logger.error("stream_manager says: Exception during graph continuation", exc_info=True)
-                
+
                 raise astream_error
-            
+
             logger.info("Approval continuation astream loop ended", extra={
                 "event_type": "approval_continuation_astream_end",
                 "thread_id": thread_id,
