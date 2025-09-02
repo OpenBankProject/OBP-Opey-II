@@ -463,7 +463,7 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
 
     async def stream_generator():
         async for stream_event in stream_manager.continue_after_approval(
-            stream_input=user_input
+            approval_stream_input=user_input
         ):
             yield stream_manager.to_sse_format(stream_event)
 
