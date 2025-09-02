@@ -15,8 +15,14 @@ class SessionData(BaseModel):
     token_usage: int = 0
     request_count: int = 0
 
+# For development, allow insecure cookies over HTTP
+secure_cookies = os.getenv("SECURE_COOKIES", "true").lower() == "true"
+
 cookie_params = CookieParameters(
-    secure=True,
+    secure=secure_cookies,
+    samesite="lax",
+    domain=None,  # Allow cookies on any domain including localhost
+    path="/",
 )
 
 # Get secret key from environment variable
@@ -74,5 +80,13 @@ session_verifier = BasicVerifier(
     identifier="session_verifier",
     auto_error=True,
     backend=backend,
-    auth_http_exception=HTTPException(status_code=403, detail="invalid session"),
+    auth_http_exception=HTTPException(
+        status_code=403,
+        detail={
+            "error": "Authentication required: Please log in to use Opey",
+            "error_code": "session_invalid",
+            "message": "Your session has expired or is invalid. Please refresh the page and log in again.",
+            "action_required": "Please authenticate with the OBP Portal to continue using Opey"
+        }
+    ),
 )

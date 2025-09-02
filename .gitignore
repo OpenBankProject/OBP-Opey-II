@@ -1,12 +1,13 @@
 .env
+ai_env
 .vscode/
 __pycache__/
 src/data/
+src/data*
 checkpoints.db
 checkpoints.db-shm
 checkpoints.db-wal
 # Byte-compiled / optimized / DLL files
-__pycache__/
 *.py[cod]
 *$py.class
 
@@ -63,7 +64,6 @@ cover/
 *.pot
 
 # Django stuff:
-*.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal

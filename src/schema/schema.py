@@ -34,32 +34,6 @@ def convert_message_content_to_dict(content: str | list[str | dict]) -> dict[str
         print(f"Failed to parse content {e.doc}\n\n with error {e.msg}")
         return convert_message_content_to_string(content)
 
-class UserInput(BaseModel):
-    """Basic user input for the agent."""
-
-    message: str = Field(
-        description="User input to the agent.",
-        examples=["What is the weather in Tokyo?"],
-    )
-    thread_id: str | None = Field(
-        description="Thread ID to persist and continue a multi-turn conversation.",
-        default=None,
-        examples=["847c6285-8fc9-4560-a83f-4e6285809254"],
-    )
-    is_tool_call_approval: bool = Field(
-        description="Whether this input is a tool call approval.",
-        default=False,
-    )
-
-
-class StreamInput(UserInput):
-    """User input for streaming the agent's response."""
-
-    stream_tokens: bool = Field(
-        description="Whether to stream LLM tokens to the client.",
-        default=True,
-    )
-
 class AgentResponse(BaseModel):
     """Response from the agent when called via /invoke."""
 
@@ -163,6 +137,11 @@ class ChatMessage(BaseModel):
         match self.type:
             case "human":
                 return HumanMessage(content=self.content)
+            case "ai":
+                ai_msg = AIMessage(content=self.content)
+                if self.tool_calls:
+                    ai_msg.tool_calls = self.tool_calls
+                return ai_msg
             case _:
                 raise NotImplementedError(f"Unsupported message type: {self.type}")
 
@@ -204,6 +183,32 @@ class ToolCallApproval(BaseModel):
     tool_call_id: str = Field(
         description="Tool call ID to approve or deny.",
         examples=["call_Jja7J89XsjrOLA5r!MEOW!SL"],
+    )
+
+class UserInput(BaseModel):
+    """Basic user input for the agent."""
+
+    message: str = Field(
+        description="User input to the agent.",
+        examples=["What is the weather in Tokyo?"],
+    )
+    thread_id: str | None = Field(
+        description="Thread ID to persist and continue a multi-turn conversation.",
+        default=None,
+        examples=["847c6285-8fc9-4560-a83f-4e6285809254"],
+    )
+    tool_call_approval: ToolCallApproval = Field(
+        description="Whether this input is a tool call approval.",
+        default=False,
+    )
+
+
+class StreamInput(UserInput):
+    """User input for streaming the agent's response."""
+
+    stream_tokens: bool = Field(
+        description="Whether to stream LLM tokens to the client.",
+        default=True,
     )
 
 class ConsentAuthBody(BaseModel):

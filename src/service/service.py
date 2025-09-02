@@ -6,9 +6,10 @@ import uuid
 import logging
 
 from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi.exception_handlers import http_exception_handler
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph.state import CompiledStateGraph
@@ -22,6 +23,7 @@ from service.checkpointer import checkpointers
 from service.redis_client import get_redis_client, redis_clients
 
 from .streaming import StreamManager
+from .streaming_legacy import _parse_input
 
 from schema import (
     ChatMessage,
@@ -42,6 +44,66 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger('opey.service')
+
+
+class RequestResponseLoggingMiddleware(BaseHTTPMiddleware):
+    """Middleware to log all requests and responses for debugging authentication issues"""
+
+    async def dispatch(self, request: Request, call_next):
+        # Log incoming request details
+        logger.debug(f"REQUEST_DEBUG: {request.method} {request.url}")
+        logger.debug(f"REQUEST_DEBUG: Headers: {dict(request.headers)}")
+
+        # Check for session cookie specifically
+        session_cookie_value = request.cookies.get("session")
+        logger.debug(f"REQUEST_DEBUG: Session cookie present: {bool(session_cookie_value)}")
+        if session_cookie_value:
+            logger.debug(f"REQUEST_DEBUG: Session cookie length: {len(session_cookie_value)}")
+
+        try:
+            response = await call_next(request)
+
+            # Log response details
+            logger.debug(f"RESPONSE_DEBUG: Status {response.status_code}")
+            logger.debug(f"RESPONSE_DEBUG: Headers: {dict(response.headers)}")
+
+            # For error responses, try to log the body
+            if response.status_code >= 400:
+                logger.error(f"ERROR_RESPONSE_DEBUG: Status {response.status_code} for {request.url}")
+
+            return response
+
+        except HTTPException as exc:
+            logger.error(f"HTTP_EXCEPTION_DEBUG: Status {exc.status_code}, Detail: {exc.detail}")
+            logger.error(f"HTTP_EXCEPTION_DEBUG: Exception type: {type(exc)}")
+            raise
+        except Exception as exc:
+            logger.error(f"UNEXPECTED_EXCEPTION_DEBUG: {type(exc)}: {str(exc)}")
+            raise
+
+
+class ErrorHandlingMiddleware(BaseHTTPMiddleware):
+    """Middleware to properly format error responses for Portal consumption"""
+
+    async def dispatch(self, request: Request, call_next):
+        try:
+            response = await call_next(request)
+            return response
+        except HTTPException as exc:
+            # Http Exceptions should be handled by fastapi's default handler or the custom one we set up
+            raise
+        except Exception as exc:
+            # Handle unexpected errors
+            logger.error(f"Unexpected error for {request.url}: {str(exc)}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": "Internal server error occurred",
+                    "error_code": "internal_error",
+                    "message": "An unexpected error occurred. Please try again later.",
+                    "action_required": "Please refresh the page and try again"
+                }
+            )
 
 
 class SessionUpdateMiddleware(BaseHTTPMiddleware):
@@ -75,21 +137,98 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(lifespan=lifespan)
 
+# Add custom exception handler for HTTPExceptions
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    """Custom handler for HTTPExceptions to ensure proper error formatting for Portal"""
+    logger.error(f"CUSTOM_EXCEPTION_HANDLER: {exc.status_code} - {exc.detail}")
+
+    if exc.status_code == 403:
+        # Format authentication errors specifically for Portal
+        if isinstance(exc.detail, dict):
+            error_response = exc.detail
+        else:
+            error_response = {
+                "error": "Authentication required: Please log in to use Opey",
+                "error_code": "authentication_failed",
+                "message": str(exc.detail) if exc.detail else "Session invalid or expired",
+                "action_required": "Please authenticate with the OBP Portal to continue using Opey"
+            }
+
+        logger.error(f"AUTH_ERROR_RESPONSE: {error_response}")
+        return JSONResponse(
+            status_code=403,
+            content=error_response,
+            headers={"Content-Type": "application/json"}
+        )
+
+    # For other HTTP exceptions, use default handler but log the details
+    logger.error(f"OTHER_HTTP_EXCEPTION: {exc.status_code} - {exc.detail}")
+    return await http_exception_handler(request, exc)
+
 # Add session update middleware
 app.add_middleware(SessionUpdateMiddleware)
 
+# Add comprehensive request/response logging for debugging
+app.add_middleware(RequestResponseLoggingMiddleware)
+
+# Add error handling middleware to format authentication errors for Portal
+app.add_middleware(ErrorHandlingMiddleware)
+
 
 # Setup CORS policy
-if cors_allowed_origins := os.getenv("CORS_ALLOWED_ORIGINS"):
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_allowed_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    raise ValueError("CORS_ALLOWED_ORIGINS environment variable must be set")
+cors_allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+cors_allowed_origins = [origin.strip() for origin in cors_allowed_origins if origin.strip()]
+
+# Development fallback
+if not cors_allowed_origins:
+    logger.warning("CORS_ALLOWED_ORIGINS not set, using development defaults")
+    cors_allowed_origins = ["http://localhost:5174", "http://localhost:3000", "http://127.0.0.1:5174", "http://127.0.0.1:3000"]
+
+# Configure specific headers and methods for security
+cors_allowed_methods = os.getenv("CORS_ALLOWED_METHODS", "GET,POST,PUT,DELETE,OPTIONS").split(",")
+cors_allowed_methods = [method.strip() for method in cors_allowed_methods if method.strip()]
+
+cors_allowed_headers = os.getenv("CORS_ALLOWED_HEADERS", "Content-Type,Authorization,Consent-JWT").split(",")
+cors_allowed_headers = [header.strip() for header in cors_allowed_headers if header.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_allowed_origins,
+    allow_credentials=True,
+    allow_methods=cors_allowed_methods,
+    allow_headers=cors_allowed_headers,
+)
+
+logger.info(f"CORS configured with origins: {cors_allowed_origins}")
+
+# Add CORS debugging middleware for development
+class CORSDebugMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Log CORS-related headers for debugging
+        origin = request.headers.get("origin")
+        if origin:
+            logger.debug(f"CORS request from origin: {origin}")
+            if origin not in cors_allowed_origins:
+                logger.warning(f"Request from non-allowed origin: {origin}")
+
+        response = await call_next(request)
+
+        # Log response CORS headers
+        if origin:
+            cors_headers = {
+                k: v for k, v in response.headers.items()
+                if k.lower().startswith('access-control-')
+            }
+            if cors_headers:
+                logger.debug(f"CORS response headers: {cors_headers}")
+
+        return response
+
+# Add debug middleware in development
+if os.getenv("DEBUG_CORS", "false").lower() == "true":
+    app.add_middleware(CORSDebugMiddleware)
+    logger.info("CORS debug middleware enabled")
 
 # Define Allowed Authentication methods,
 # Currently only OBP consent is allowed
@@ -104,13 +243,25 @@ async def create_session(request: Request, response: Response):
     Create a session for the user using the OBP consent JWT or create an anonymous session.
     """
     # Get the consent JWT from the request
+    logger.info("Hello from create_session")
     consent_jwt = request.headers.get("Consent-JWT")
+    logger.info(f"Consent JWT: {consent_jwt}")
     allow_anonymous = os.getenv("ALLOW_ANONYMOUS_SESSIONS", "false").lower() == "true"
 
     logger.info(f"CREATE SESSION REQUEST - JWT present: {bool(consent_jwt)}, Anonymous allowed: {allow_anonymous}")
 
+    # DEBUG: Log detailed request information
+    logger.debug(f"create_session - Request headers: {dict(request.headers)}")
+    if consent_jwt:
+        masked_jwt = f"{consent_jwt[:20]}...{consent_jwt[-10:]}" if len(consent_jwt) > 30 else consent_jwt[:10] + "..." if len(consent_jwt) > 10 else consent_jwt
+        logger.debug(f"create_session - Consent JWT length: {len(consent_jwt)} chars, masked: {masked_jwt}")
+    logger.debug(f"create_session - Environment ALLOW_ANONYMOUS_SESSIONS: {os.getenv('ALLOW_ANONYMOUS_SESSIONS', 'not set')}")
+
     if not consent_jwt:
+        logger.info("create_session sayz: No Consent-JWT provided")
+        logger.debug("create_session - No Consent-JWT header found in request")
         if not allow_anonymous:
+            logger.debug("create_session - Anonymous sessions not allowed, returning 401")
             raise HTTPException(
                 status_code=401,
                 detail="Missing Authorization headers, Must be one of ['Consent-JWT']"
@@ -118,6 +269,7 @@ async def create_session(request: Request, response: Response):
 
         # Create anonymous session
         logger.info("Creating anonymous session")
+        logger.debug("create_session - Proceeding to create anonymous session")
         session_id = uuid.uuid4()
         session_data = SessionData(
             consent_jwt=None,
@@ -137,11 +289,19 @@ async def create_session(request: Request, response: Response):
                 "request_limit": int(os.getenv("ANONYMOUS_SESSION_REQUEST_LIMIT", 20))
             }
         )
-
+    else:
+        logger.info("create_session sayz: Consent-JWT provided")
+        logger.debug("create_session - Processing authenticated session with Consent-JWT")
     # Check if the consent JWT is valid
+<<<<<<< HEAD
     if not await auth_config.auth_strategies["obp_consent"].acheck_auth(consent_jwt):
         raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
 
+=======
+    # if not await auth_config.obp_consent.acheck_auth(consent_jwt):
+    #     raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
+    logger.info("Create session sayz: creating session_id")
+>>>>>>> main
     session_id = uuid.uuid4()
 
     # Create a session using the OBP consent JWT
@@ -157,10 +317,12 @@ async def create_session(request: Request, response: Response):
 
     logger.info("Creating authenticated session")
 
-    return SessionCreateResponse(
+    session_create_response = SessionCreateResponse(
         message="Authenticated session created",
         session_type="authenticated"
     )
+    # print(SessionCreateResponse.message())
+    return session_create_response
 
 
 @app.post("/delete-session")
@@ -193,11 +355,16 @@ async def invoke(user_input: UserInput, request: Request, opey_session: Annotate
     Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
     is also attached to messages for recording feedback.
     """
+
+
+    logger.info(f"Hello from invoke\n")
+
+
     # Update request count for usage tracking
     opey_session.update_request_count()
 
     agent: CompiledStateGraph = opey_session.graph
-    kwargs, run_id = _parse_input(user_input)
+    kwargs, run_id = _parse_input(user_input, str(opey_session.session_id))
     try:
         response = await agent.ainvoke(**kwargs)
         output = ChatMessage.from_langchain(response["messages"][-1])
@@ -224,7 +391,9 @@ async def opey_message_generator(user_input: StreamInput, opey_session: OpeySess
     logger.debug(f"Received stream request: {user_input}")
 
     # Parse input to get config
-    thread_id = user_input.thread_id or str(uuid.uuid4())
+    # Use session_id as default thread_id to maintain conversation continuity
+    thread_id = user_input.thread_id or str(opey_session.session_id)
+    logger.info(f"Thread ID: {thread_id} (from input: {user_input.thread_id}, session: {opey_session.session_id})")
     config = {
         "configurable": {"thread_id": thread_id}
     }
@@ -260,6 +429,10 @@ async def stream_agent(user_input: StreamInput, request: Request, opey_session: 
     Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
     is also attached to all messages for recording feedback.
     """
+    # Log successful authentication
+    logger.error(f"STREAM_ENDPOINT_DEBUG: Successfully authenticated, session_id: {opey_session.session_id}")
+    logger.error(f"STREAM_ENDPOINT_DEBUG: User input: {user_input}")
+
     # Update request count for usage tracking
     opey_session.update_request_count()
 
@@ -267,7 +440,13 @@ async def stream_agent(user_input: StreamInput, request: Request, opey_session: 
         async for msg in opey_message_generator(user_input, opey_session):
             yield msg
 
-    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+    # Get the actual thread_id that was used
+    thread_id = user_input.thread_id or str(opey_session.session_id)
+
+    # Add thread_id to response headers for frontend synchronization
+    headers = {"X-Thread-ID": thread_id}
+
+    return StreamingResponse(stream_generator(), media_type="text/event-stream", headers=headers)
 
 
 @app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
@@ -338,8 +517,13 @@ async def upgrade_session(request: Request, response: Response, session_id: uuid
         raise HTTPException(status_code=400, detail="Missing Consent-JWT header")
 
     # Check if the consent JWT is valid
+<<<<<<< HEAD
     if not await auth_config.auth_strategies["obp_consent"].acheck_auth(consent_jwt):
         raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
+=======
+    # if not await auth_config.obp_consent.acheck_auth(consent_jwt):
+    #     raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
+>>>>>>> main
 
     # Get current session data
     session_data = await backend.read(session_id)
