@@ -50,21 +50,21 @@ class RequestResponseLoggingMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         # Log incoming request details
-        logger.error(f"REQUEST_DEBUG: {request.method} {request.url}")
-        logger.error(f"REQUEST_DEBUG: Headers: {dict(request.headers)}")
+        logger.debug(f"REQUEST_DEBUG: {request.method} {request.url}")
+        logger.debug(f"REQUEST_DEBUG: Headers: {dict(request.headers)}")
 
         # Check for session cookie specifically
         session_cookie_value = request.cookies.get("session")
-        logger.error(f"REQUEST_DEBUG: Session cookie present: {bool(session_cookie_value)}")
+        logger.debug(f"REQUEST_DEBUG: Session cookie present: {bool(session_cookie_value)}")
         if session_cookie_value:
-            logger.error(f"REQUEST_DEBUG: Session cookie length: {len(session_cookie_value)}")
+            logger.debug(f"REQUEST_DEBUG: Session cookie length: {len(session_cookie_value)}")
 
         try:
             response = await call_next(request)
 
             # Log response details
-            logger.error(f"RESPONSE_DEBUG: Status {response.status_code}")
-            logger.error(f"RESPONSE_DEBUG: Headers: {dict(response.headers)}")
+            logger.debug(f"RESPONSE_DEBUG: Status {response.status_code}")
+            logger.debug(f"RESPONSE_DEBUG: Headers: {dict(response.headers)}")
 
             # For error responses, try to log the body
             if response.status_code >= 400:
@@ -89,28 +89,8 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             return response
         except HTTPException as exc:
-            # Handle session authentication errors specifically
-            if exc.status_code == 403:
-                logger.error(f"Authentication error for {request.url}: {exc.detail}")
-
-                # Format error response for Portal
-                if isinstance(exc.detail, dict):
-                    error_response = exc.detail
-                else:
-                    error_response = {
-                        "error": "Authentication required: Please log in to use Opey",
-                        "error_code": "authentication_failed",
-                        "message": str(exc.detail) if exc.detail else "Session invalid or expired",
-                        "action_required": "Please authenticate with the OBP Portal to continue using Opey"
-                    }
-
-                return JSONResponse(
-                    status_code=403,
-                    content=error_response
-                )
-            else:
-                # Re-raise other HTTP exceptions
-                raise exc
+            # Http Exceptions should be handled by fastapi's default handler or the custom one we set up
+            raise
         except Exception as exc:
             # Handle unexpected errors
             logger.error(f"Unexpected error for {request.url}: {str(exc)}", exc_info=True)
@@ -514,90 +494,6 @@ async def get_usage(opey_session: Annotated[OpeySession, Depends()]) -> UsageInf
     """
     usage_info = opey_session.get_usage_info()
     return UsageInfoResponse(**usage_info)
-
-
-@app.get("/user/consent")
-async def get_user_consent_info(request: Request) -> dict[str, Any]:
-    """
-    Get detailed information about the OBP consent being sent to Opey.
-    """
-    consent_jwt = request.headers.get("Consent-JWT")
-
-    consent_info = {
-        "consent_status": "present" if consent_jwt else "missing",
-        "consent_details": {}
-    }
-
-    if consent_jwt:
-        # Extract user information from JWT for display
-        try:
-            from agent.utils.obp import OBPRequestsModule
-            from auth.auth import OBPConsentAuth
-
-            # Create a temporary auth instance to extract user info
-            temp_auth = OBPConsentAuth(consent_jwt=consent_jwt)
-            temp_obp = OBPRequestsModule(auth=temp_auth)
-
-            # Use the existing JWT extraction method
-            user_identifier = temp_obp._extract_username_from_jwt(consent_jwt)
-
-            # Decode JWT to get detailed information (without verification for display)
-            import jwt
-            try:
-                decoded_token = jwt.decode(consent_jwt, options={"verify_signature": False})
-
-                consent_info["consent_details"] = {
-                    "primary_user_identifier": user_identifier,
-                    "jwt_length": len(consent_jwt),
-                    "jwt_preview": f"{consent_jwt[:20]}...{consent_jwt[-10:]}" if len(consent_jwt) > 30 else consent_jwt[:15] + "...",
-                    "issuer": decoded_token.get('iss', 'Not specified'),
-                    "subject": decoded_token.get('sub', 'Not specified'),
-                    "audience": decoded_token.get('aud', 'Not specified'),
-                    "email": decoded_token.get('email', 'Not available'),
-                    "name": decoded_token.get('name', 'Not available'),
-                    "username": decoded_token.get('username', 'Not available'),
-                    "preferred_username": decoded_token.get('preferred_username', 'Not available'),
-                    "expiry": decoded_token.get('exp', 'Not specified'),
-                    "issued_at": decoded_token.get('iat', 'Not specified'),
-                    "available_claims": list(decoded_token.keys()) if decoded_token else []
-                }
-
-                # Format expiry time if available
-                if 'exp' in decoded_token and decoded_token['exp']:
-                    import datetime
-                    try:
-                        exp_datetime = datetime.datetime.fromtimestamp(decoded_token['exp'])
-                        consent_info["consent_details"]["expiry_formatted"] = exp_datetime.strftime("%Y-%m-%d %H:%M:%S UTC")
-                    except:
-                        consent_info["consent_details"]["expiry_formatted"] = "Invalid timestamp"
-
-            except jwt.DecodeError:
-                consent_info["consent_details"]["error"] = "Unable to decode JWT token"
-
-        except Exception as e:
-            consent_info["consent_details"]["error"] = f"Error extracting consent information: {str(e)}"
-
-    logger.debug(f"OBP consent info requested - JWT present: {bool(consent_jwt)}")
-
-    return consent_info
-
-
-@app.get("/user", response_class=HTMLResponse)
-async def user_page():
-    """
-    Serve the user consent information HTML page.
-    """
-    try:
-        import os
-        template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates", "user_consent.html")
-        with open(template_path, "r") as f:
-            html_content = f.read()
-        return HTMLResponse(content=html_content, status_code=200)
-    except FileNotFoundError:
-        return HTMLResponse(
-            content="<h1>User page not found</h1><p>The user consent template is missing.</p>",
-            status_code=404
-        )
 
 
 @app.post("/upgrade-session", dependencies=[Depends(session_cookie)])

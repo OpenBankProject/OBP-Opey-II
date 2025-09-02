@@ -208,12 +208,12 @@ class ToolEventProcessor(BaseEventProcessor):
                             tool_info = self.pending_tool_calls[tool_call_id]
 
                             # Log the message for debugging
-                            logger.error(f"TOOL_ERROR_DEBUG - Processing tool message: tool_call_id={tool_call_id}")
-                            logger.error(f"TOOL_ERROR_DEBUG - Message content: {str(message.content)[:500]}...")
-                            logger.error(f"TOOL_ERROR_DEBUG - Message type: {type(message.content)}")
-                            logger.error(f"TOOL_ERROR_DEBUG - Has status attr: {hasattr(message, 'status')}")
+                            logger.debug(f"Processing tool message: tool_call_id={tool_call_id}")
+                            logger.debug(f"Message content: {str(message.content)[:500]}...")
+                            logger.debug(f"Message type: {type(message.content)}")
+                            logger.debug(f"Has status attr: {hasattr(message, 'status')}")
                             if hasattr(message, 'status'):
-                                logger.error(f"TOOL_ERROR_DEBUG - Status value: {message.status}")
+                                logger.debug(f"Status value: {message.status}")
 
                             # Determine status from message
                             status = "success"
@@ -223,6 +223,7 @@ class ToolEventProcessor(BaseEventProcessor):
                             elif isinstance(message.content, str):
                                 content_lower = message.content.lower()
                                 # Enhanced error detection patterns
+                                # TODO: Change this it is absolutely horrible
                                 error_patterns = [
                                     'error:', 'exception(', 'failed', 'obp-', 'http 4', 'http 5',
                                     'value too long', 'unauthorized', 'forbidden', 'bad request',
@@ -253,6 +254,7 @@ class ToolEventProcessor(BaseEventProcessor):
                                     "tool_output": tool_output
                                 })
 
+                                # TODO: this also needs to be changed, create a converter function for langgraph to frontend errors
                                 # Format error message for user display
                                 if isinstance(tool_output, str) and "OBP API error" in tool_output:
                                     # Extract the actual error message from the exception string
