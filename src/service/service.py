@@ -126,7 +126,6 @@ class SessionUpdateMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize redis client
     redis_client = await get_redis_client()
-    redis_clients['default'] = redis_client
     
     # Ensures that the checkpointer is created and closed properly, and that only this one is used
     # for the whole app
