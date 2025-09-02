@@ -40,7 +40,7 @@ class StreamManager:
             "event_type": "stream_start",
             "thread_id": thread_id,
             "stream_tokens": stream_input.stream_tokens,
-            "is_tool_approval": stream_input.is_tool_call_approval,
+            "tool_call_approval": stream_input.tool_call_approval.model_dump() if stream_input.tool_call_approval else None,
             "message_length": len(stream_input.message) if stream_input.message else 0
         })
 
@@ -48,7 +48,7 @@ class StreamManager:
 
         try:
             # Parse input for the graph
-            if stream_input.is_tool_call_approval:
+            if stream_input.tool_call_approval:
                 graph_input = None
                 logger.debug("Processing tool call approval", extra={
                     "event_type": "tool_approval_processing",
@@ -107,7 +107,7 @@ class StreamManager:
                 "event_type": "stream_response_error",
                 "thread_id": thread_id,
                 "stream_tokens": stream_input.stream_tokens,
-                "is_tool_approval": stream_input.is_tool_call_approval
+                "tool_approval": stream_input.tool_call_approval.model_dump() if stream_input.tool_call_approval else None,
             })
             yield StreamEventFactory.error(
                 error_message=error_msg,
@@ -238,6 +238,7 @@ class StreamManager:
 
         return False
 
+    # TODO: There must be a better way to do this... Harnessing OBP Error Response Patterns would be a start, Or finally getting a proper python SDK working...
     def _analyze_obp_response_status(self, response_content: str) -> Literal["success", "error"]:
         """Analyze OBP API response content to determine success/error status"""
         try:
@@ -288,34 +289,33 @@ class StreamManager:
 
     async def continue_after_approval(
         self,
-        thread_id: str,
-        tool_call_id: str,
-        approved: bool,
-        stream_input: StreamInput
+        approval_stream_input: StreamInput
     ) -> AsyncGenerator[StreamEvent, None]:
         """Continue streaming after human approval/denial"""
 
+        if not approval_stream_input.tool_call_approval:
+            logger.error("Tool call approval data is missing", extra={'approval_stream_input': approval_stream_input.model_dump()})
+            raise ValueError("Tool call approval data is required to continue after approval.",)
+
+        approved = approval_stream_input.tool_call_approval.approval == "approve"
+        thread_id = approval_stream_input.thread_id
+        tool_call_id = approval_stream_input.tool_call_approval.tool_call_id
+
+        #TODO: I think we might want to start passing a langchain RunnableConfig to all functions that need to stream or invoke
+        # This allows us more flexibility, not just passing thread_id but other config options too
         config = {"configurable": {"thread_id": thread_id}}
 
-        logger.error(f"stream_manager says: THREAD_ID_CONTINUATION: {thread_id}")
-        logger.error(f"stream_manager says: STREAM_INPUT_THREAD_ID: {stream_input.thread_id}")
-        logger.error(f"stream_manager says: APPROVED_TOOL_CALL_ID: {tool_call_id}")
+        logger.info(f"continuing after approval for thread ID: {thread_id}")
+        logger.info(f"stream_manager says: APPROVED_TOOL_CALL_ID: {tool_call_id}")
 
-        if thread_id != stream_input.thread_id:
-            logger.error(f"stream_manager says: THREAD_ID_MISMATCH: continuation_thread={thread_id}, stream_input_thread={stream_input.thread_id}")
-        else:
-            logger.error("stream_manager says: THREAD_ID_MATCH: Thread IDs are consistent")
 
         logger.info("Continuing after approval decision", extra={
-            "event_type": "approval_continuation_start",
-            "thread_id": thread_id,
-            "tool_call_id": tool_call_id,
-            "approved": approved
+            'approval_stream_input': approval_stream_input.model_dump()
         })
 
         try:
             if approved:
-                logger.error(f"stream_manager says: APPROVAL_GRANTED: tool_call_id={tool_call_id}, thread_id={thread_id}")
+                logger.info(f"stream_manager says: APPROVAL_GRANTED: tool_call_id={tool_call_id}, thread_id={thread_id}")
                 logger.info("Tool call approved, continuing execution", extra={
                     "event_type": "tool_approved",
                     "thread_id": thread_id,
@@ -332,7 +332,7 @@ class StreamManager:
                 })
                 # Inject a denial message
                 from langchain_core.messages import ToolMessage
-                logger.error("stream_manager says: INJECTING_DENIAL_MESSAGE: Calling aupdate_state")
+                logger.info("stream_manager says: injecting tool denial message into graph state")
                 update_result = await self.graph.aupdate_state(
                     config,
                     {"messages": [ToolMessage(
@@ -341,7 +341,7 @@ class StreamManager:
                     )]},
                     as_node="tools",
                 )
-                logger.error(f"stream_manager says: DENIAL_MESSAGE_INJECTED: update_result={update_result}")
+                logger.debug(f"stream_manager says: DENIAL_MESSAGE_INJECTED: update_result={update_result}")
 
             # Continue streaming the response
             orchestrator = StreamEventOrchestrator(stream_input)

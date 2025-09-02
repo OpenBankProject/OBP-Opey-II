@@ -17,7 +17,7 @@ def _parse_input(user_input: UserInput, session_id: str = None) -> tuple[dict[st
     run_id = uuid.uuid4()
     thread_id = user_input.thread_id or session_id or str(uuid.uuid4())
     # If this is a tool call approval, we don't need to send any input to the agent.
-    if user_input.is_tool_call_approval:
+    if user_input.tool_call_approval:
         _input = None
     else:
         input_message = ChatMessage(type="human", content=user_input.message)

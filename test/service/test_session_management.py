@@ -87,7 +87,7 @@ async def test_get_protected_streaming_route(client: AsyncClient, create_session
     # Test with the mock
     response = await client.post(
         "/stream", 
-        json={'message': 'Hello opey.', 'thread_id': '12345', 'is_tool_call_approval': False},
+        json={'message': 'Hello opey.', 'thread_id': '12345', 'tool_call_approval': {'approval': 'approve', 'tool_call_id': 'call_12345'}},
         headers={'Content-Type': 'application/json'}
     )
     assert response.status_code == 200
