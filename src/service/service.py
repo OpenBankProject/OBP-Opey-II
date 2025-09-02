@@ -293,15 +293,12 @@ async def create_session(request: Request, response: Response):
         logger.info("create_session sayz: Consent-JWT provided")
         logger.debug("create_session - Processing authenticated session with Consent-JWT")
     # Check if the consent JWT is valid
-<<<<<<< HEAD
-    if not await auth_config.auth_strategies["obp_consent"].acheck_auth(consent_jwt):
-        raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
-
-=======
     # if not await auth_config.obp_consent.acheck_auth(consent_jwt):
     #     raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
     logger.info("Create session sayz: creating session_id")
->>>>>>> main
+    if not await auth_config.auth_strategies["obp_consent"].acheck_auth(consent_jwt):
+        raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
+
     session_id = uuid.uuid4()
 
     # Create a session using the OBP consent JWT
@@ -457,7 +454,7 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
     user_input = StreamInput(
         message="",
         thread_id=thread_id,
-        is_tool_call_approval=True,
+        tool_call_approval=user_approval_response,
     )
 
     # Use the new stream manager for approval handling
@@ -467,9 +464,6 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
 
     async def stream_generator():
         async for stream_event in stream_manager.continue_after_approval(
-            thread_id=thread_id,
-            tool_call_id=user_approval_response.tool_call_id,
-            approved=approved,
             stream_input=user_input
         ):
             yield stream_manager.to_sse_format(stream_event)
@@ -517,13 +511,10 @@ async def upgrade_session(request: Request, response: Response, session_id: uuid
         raise HTTPException(status_code=400, detail="Missing Consent-JWT header")
 
     # Check if the consent JWT is valid
-<<<<<<< HEAD
-    if not await auth_config.auth_strategies["obp_consent"].acheck_auth(consent_jwt):
-        raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
-=======
     # if not await auth_config.obp_consent.acheck_auth(consent_jwt):
     #     raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
->>>>>>> main
+    if not await auth_config.auth_strategies["obp_consent"].acheck_auth(consent_jwt):
+        raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
 
     # Get current session data
     session_data = await backend.read(session_id)

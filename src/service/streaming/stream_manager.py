@@ -343,7 +343,9 @@ class StreamManager:
                 )
                 logger.debug(f"stream_manager says: DENIAL_MESSAGE_INJECTED: update_result={update_result}")
 
-            # Continue streaming the response
+            # Continue streaming the 
+            # Yep this is the way we should do it, no idea what the stuff after this is about
+            # TODO: This part of the function is super-duper wtf hacky, needs a full rewrite, thanks AI
             orchestrator = StreamEventOrchestrator(stream_input)
 
             logger.info("Starting astream_events loop for approval continuation", extra={
