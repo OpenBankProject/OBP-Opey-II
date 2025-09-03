@@ -450,7 +450,7 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
     print(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
 
     # Create stream input for approval continuation
-    user_input = StreamInput(
+    approval_user_input = StreamInput(
         message="",
         thread_id=thread_id,
         tool_call_approval=user_approval_response,
@@ -459,11 +459,12 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
     # Use the new stream manager for approval handling
     stream_manager = StreamManager(opey_session)
 
-    approved = user_approval_response.approval == "approve"
+    config = {'configurable': {'thread_id': thread_id,}}
 
     async def stream_generator():
-        async for stream_event in stream_manager.continue_after_approval(
-            approval_stream_input=user_input
+        async for stream_event in stream_manager.stream_response(
+            stream_input=approval_user_input,
+            config=config,
         ):
             yield stream_manager.to_sse_format(stream_event)
 

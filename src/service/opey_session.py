@@ -36,7 +36,7 @@ class OpeySession:
         # Store session data and check usage limits for anonymous sessions
         self.session_data = session_data
         self.session_id = session_id
-        usage_tracker.check_anonymous_limits(session_data)
+        # Note: Usage limits will be checked when methods are called
 
         # Store session data in request state for middleware to update
         request.state.session_data = session_data
