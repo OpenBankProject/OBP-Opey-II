@@ -129,7 +129,7 @@ class StreamManager:
 
             # Check for human approval requirement (except when the input is a tool approval response)
             if not stream_input.tool_call_approval:
-                async for approval_event in self._handle_approval_if_needed(config):
+                async for approval_event in self._handle_approval(config):
                     yield approval_event
 
         except Exception as e:
@@ -153,12 +153,11 @@ class StreamManager:
             })
             yield StreamEventFactory.stream_end()
 
-    async def _handle_approval_if_needed(
+    async def _handle_approval(
         self,
         config: dict
     ) -> AsyncGenerator[StreamEvent, None]:
         """Handle human approval requirements"""
-
         thread_id = config.get("configurable", {}).get("thread_id")
 
         try:
@@ -172,52 +171,45 @@ class StreamManager:
                 "next_nodes": agent_state.next if agent_state.next else []
             })
 
-            if agent_state.next and "human_review" in agent_state.next:
-                messages = agent_state.values.get("messages", [])
-
-                logger.info("Human approval required", extra={
-                    "event_type": "approval_required",
-                    "thread_id": thread_id,
-                    "message_count": len(messages)
-                })
-
-                if messages:
-                    tool_call_message = messages[-1]
-
-                    if hasattr(tool_call_message, 'tool_calls') and tool_call_message.tool_calls:
-                        for tool_call in tool_call_message.tool_calls:
-                            # Check if this is a tool that requires approval
-                            if self._requires_approval(tool_call):
-                                logger.info("Requesting approval for tool call", extra={
-                                    "event_type": "approval_request_created",
-                                    "thread_id": thread_id,
-                                    "tool_name": tool_call["name"],
-                                    "tool_call_id": tool_call["id"],
-                                    "method": tool_call["args"].get("method", "unknown")
-                                })
-                                yield StreamEventFactory.approval_request(
-                                    tool_name=tool_call["name"],
-                                    tool_call_id=tool_call["id"],
-                                    tool_input=tool_call["args"],
-                                    message=f"Approval required for {tool_call['name']} with {tool_call['args'].get('method', 'unknown')} request"
-                                )
-                            else:
-                                logger.debug("Tool call does not require approval", extra={
-                                    "event_type": "approval_not_required",
-                                    "thread_id": thread_id,
-                                    "tool_name": tool_call["name"],
-                                    "tool_call_id": tool_call["id"]
-                                })
-                else:
-                    logger.warning("Human review required but no messages found", extra={
-                        "event_type": "approval_no_messages",
-                        "thread_id": thread_id
+            if not agent_state.next or "human_review" not in agent_state.next:
+                logger.debug("No human approval required")
+                return
+            
+            messages = agent_state.values.get("messages", [])
+            if not messages:
+                logger.warning("Human review required but no messages found")
+                return
+            
+            tool_call_message = messages[-1]
+            if not (hasattr(tool_call_message, 'tool_calls') and tool_call_message.tool_calls):
+                logger.warning("No tool calls found in the latest message")
+                return
+            
+            for tool_call in tool_call_message.tool_calls:
+                if not self._requires_approval(tool_call):
+                    logger.debug("Tool call does not require approval", extra={
+                        "event_type": "approval_not_required",
+                        "thread_id": thread_id,
+                        "tool_name": tool_call["name"],
+                        "tool_call_id": tool_call["id"]
                     })
-            else:
-                logger.debug("No approval required", extra={
-                    "event_type": "approval_not_needed",
-                    "thread_id": thread_id
+                    continue
+
+                method = tool_call["args"].get("method", "unknown")
+                logger.info("Requesting approval for tool call", extra={
+                    "event_type": "approval_request_created",
+                    "thread_id": thread_id,
+                    "tool_name": tool_call["name"],
+                    "tool_call_id": tool_call["id"],
+                    "method": method
                 })
+
+                yield StreamEventFactory.approval_request(
+                    tool_name=tool_call["name"],
+                    tool_call_id=tool_call["id"],
+                    tool_input=tool_call["args"],
+                    message=f"Approval required for {tool_call['name']} with {method} request"
+                )
 
         except Exception as e:
             error_msg = f"Error handling approval check: {str(e)}"
@@ -257,54 +249,6 @@ class StreamManager:
         })
 
         return False
-
-    def _analyze_obp_response_status(self, response_content: str) -> Literal["success", "error"]:
-        """Analyze OBP API response content to determine success/error status"""
-        try:
-            # Handle both string and dict responses
-            if isinstance(response_content, str):
-                import json
-                try:
-                    response_data = json.loads(response_content)
-                except json.JSONDecodeError:
-                    # If not JSON, check for common error patterns in string
-                    if any(error_indicator in response_content.lower() for error_indicator in ['error:', 'exception(', 'failed', 'unauthorized', 'forbidden', 'obp-', 'value too long', 'http 4', 'http 5']):
-                        return "error"
-                    return "success"
-            else:
-                response_data = response_content
-
-            # Check for explicit error indicators
-            if isinstance(response_data, dict):
-                # Common OBP error patterns
-                if 'error' in response_data or 'message' in response_data:
-                    return "error"
-
-                # OBP specific error patterns
-                if 'failMsg' in response_data or 'failCode' in response_data:
-                    return "error"
-
-                # HTTP status code indicators
-                if 'code' in response_data:
-                    code = response_data['code']
-                    if isinstance(code, (int, str)) and str(code).startswith(('4', '5')):
-                        return "error"
-
-                # Check for successful creation/update patterns
-                if any(success_key in response_data for success_key in ['bank_id', 'user_id', 'account_id', 'transaction_id']):
-                    return "success"
-
-                # Check for successful list responses
-                if any(list_key in response_data for list_key in ['banks', 'accounts', 'transactions', 'users']):
-                    return "success"
-
-            # Default to success if no error indicators found
-            return "success"
-
-        except Exception as e:
-            logger.warning(f"Error analyzing OBP response status: {e}")
-            # Default to error if analysis fails
-            return "error"
 
     def to_sse_format(self, event: StreamEvent) -> str:
         """Convert a stream event to SSE format"""

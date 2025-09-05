@@ -376,7 +376,7 @@ async def invoke(user_input: UserInput, request: Request, opey_session: Annotate
         logging.error(f"Error invoking agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
+# TODO: Get rid of this wrapper function and move logic into the endpoint
 async def opey_message_generator(user_input: StreamInput, opey_session: OpeySession) -> AsyncGenerator[str, None]:
     """
     Generate a stream of messages from the agent using the new streaming system.
