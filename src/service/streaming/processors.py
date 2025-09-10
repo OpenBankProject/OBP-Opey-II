@@ -234,22 +234,22 @@ class ToolEventProcessor(BaseEventProcessor):
                             if hasattr(message, 'status') and message.status == "error":
                                 status = "error"
                                 logger.error(f"TOOL_ERROR_DEBUG - Status set to error from message.status")
-                            elif isinstance(message.content, str):
-                                content_lower = message.content.lower()
-                                # Enhanced error detection patterns
-                                # TODO: Change this it is absolutely horrible
-                                error_patterns = [
-                                    'error:', 'exception(', 'failed', 'obp-', 'http 4', 'http 5',
-                                    'value too long', 'unauthorized', 'forbidden', 'bad request',
-                                    'internal server error', 'not found', 'conflict', 'unprocessable',
-                                    'obp api error', 'status: 4', 'status: 5'
-                                ]
-                                matched_patterns = [pattern for pattern in error_patterns if pattern in content_lower]
-                                if matched_patterns:
-                                    status = "error"
-                                    logger.error(f"TOOL_ERROR_DEBUG - Status set to error from content patterns: {matched_patterns}")
-                                else:
-                                    logger.error(f"TOOL_ERROR_DEBUG - No error patterns matched in content")
+                            # elif isinstance(message.content, str):
+                            #     content_lower = message.content.lower()
+                            #     # Enhanced error detection patterns
+                            #     # TODO: Change this it is absolutely horrible
+                            #     error_patterns = [
+                            #         'error:', 'exception(', 'failed', 'obp-', 'http 4', 'http 5',
+                            #         'value too long', 'unauthorized', 'forbidden', 'bad request',
+                            #         'internal server error', 'not found', 'conflict', 'unprocessable',
+                            #         'obp api error', 'status: 4', 'status: 5'
+                            #     ]
+                            #     matched_patterns = [pattern for pattern in error_patterns if pattern in content_lower]
+                            #     if matched_patterns:
+                            #         status = "error"
+                            #         logger.error(f"TOOL_ERROR_DEBUG - Status set to error from content patterns: {matched_patterns}")
+                            #     else:
+                            #         logger.error(f"TOOL_ERROR_DEBUG - No error patterns matched in content")
 
                             logger.error(f"TOOL_ERROR_DEBUG - Final status determination: {status}")
 
@@ -293,6 +293,7 @@ class ToolEventProcessor(BaseEventProcessor):
                                 logger.error(f"TOOL_ERROR_STREAM - Successfully yielded error event")
 
                             logger.error(f"TOOL_END_STREAM - About to emit tool_end event for tool_call_id={tool_call_id} with status={status}")
+                            logger.info(f"TOOL_END_STREAM - About to emit tool_end event for tool_call_id={tool_call_id} with status={status}")
                             tool_end_event = StreamEventFactory.tool_end(
                                 tool_name=tool_info["name"],
                                 tool_call_id=tool_call_id,

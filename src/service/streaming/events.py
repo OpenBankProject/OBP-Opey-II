@@ -67,9 +67,9 @@ class ToolTokenEvent(BaseStreamEvent):
         return f"data: {self.model_dump_json()}\n\n"
 
 
-class ToolEndEvent(BaseStreamEvent):
+class ToolCompleteEvent(BaseStreamEvent):
     """Event fired when a tool execution completes"""
-    type: Literal["tool_end"] = "tool_end"
+    type: Literal["tool_complete"] = "tool_complete"
     tool_name: str = Field(description="Name of the tool that was executed")
     tool_call_id: str = Field(description="Unique identifier for this tool call")
     tool_output: Any = Field(description="Output from the tool execution")
@@ -126,7 +126,7 @@ StreamEvent = Union[
     AssistantCompleteEvent,
     ToolStartEvent,
     ToolTokenEvent,
-    ToolEndEvent,
+    ToolCompleteEvent,
     ErrorEvent,
     KeepAliveEvent,
     ApprovalRequestEvent,
@@ -167,8 +167,8 @@ class StreamEventFactory:
         tool_call_id: str,
         tool_output: Any,
         status: Literal["success", "error"] = "success"
-    ) -> ToolEndEvent:
-        return ToolEndEvent(
+    ) -> ToolCompleteEvent:
+        return ToolCompleteEvent(
             tool_name=tool_name,
             tool_call_id=tool_call_id,
             tool_output=tool_output,

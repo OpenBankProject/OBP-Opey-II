@@ -330,15 +330,12 @@ async def delete_session(response: Response, session_id: uuid.UUID = Depends(ses
     return response
 
 
-@app.get("/status", dependencies=[Depends(session_cookie)])
-async def get_status(opey_session: Annotated[OpeySession, Depends()]) -> dict[str, Any]:
+@app.get("/status")
+async def get_status() -> dict[str, Any]:
     """Health check endpoint with usage information."""
-    if not opey_session.graph:
-        raise HTTPException(status_code=500, detail="Agent not initialized")
 
     status_info = {
         "status": "ok",
-        "usage": opey_session.get_usage_info()
     }
 
     return status_info
