@@ -5,7 +5,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
 
-from agent.utils.model_factory import get_llm
+from agent.utils.model_factory import get_model
 from agent.components.tools import glossary_retrieval_tool, endpoint_retrieval_tool
 
 from pydantic import BaseModel, Field
@@ -37,7 +37,7 @@ prompt = ChatPromptTemplate.from_messages(
 #prompt = hub.pull("opey_main_agent")
 
 # LLM
-llm = get_llm(size='medium', temperature=0.7).bind_tools([glossary_retrieval_tool, endpoint_retrieval_tool])
+llm = get_model(model_name='medium', temperature=0.7).bind_tools([glossary_retrieval_tool, endpoint_retrieval_tool])
 
 # Chain
 opey_agent = prompt | llm 
@@ -167,7 +167,7 @@ query_formulator_prompt_template = ChatPromptTemplate.from_messages(
     ]
 )
 
-query_formulator_llm = get_llm(size='medium', temperature=0).with_structured_output(QueryFormulatorOutput)
+query_formulator_llm = get_model(model_name='medium', temperature=0).with_structured_output(QueryFormulatorOutput)
 query_formulator_chain = query_formulator_prompt_template | query_formulator_llm
 
 
@@ -189,5 +189,5 @@ conversation_summarizer_system_prompt_template = PromptTemplate.from_template(
     """
 )
 
-conversation_summarizer_llm = get_llm(size='medium', temperature=0)
+conversation_summarizer_llm = get_model(model_name='medium', temperature=0)
 conversation_summarizer_chain = conversation_summarizer_system_prompt_template | conversation_summarizer_llm | StrOutputParser()
