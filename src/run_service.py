@@ -32,7 +32,7 @@ if log_level == 'DEBUG':
 if __name__ == "__main__":
     if os.getenv("MODE") == "dev":
         logging.info("🛠️  Running in development mode with auto-reload")
-        uvicorn.run("service:app", reload=True, reload_excludes=["checkpoints.*"], log_level="info", port=int(os.getenv("PORT", 5000)))
+        uvicorn.run("service:app", reload=True, reload_excludes=["checkpoints.db*"], log_level="info", port=int(os.getenv("PORT", 5000)))
     else:
         logging.info("🏭 Running in production mode")
         from service import app
