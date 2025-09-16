@@ -4,6 +4,10 @@ from datetime import datetime
 from abc import ABC, abstractmethod
 import logging
 import json
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -205,11 +209,13 @@ class StreamEventFactory:
     @staticmethod
     def assistant_token(content: str, message_id: str) -> AssistantTokenEvent:
         event = AssistantTokenEvent(content=content, message_id=message_id)
-        StreamEventFactory._log_event(
-            event, 
-            "ASSISTANT_TOKEN", 
-            {"message_id": message_id, "content_length": len(content)}
-        )
+        if os.getenv("LOG_TOKENS") == "true":
+            # Only log token events if LOG_TOKENS env var is set to "true"  
+            StreamEventFactory._log_event(
+                event, 
+                "ASSISTANT_TOKEN", 
+                {"message_id": message_id, "content_length": len(content)}
+            )
         return event
 
     @staticmethod

@@ -153,7 +153,6 @@ class ToolEventProcessor(BaseEventProcessor):
     async def process(self, event: LangGraphStreamEvent) -> AsyncGenerator[StreamEvent, None]:
         """Process tool-related events"""
 
-        
         # Handle tool call initiation (tool_start)
         if (
             event["event"] == "on_chain_end"

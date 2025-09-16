@@ -128,10 +128,9 @@ class StreamManager:
                 "event_count": event_count
             })
 
-            # Check for human approval requirement (except when the input is a tool approval response)
-            if not stream_input.tool_call_approval:
-                async for approval_event in self._handle_approval(config):
-                    yield approval_event
+            # Check for human approval requirement 
+            async for approval_event in self._handle_approval(config):
+                yield approval_event
 
         except Exception as e:
             error_msg = f"Streaming error: {str(e)}"
