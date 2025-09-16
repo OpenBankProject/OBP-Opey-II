@@ -6,9 +6,10 @@ import uuid
 import logging
 
 from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi.exception_handlers import http_exception_handler
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph.state import CompiledStateGraph
@@ -19,6 +20,7 @@ from auth.session import session_cookie, backend, SessionData
 
 from service.opey_session import OpeySession
 from service.checkpointer import checkpointers
+from service.redis_client import get_redis_client, redis_clients
 
 from .streaming import StreamManager
 from .streaming_legacy import _parse_input
@@ -44,6 +46,66 @@ logging.basicConfig(
 logger = logging.getLogger('opey.service')
 
 
+class RequestResponseLoggingMiddleware(BaseHTTPMiddleware):
+    """Middleware to log all requests and responses for debugging authentication issues"""
+
+    async def dispatch(self, request: Request, call_next):
+        # Log incoming request details
+        logger.debug(f"REQUEST_DEBUG: {request.method} {request.url}")
+        logger.debug(f"REQUEST_DEBUG: Headers: {dict(request.headers)}")
+
+        # Check for session cookie specifically
+        session_cookie_value = request.cookies.get("session")
+        logger.debug(f"REQUEST_DEBUG: Session cookie present: {bool(session_cookie_value)}")
+        if session_cookie_value:
+            logger.debug(f"REQUEST_DEBUG: Session cookie length: {len(session_cookie_value)}")
+
+        try:
+            response = await call_next(request)
+
+            # Log response details
+            logger.debug(f"RESPONSE_DEBUG: Status {response.status_code}")
+            logger.debug(f"RESPONSE_DEBUG: Headers: {dict(response.headers)}")
+
+            # For error responses, try to log the body
+            if response.status_code >= 400:
+                logger.error(f"ERROR_RESPONSE_DEBUG: Status {response.status_code} for {request.url}")
+
+            return response
+
+        except HTTPException as exc:
+            logger.error(f"HTTP_EXCEPTION_DEBUG: Status {exc.status_code}, Detail: {exc.detail}")
+            logger.error(f"HTTP_EXCEPTION_DEBUG: Exception type: {type(exc)}")
+            raise
+        except Exception as exc:
+            logger.error(f"UNEXPECTED_EXCEPTION_DEBUG: {type(exc)}: {str(exc)}")
+            raise
+
+
+class ErrorHandlingMiddleware(BaseHTTPMiddleware):
+    """Middleware to properly format error responses for Portal consumption"""
+
+    async def dispatch(self, request: Request, call_next):
+        try:
+            response = await call_next(request)
+            return response
+        except HTTPException as exc:
+            # Http Exceptions should be handled by fastapi's default handler or the custom one we set up
+            raise
+        except Exception as exc:
+            # Handle unexpected errors
+            logger.error(f"Unexpected error for {request.url}: {str(exc)}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": "Internal server error occurred",
+                    "error_code": "internal_error",
+                    "message": "An unexpected error occurred. Please try again later.",
+                    "action_required": "Please refresh the page and try again"
+                }
+            )
+
+
 class SessionUpdateMiddleware(BaseHTTPMiddleware):
     """Middleware to update session data in backend after request processing"""
 
@@ -62,6 +124,9 @@ class SessionUpdateMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Initialize redis client
+    redis_client = await get_redis_client()
+    
     # Ensures that the checkpointer is created and closed properly, and that only this one is used
     # for the whole app
     async with AsyncSqliteSaver.from_conn_string('checkpoints.db') as sql_checkpointer:
@@ -71,8 +136,43 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(lifespan=lifespan)
 
+# Add custom exception handler for HTTPExceptions
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    """Custom handler for HTTPExceptions to ensure proper error formatting for Portal"""
+    logger.error(f"CUSTOM_EXCEPTION_HANDLER: {exc.status_code} - {exc.detail}")
+
+    if exc.status_code == 403:
+        # Format authentication errors specifically for Portal
+        if isinstance(exc.detail, dict):
+            error_response = exc.detail
+        else:
+            error_response = {
+                "error": "Authentication required: Please log in to use Opey",
+                "error_code": "authentication_failed",
+                "message": str(exc.detail) if exc.detail else "Session invalid or expired",
+                "action_required": "Please authenticate with the OBP Portal to continue using Opey"
+            }
+
+        logger.error(f"AUTH_ERROR_RESPONSE: {error_response}")
+        return JSONResponse(
+            status_code=403,
+            content=error_response,
+            headers={"Content-Type": "application/json"}
+        )
+
+    # For other HTTP exceptions, use default handler but log the details
+    logger.error(f"OTHER_HTTP_EXCEPTION: {exc.status_code} - {exc.detail}")
+    return await http_exception_handler(request, exc)
+
 # Add session update middleware
 app.add_middleware(SessionUpdateMiddleware)
+
+# Add comprehensive request/response logging for debugging
+app.add_middleware(RequestResponseLoggingMiddleware)
+
+# Add error handling middleware to format authentication errors for Portal
+app.add_middleware(ErrorHandlingMiddleware)
 
 
 # Setup CORS policy
@@ -110,18 +210,18 @@ class CORSDebugMiddleware(BaseHTTPMiddleware):
             logger.debug(f"CORS request from origin: {origin}")
             if origin not in cors_allowed_origins:
                 logger.warning(f"Request from non-allowed origin: {origin}")
-        
+
         response = await call_next(request)
-        
+
         # Log response CORS headers
         if origin:
             cors_headers = {
-                k: v for k, v in response.headers.items() 
+                k: v for k, v in response.headers.items()
                 if k.lower().startswith('access-control-')
             }
             if cors_headers:
                 logger.debug(f"CORS response headers: {cors_headers}")
-        
+
         return response
 
 # Add debug middleware in development
@@ -131,9 +231,8 @@ if os.getenv("DEBUG_CORS", "false").lower() == "true":
 
 # Define Allowed Authentication methods,
 # Currently only OBP consent is allowed
-auth_config = AuthConfig({
-    "obp_consent": OBPConsentAuth(),
-})
+auth_config = AuthConfig()
+auth_config.register_auth_strategy("obp_consent", OBPConsentAuth())
 
 obp_base_url = os.getenv('OBP_BASE_URL')
 
@@ -150,9 +249,18 @@ async def create_session(request: Request, response: Response):
 
     logger.info(f"CREATE SESSION REQUEST - JWT present: {bool(consent_jwt)}, Anonymous allowed: {allow_anonymous}")
 
+    # DEBUG: Log detailed request information
+    logger.debug(f"create_session - Request headers: {dict(request.headers)}")
+    if consent_jwt:
+        masked_jwt = f"{consent_jwt[:20]}...{consent_jwt[-10:]}" if len(consent_jwt) > 30 else consent_jwt[:10] + "..." if len(consent_jwt) > 10 else consent_jwt
+        logger.debug(f"create_session - Consent JWT length: {len(consent_jwt)} chars, masked: {masked_jwt}")
+    logger.debug(f"create_session - Environment ALLOW_ANONYMOUS_SESSIONS: {os.getenv('ALLOW_ANONYMOUS_SESSIONS', 'not set')}")
+
     if not consent_jwt:
         logger.info("create_session sayz: No Consent-JWT provided")
+        logger.debug("create_session - No Consent-JWT header found in request")
         if not allow_anonymous:
+            logger.debug("create_session - Anonymous sessions not allowed, returning 401")
             raise HTTPException(
                 status_code=401,
                 detail="Missing Authorization headers, Must be one of ['Consent-JWT']"
@@ -160,6 +268,7 @@ async def create_session(request: Request, response: Response):
 
         # Create anonymous session
         logger.info("Creating anonymous session")
+        logger.debug("create_session - Proceeding to create anonymous session")
         session_id = uuid.uuid4()
         session_data = SessionData(
             consent_jwt=None,
@@ -181,10 +290,14 @@ async def create_session(request: Request, response: Response):
         )
     else:
         logger.info("create_session sayz: Consent-JWT provided")
+        logger.debug("create_session - Processing authenticated session with Consent-JWT")
     # Check if the consent JWT is valid
     # if not await auth_config.obp_consent.acheck_auth(consent_jwt):
     #     raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
     logger.info("Create session sayz: creating session_id")
+    if not await auth_config.auth_strategies["obp_consent"].acheck_auth(consent_jwt):
+        raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
+
     session_id = uuid.uuid4()
 
     # Create a session using the OBP consent JWT
@@ -217,15 +330,12 @@ async def delete_session(response: Response, session_id: uuid.UUID = Depends(ses
     return response
 
 
-@app.get("/status", dependencies=[Depends(session_cookie)])
-async def get_status(opey_session: Annotated[OpeySession, Depends()]) -> dict[str, Any]:
+@app.get("/status")
+async def get_status() -> dict[str, Any]:
     """Health check endpoint with usage information."""
-    if not opey_session.graph:
-        raise HTTPException(status_code=500, detail="Agent not initialized")
 
     status_info = {
         "status": "ok",
-        "usage": opey_session.get_usage_info()
     }
 
     return status_info
@@ -263,7 +373,7 @@ async def invoke(user_input: UserInput, request: Request, opey_session: Annotate
         logging.error(f"Error invoking agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
+# TODO: Get rid of this wrapper function and move logic into the endpoint
 async def opey_message_generator(user_input: StreamInput, opey_session: OpeySession) -> AsyncGenerator[str, None]:
     """
     Generate a stream of messages from the agent using the new streaming system.
@@ -312,6 +422,10 @@ async def stream_agent(user_input: StreamInput, request: Request, opey_session: 
     Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
     is also attached to all messages for recording feedback.
     """
+    # Log successful authentication
+    logger.error(f"STREAM_ENDPOINT_DEBUG: Successfully authenticated, session_id: {opey_session.session_id}")
+    logger.error(f"STREAM_ENDPOINT_DEBUG: User input: {user_input}")
+
     # Update request count for usage tracking
     opey_session.update_request_count()
 
@@ -319,7 +433,13 @@ async def stream_agent(user_input: StreamInput, request: Request, opey_session: 
         async for msg in opey_message_generator(user_input, opey_session):
             yield msg
 
-    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+    # Get the actual thread_id that was used
+    thread_id = user_input.thread_id or str(opey_session.session_id)
+
+    # Add thread_id to response headers for frontend synchronization
+    headers = {"X-Thread-ID": thread_id}
+
+    return StreamingResponse(stream_generator(), media_type="text/event-stream", headers=headers)
 
 
 @app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
@@ -327,23 +447,21 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
     print(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
 
     # Create stream input for approval continuation
-    user_input = StreamInput(
+    approval_user_input = StreamInput(
         message="",
         thread_id=thread_id,
-        is_tool_call_approval=True,
+        tool_call_approval=user_approval_response,
     )
 
     # Use the new stream manager for approval handling
     stream_manager = StreamManager(opey_session)
 
-    approved = user_approval_response.approval == "approve"
+    config = {'configurable': {'thread_id': thread_id,}}
 
     async def stream_generator():
-        async for stream_event in stream_manager.continue_after_approval(
-            thread_id=thread_id,
-            tool_call_id=user_approval_response.tool_call_id,
-            approved=approved,
-            stream_input=user_input
+        async for stream_event in stream_manager.stream_response(
+            stream_input=approval_user_input,
+            config=config,
         ):
             yield stream_manager.to_sse_format(stream_event)
 
@@ -392,6 +510,8 @@ async def upgrade_session(request: Request, response: Response, session_id: uuid
     # Check if the consent JWT is valid
     # if not await auth_config.obp_consent.acheck_auth(consent_jwt):
     #     raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
+    if not await auth_config.auth_strategies["obp_consent"].acheck_auth(consent_jwt):
+        raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
 
     # Get current session data
     session_data = await backend.read(session_id)

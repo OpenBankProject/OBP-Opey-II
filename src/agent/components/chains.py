@@ -5,7 +5,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
 
-from agent.utils.model_factory import get_llm
+from agent.utils.model_factory import get_model
 from agent.components.tools import glossary_retrieval_tool, endpoint_retrieval_tool
 
 from pydantic import BaseModel, Field
@@ -14,14 +14,15 @@ from pydantic import BaseModel, Field
 # Prompt
 opey_system_prompt_template = """You are a friendly, helpful assistant for the Open Bank Project API called Opey. You are rebellious against old banking paradigms and have a sense of humor. Always give the user accurate and helpful information.
 
-When a user asks you to perform an action (like creating a user, making a payment, etc.), follow this process:
-1. First, use the endpoint retrieval tool to find the relevant API endpoints
-2. Then, use the obp_requests tool to actually execute the API call with the appropriate method (POST, PUT, DELETE, etc.)
-3. Provide the user with both the endpoint information AND the actual results of the API call
+Ensure Comprehensive Endpoint Awareness: Always use the endpoint retrieval tool to stay aware of and provide details on all available API capabilities before attempting to answer the user's question.
 
-Action-Oriented Approach: When users request actions (create, update, delete), prioritize executing the actual API calls using the obp_requests tool after retrieving endpoint information. Don't just provide documentation - take action!
+Efficiency priority: If there is a tool that can help answer the user's question, use it immediately without needing to be prompted. Try to avoid answering questions without using the tools.
 
-Tool Execution Priority: After using endpoint retrieval to understand capabilities, immediately proceed to execute the appropriate API calls using obp_requests when the user is requesting an action to be performed.
+Task Follow Through: If you reach a snag with a tool, like not having the right roles or permissions, or having invalid input, reuse the tools to try to complete the task fully.
+I.e if there is an entitlement missing, try to assign the entitlement using OBP API endpoints. Or if there is some more information needed, use the API to get the information straight away without being prompted further.
+Follow through on the tasks you start until they are fully completed. Do not wait for the user to prompt you to continue a task. Only stop if you have completed the user's request or if you are completely unable to proceed further.
+
+Tool Utilization Priority: Prioritize using available tools to verify the API's capabilities before providing information. Use the endpoint retrieval tool first to ensure the accuracy of the information given to the user.
 
 Transparent Error Handling: If an error occurs, promptly acknowledge and correct the mistake by using the appropriate tools to provide the correct information.
 
@@ -32,20 +33,8 @@ Adaptability and Continuous Learning: Learn from each interaction to enhance fut
 Use these guidelines to help users interact with and execute actions on the Open Bank Project API efficiently.
 """
 
-prompt = ChatPromptTemplate.from_messages(
-    [
-        SystemMessagePromptTemplate.from_template(opey_system_prompt_template),
-        MessagesPlaceholder("messages")
-    ]
-)
-
 #prompt = hub.pull("opey_main_agent")
 
-# LLM
-llm = get_llm(size='medium', temperature=0.7).bind_tools([glossary_retrieval_tool, endpoint_retrieval_tool])
-
-# Chain
-opey_agent = prompt | llm 
 
 
 ### Retrieval Query Formulator
@@ -172,7 +161,7 @@ query_formulator_prompt_template = ChatPromptTemplate.from_messages(
     ]
 )
 
-query_formulator_llm = get_llm(size='medium', temperature=0).with_structured_output(QueryFormulatorOutput)
+query_formulator_llm = get_model(model_name='medium', temperature=0).with_structured_output(QueryFormulatorOutput)
 query_formulator_chain = query_formulator_prompt_template | query_formulator_llm
 
 
@@ -194,5 +183,5 @@ conversation_summarizer_system_prompt_template = PromptTemplate.from_template(
     """
 )
 
-conversation_summarizer_llm = get_llm(size='medium', temperature=0)
+conversation_summarizer_llm = get_model(model_name='medium', temperature=0)
 conversation_summarizer_chain = conversation_summarizer_system_prompt_template | conversation_summarizer_llm | StrOutputParser()

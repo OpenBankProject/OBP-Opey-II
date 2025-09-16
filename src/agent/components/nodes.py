@@ -12,7 +12,6 @@ from langchain_anthropic.chat_models import ChatAnthropic
 from langchain_core.messages import ToolMessage, SystemMessage, RemoveMessage, AIMessage, trim_messages
 #from langchain_community.callbacks import get_openai_callback, get_bedrock_anthropic_callback
 
-from agent.components.chains import opey_agent, query_formulator_chain
 from agent.components.sub_graphs.endpoint_retrieval.endpoint_retrieval_graph import endpoint_retrieval_graph
 from agent.components.sub_graphs.glossary_retrieval.glossary_retrieval_graph import glossary_retrieval_graph
 from agent.components.states import OpeyGraphState
@@ -90,30 +89,7 @@ async def run_summary_chain(state: OpeyGraphState):
 
     return {"messages": delete_messages, "conversation_summary": summary, "total_tokens": total_tokens}
 
-async def run_opey(state: OpeyGraphState):
-
-    # Check if we have a convesration summary
-    summary = state.get("conversation_summary", "")
-    if summary:
-        summary_system_message = f"Summary of earlier conversation: {summary}"
-        messages = [SystemMessage(content=summary_system_message)] + state["messages"]
-    else:
-        messages = state["messages"]
-
-    response = await opey_agent.ainvoke({"messages": messages})
-
-    # Count the tokens in the messages
-    total_tokens = state.get("total_tokens", 0)
-    llm = get_llm("medium")
-
-    try:
-        total_tokens += llm.get_num_tokens_from_messages(messages)
-    except NotImplementedError as e:
-        # Note that this defaulting to gpt-4o wont work if there is no OpenAI API key in the env, so will probably need to find another defaulting method
-        print(f"could not count tokens for model provider {os.getenv('MODEL_PROVIDER')}:\n{e}\n\ndefaulting to OpenAI GPT-4o counting...")
-        total_tokens += ChatOpenAI(model='gpt-4o').get_num_tokens_from_messages(messages)
-
-    return {"messages": response, "total_tokens": total_tokens}
+# NOTE: Opey node gets built in graph_builder
 
 async def return_message(state: OpeyGraphState):
     """
@@ -122,6 +98,5 @@ async def return_message(state: OpeyGraphState):
     pass
 
 async def human_review_node(state):
-    state["current_state"] = "human_review"
     print("Awaiting human approval for tool call...")
-    pass
+    return {"current_state": "human_review"}

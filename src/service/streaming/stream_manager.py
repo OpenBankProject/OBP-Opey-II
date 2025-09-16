@@ -1,6 +1,7 @@
 import logging
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Optional, Literal
 from langchain_core.runnables.schema import StreamEvent as LangGraphStreamEvent
+from langchain_core.messages import ToolMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from .events import StreamEvent, StreamEventFactory
@@ -39,7 +40,7 @@ class StreamManager:
             "event_type": "stream_start",
             "thread_id": thread_id,
             "stream_tokens": stream_input.stream_tokens,
-            "is_tool_approval": stream_input.is_tool_call_approval,
+            "tool_call_approval": stream_input.tool_call_approval.model_dump() if stream_input.tool_call_approval else None,
             "message_length": len(stream_input.message) if stream_input.message else 0
         })
 
@@ -47,13 +48,43 @@ class StreamManager:
 
         try:
             # Parse input for the graph
-            if stream_input.is_tool_call_approval:
-                graph_input = None
+            if stream_input.tool_call_approval:
+                # Handle approval/denial
+                approved = stream_input.tool_call_approval.approval == "approve"
+                tool_call_id = stream_input.tool_call_approval.tool_call_id
+                
+                if approved:
+                    logger.info(f"Tool call approved: {tool_call_id}", extra={
+                        "event_type": "tool_approved",
+                        "thread_id": thread_id,
+                        "tool_call_id": tool_call_id
+                    })
+                    # For approval, just continue - no state change needed
+                    graph_input = None
+                else:
+                    logger.info(f"Tool call denied: {tool_call_id}", extra={
+                        "event_type": "tool_denied", 
+                        "thread_id": thread_id,
+                        "tool_call_id": tool_call_id
+                    })
+                    # Inject denial message into graph state
+                    await self.graph.aupdate_state(
+                        config,
+                        {"messages": [ToolMessage(
+                            content="User denied request to OBP API",
+                            tool_call_id=tool_call_id
+                        )]},
+                        as_node="tools"
+                    )
+                    graph_input = None
+                    
                 logger.debug("Processing tool call approval", extra={
                     "event_type": "tool_approval_processing",
-                    "thread_id": thread_id
+                    "thread_id": thread_id,
+                    "approved": approved
                 })
             else:
+                # Regular user message
                 input_message = ChatMessage(type="human", content=stream_input.message)
                 graph_input = {"messages": [input_message.to_langchain()]}
                 logger.debug("Processing user message", extra={
@@ -96,9 +127,10 @@ class StreamManager:
                 "event_count": event_count
             })
 
-            # Check for human approval requirement
-            async for approval_event in self._handle_approval_if_needed(orchestrator, config):
-                yield approval_event
+            # Check for human approval requirement (except when the input is a tool approval response)
+            if not stream_input.tool_call_approval:
+                async for approval_event in self._handle_approval(config):
+                    yield approval_event
 
         except Exception as e:
             error_msg = f"Streaming error: {str(e)}"
@@ -106,7 +138,7 @@ class StreamManager:
                 "event_type": "stream_response_error",
                 "thread_id": thread_id,
                 "stream_tokens": stream_input.stream_tokens,
-                "is_tool_approval": stream_input.is_tool_call_approval
+                "tool_approval": stream_input.tool_call_approval.model_dump() if stream_input.tool_call_approval else None,
             })
             yield StreamEventFactory.error(
                 error_message=error_msg,
@@ -121,13 +153,11 @@ class StreamManager:
             })
             yield StreamEventFactory.stream_end()
 
-    async def _handle_approval_if_needed(
+    async def _handle_approval(
         self,
-        orchestrator: StreamEventOrchestrator,
         config: dict
     ) -> AsyncGenerator[StreamEvent, None]:
         """Handle human approval requirements"""
-
         thread_id = config.get("configurable", {}).get("thread_id")
 
         try:
@@ -141,52 +171,45 @@ class StreamManager:
                 "next_nodes": agent_state.next if agent_state.next else []
             })
 
-            if agent_state.next and "human_review" in agent_state.next:
-                messages = agent_state.values.get("messages", [])
-
-                logger.info("Human approval required", extra={
-                    "event_type": "approval_required",
-                    "thread_id": thread_id,
-                    "message_count": len(messages)
-                })
-
-                if messages:
-                    tool_call_message = messages[-1]
-
-                    if hasattr(tool_call_message, 'tool_calls') and tool_call_message.tool_calls:
-                        for tool_call in tool_call_message.tool_calls:
-                            # Check if this is a tool that requires approval
-                            if self._requires_approval(tool_call):
-                                logger.info("Requesting approval for tool call", extra={
-                                    "event_type": "approval_request_created",
-                                    "thread_id": thread_id,
-                                    "tool_name": tool_call["name"],
-                                    "tool_call_id": tool_call["id"],
-                                    "method": tool_call["args"].get("method", "unknown")
-                                })
-                                yield StreamEventFactory.approval_request(
-                                    tool_name=tool_call["name"],
-                                    tool_call_id=tool_call["id"],
-                                    tool_input=tool_call["args"],
-                                    message=f"Approval required for {tool_call['name']} with {tool_call['args'].get('method', 'unknown')} request"
-                                )
-                            else:
-                                logger.debug("Tool call does not require approval", extra={
-                                    "event_type": "approval_not_required",
-                                    "thread_id": thread_id,
-                                    "tool_name": tool_call["name"],
-                                    "tool_call_id": tool_call["id"]
-                                })
-                else:
-                    logger.warning("Human review required but no messages found", extra={
-                        "event_type": "approval_no_messages",
-                        "thread_id": thread_id
+            if not agent_state.next or "human_review" not in agent_state.next:
+                logger.debug("No human approval required")
+                return
+            
+            messages = agent_state.values.get("messages", [])
+            if not messages:
+                logger.warning("Human review required but no messages found")
+                return
+            
+            tool_call_message = messages[-1]
+            if not (hasattr(tool_call_message, 'tool_calls') and tool_call_message.tool_calls):
+                logger.warning("No tool calls found in the latest message")
+                return
+            
+            for tool_call in tool_call_message.tool_calls:
+                if not self._requires_approval(tool_call):
+                    logger.debug("Tool call does not require approval", extra={
+                        "event_type": "approval_not_required",
+                        "thread_id": thread_id,
+                        "tool_name": tool_call["name"],
+                        "tool_call_id": tool_call["id"]
                     })
-            else:
-                logger.debug("No approval required", extra={
-                    "event_type": "approval_not_needed",
-                    "thread_id": thread_id
+                    continue
+
+                method = tool_call["args"].get("method", "unknown")
+                logger.info("Requesting approval for tool call", extra={
+                    "event_type": "approval_request_created",
+                    "thread_id": thread_id,
+                    "tool_name": tool_call["name"],
+                    "tool_call_id": tool_call["id"],
+                    "method": method
                 })
+
+                yield StreamEventFactory.approval_request(
+                    tool_name=tool_call["name"],
+                    tool_call_id=tool_call["id"],
+                    tool_input=tool_call["args"],
+                    message=f"Approval required for {tool_call['name']} with {method} request"
+                )
 
         except Exception as e:
             error_msg = f"Error handling approval check: {str(e)}"
@@ -226,119 +249,6 @@ class StreamManager:
         })
 
         return False
-
-    async def continue_after_approval(
-        self,
-        thread_id: str,
-        tool_call_id: str,
-        approved: bool,
-        stream_input: StreamInput
-    ) -> AsyncGenerator[StreamEvent, None]:
-        """Continue streaming after human approval/denial"""
-
-        config = {"configurable": {"thread_id": thread_id}}
-
-        logger.info("Continuing after approval decision", extra={
-            "event_type": "approval_continuation_start",
-            "thread_id": thread_id,
-            "tool_call_id": tool_call_id,
-            "approved": approved
-        })
-
-        try:
-            if approved:
-                logger.info("Tool call approved, continuing execution", extra={
-                    "event_type": "tool_approved",
-                    "thread_id": thread_id,
-                    "tool_call_id": tool_call_id
-                })
-                # Continue to the tools node
-                await self.graph.aupdate_state(
-                    config,
-                    values=None,
-                    as_node="human_review",
-                )
-            else:
-                logger.info("Tool call denied, injecting denial message", extra={
-                    "event_type": "tool_denied",
-                    "thread_id": thread_id,
-                    "tool_call_id": tool_call_id
-                })
-                # Inject a denial message
-                from langchain_core.messages import ToolMessage
-                await self.graph.aupdate_state(
-                    config,
-                    {"messages": [ToolMessage(
-                        content="User denied request to OBP API",
-                        tool_call_id=tool_call_id
-                    )]},
-                    as_node="tools",
-                )
-
-            # Continue streaming the response
-            orchestrator = StreamEventOrchestrator(stream_input)
-
-            event_count = 0
-            async for langgraph_event in self.graph.astream_events(
-                input=None,
-                config=config,
-                version="v2"
-            ):
-                event_count += 1
-                try:
-                    async for stream_event in orchestrator.process_event(langgraph_event):
-                        yield stream_event
-                except Exception as e:
-                    error_msg = f"Error processing post-approval event: {str(e)}"
-                    logger.error(error_msg, exc_info=True, extra={
-                        "event_type": "post_approval_event_error",
-                        "thread_id": thread_id,
-                        "tool_call_id": tool_call_id,
-                        "event_count": event_count,
-                        "langgraph_event_type": langgraph_event.get("event")
-                    })
-                    yield StreamEventFactory.error(
-                        error_message=error_msg,
-                        error_code="post_approval_event_error",
-                        details={
-                            "thread_id": thread_id,
-                            "tool_call_id": tool_call_id,
-                            "event_count": event_count
-                        }
-                    )
-
-            logger.info("Approval continuation completed", extra={
-                "event_type": "approval_continuation_completed",
-                "thread_id": thread_id,
-                "tool_call_id": tool_call_id,
-                "approved": approved,
-                "event_count": event_count
-            })
-
-        except Exception as e:
-            error_msg = f"Error continuing after approval: {str(e)}"
-            logger.error(error_msg, exc_info=True, extra={
-                "event_type": "approval_continuation_error",
-                "thread_id": thread_id,
-                "tool_call_id": tool_call_id,
-                "approved": approved
-            })
-            yield StreamEventFactory.error(
-                error_message=error_msg,
-                error_code="approval_continuation_error",
-                details={
-                    "thread_id": thread_id,
-                    "tool_call_id": tool_call_id,
-                    "approved": approved
-                }
-            )
-        finally:
-            logger.info("Approval continuation stream ended", extra={
-                "event_type": "approval_continuation_stream_end",
-                "thread_id": thread_id,
-                "tool_call_id": tool_call_id
-            })
-            yield StreamEventFactory.stream_end()
 
     def to_sse_format(self, event: StreamEvent) -> str:
         """Convert a stream event to SSE format"""

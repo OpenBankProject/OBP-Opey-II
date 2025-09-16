@@ -1,4 +1,3 @@
-from auth.auth import BaseAuth
 from typing import Annotated
 
 from auth.session import session_verifier, SessionData, session_cookie
@@ -7,12 +6,11 @@ from auth.usage_tracker import usage_tracker
 from fastapi import Depends, Request
 from uuid import UUID
 
-from agent import compile_opey_graph_with_tools, compile_opey_graph_with_tools_no_HIL
+from agent.graph_builder import OpeyAgentGraphBuilder, create_basic_opey_graph, create_supervised_opey_graph
 from agent.components.tools import endpoint_retrieval_tool, glossary_retrieval_tool
 
 from agent.utils.obp import OBPRequestsModule
 from service.checkpointer import get_global_checkpointer
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_core.runnables.graph import MermaidDrawMethod
 
@@ -36,7 +34,7 @@ class OpeySession:
         # Store session data and check usage limits for anonymous sessions
         self.session_data = session_data
         self.session_id = session_id
-        usage_tracker.check_anonymous_limits(session_data)
+        # Note: Usage limits will be checked when methods are called
 
         # Store session data in request state for middleware to update
         request.state.session_data = session_data
@@ -67,34 +65,58 @@ class OpeySession:
         match obp_api_mode:
             case "NONE":
                 logger.info("OBP API mode set to NONE: Calls to the OBP-API will not be available")
-                tools = base_tools
-                self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+                self.graph = (OpeyAgentGraphBuilder()
+                              .with_tools(base_tools)
+                              .with_checkpointer(checkpointer)
+                              .enable_human_review(False)
+                              .build())
 
             case "SAFE":
                 if self.is_anonymous:
                     logger.info("Anonymous session using SAFE mode: Only GET requests to OBP-API will be available")
-                    tools = base_tools  # Anonymous sessions don't get OBP tools for now
-                    self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+                    prompt_addition = "Note: This is an anonymous session with limited capabilities. User can only make GET requests to the OBP-API. Ensure all responses adhere to this restriction."
+                    self.graph = (OpeyAgentGraphBuilder()
+                                 .with_tools(base_tools)
+                                 .add_to_system_prompt(prompt_addition)
+                                 .with_checkpointer(checkpointer)
+                                 .enable_human_review(False)
+                                 .build())
                 else:
                     logger.info("OBP API mode set to SAFE: GET requests to the OBP-API will be available")
                     tools = base_tools + [self.obp_requests.get_langchain_tool('safe')]
-                    logger.info("Compiling graph with request tool: %s", tools[-1])
-                    self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+                    self.graph = (OpeyAgentGraphBuilder()
+                                 .with_tools(tools)
+                                 .with_checkpointer(checkpointer)
+                                 .enable_human_review(False)
+                                 .build())
 
             case "DANGEROUS":
                 logger.info("OBP API mode set to DANGEROUS: All requests to the OBP-API will be available subject to user approval.")
                 tools = base_tools + [self.obp_requests.get_langchain_tool('dangerous')]
-                self.graph = compile_opey_graph_with_tools(tools)
+                danger_prompt = "IMPORTANT: You are in DANGEROUS mode. Always request human approval for destructive operations."
+                self.graph = (OpeyAgentGraphBuilder()
+                             .with_tools(tools)
+                             .add_to_system_prompt(danger_prompt)
+                             .with_checkpointer(checkpointer)
+                             .enable_human_review(True)
+                             .build())
 
             case "TEST":
-                logger.info("OBP API mode set to TEST: All requests to the OBP-API will be available AND WILL BE APPROVED BY DEFAULT. DO NOT USE IN PRODUCTION.")
+                logger.info("OBP API mode set to TEST: All requests to the OBP-API will be available AND WILL BE APPROVED BY DEFAULT.")
                 tools = base_tools + [self.obp_requests.get_langchain_tool('test')]
-                self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+                test_prompt = "You are in TEST mode. Operations will be auto-approved. DO NOT USE IN PRODUCTION."
+                self.graph = (OpeyAgentGraphBuilder()
+                             .with_tools(tools)
+                             .add_to_system_prompt(test_prompt)
+                             .with_model("large", temperature=0.5)  # Example: use larger model in test
+                             .with_checkpointer(checkpointer)
+                             .enable_human_review(False)
+                             .build())
 
             case _:
                 logger.error(f"OBP API mode set to {obp_api_mode}: Unknown OBP API mode. Defaulting to NONE.")
-                tools = base_tools
-                self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+                self.graph = create_basic_opey_graph(base_tools)
+                self.graph.checkpointer = checkpointer
 
 
         self.graph.checkpointer = checkpointer
