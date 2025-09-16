@@ -1,5 +1,6 @@
 import json
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Annotated, AsyncGenerator
 import uuid
@@ -24,6 +25,7 @@ from service.redis_client import get_redis_client, redis_clients
 
 from .streaming import StreamManager
 from .streaming_legacy import _parse_input
+from .streaming.orchestrator_repository import orchestrator_repository
 
 from schema import (
     ChatMessage,
@@ -126,6 +128,8 @@ class SessionUpdateMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize redis client
     redis_client = await get_redis_client()
+
+    cleanup_task = asyncio.create_task(periodic_orchestrator_cleanup())
     
     # Ensures that the checkpointer is created and closed properly, and that only this one is used
     # for the whole app
@@ -133,6 +137,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         checkpointers['aiosql'] = sql_checkpointer
         yield
 
+    # Cancel cleanup task during shutdown
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        logger.info("Orchestrator cleanup task cancelled during shutdown")
+
+
+async def periodic_orchestrator_cleanup(interval_seconds: int = 600):
+    """Periodically clean up inactive orchestrators"""
+    while True:
+        try:
+            logger.info("Running scheduled cleanup of orchestrators")
+            removed = orchestrator_repository.cleanup_inactive(max_age_seconds=3600)  # 1 hour timeout
+            logger.info(f"Orchestrator cleanup completed: removed {removed} inactive orchestrators")
+        except Exception as e:
+            logger.error(f"Error during orchestrator cleanup: {e}", exc_info=True)
+        
+        await asyncio.sleep(interval_seconds)
 
 app = FastAPI(lifespan=lifespan)
 
@@ -373,33 +396,6 @@ async def invoke(user_input: UserInput, request: Request, opey_session: Annotate
         logging.error(f"Error invoking agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# TODO: Get rid of this wrapper function and move logic into the endpoint
-async def opey_message_generator(user_input: StreamInput, opey_session: OpeySession) -> AsyncGenerator[str, None]:
-    """
-    Generate a stream of messages from the agent using the new streaming system.
-
-    This is the workhorse method for the /stream endpoint.
-    """
-
-    logger.debug(f"Received stream request: {user_input}")
-
-    # Parse input to get config
-    # Use session_id as default thread_id to maintain conversation continuity
-    thread_id = user_input.thread_id or str(opey_session.session_id)
-    logger.info(f"Thread ID: {thread_id} (from input: {user_input.thread_id}, session: {opey_session.session_id})")
-    config = {
-        "configurable": {"thread_id": thread_id}
-    }
-
-    print(f"------------START STREAM-----------\n\n")
-
-    # Use the new stream manager
-    stream_manager = StreamManager(opey_session)
-
-    async for stream_event in stream_manager.stream_response(user_input, config):
-        yield stream_manager.to_sse_format(stream_event)
-
-
 def _sse_response_example() -> dict[int, Any]:
     return {
         status.HTTP_200_OK: {
@@ -413,37 +409,43 @@ def _sse_response_example() -> dict[int, Any]:
         }
     }
 
+def get_stream_manager(opey_session: OpeySession = Depends()) -> StreamManager:
+    """Returns a configured StreamManager instance as a FastAPI dependency."""
+    return StreamManager(opey_session)
 
 @app.post("/stream", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
-async def stream_agent(user_input: StreamInput, request: Request, opey_session: Annotated[OpeySession, Depends()]) -> StreamingResponse:
-    """
-    Stream the agent's response to a user input, including intermediate messages and tokens.
-
-    Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
-    is also attached to all messages for recording feedback.
-    """
+async def stream_agent(
+    user_input: StreamInput, 
+    request: Request, 
+    stream_manager: StreamManager = Depends(get_stream_manager)
+) -> StreamingResponse:
+    """Stream the agent's response to a user input"""
     # Log successful authentication
-    logger.error(f"STREAM_ENDPOINT_DEBUG: Successfully authenticated, session_id: {opey_session.session_id}")
+    logger.error(f"STREAM_ENDPOINT_DEBUG: Successfully authenticated, session_id: {stream_manager.opey_session.session_id}")
     logger.error(f"STREAM_ENDPOINT_DEBUG: User input: {user_input}")
 
     # Update request count for usage tracking
-    opey_session.update_request_count()
+    stream_manager.opey_session.update_request_count()
+
+    # Get the actual thread_id that will be used
+    thread_id = user_input.thread_id or str(stream_manager.opey_session.session_id)
+    config = {'configurable': {'thread_id': thread_id}}
 
     async def stream_generator():
-        async for msg in opey_message_generator(user_input, opey_session):
-            yield msg
-
-    # Get the actual thread_id that was used
-    thread_id = user_input.thread_id or str(opey_session.session_id)
+        async for stream_event in stream_manager.stream_response(user_input, config):
+            yield stream_manager.to_sse_format(stream_event)
 
     # Add thread_id to response headers for frontend synchronization
     headers = {"X-Thread-ID": thread_id}
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream", headers=headers)
 
-
 @app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
-async def user_approval(user_approval_response: ToolCallApproval, thread_id: str, opey_session: Annotated[OpeySession, Depends()]) -> StreamingResponse:
+async def user_approval(
+    user_approval_response: ToolCallApproval,
+    thread_id: str,
+    stream_manager: StreamManager = Depends(get_stream_manager)
+) -> StreamingResponse:
     print(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
 
     # Create stream input for approval continuation
@@ -453,10 +455,7 @@ async def user_approval(user_approval_response: ToolCallApproval, thread_id: str
         tool_call_approval=user_approval_response,
     )
 
-    # Use the new stream manager for approval handling
-    stream_manager = StreamManager(opey_session)
-
-    config = {'configurable': {'thread_id': thread_id,}}
+    config = {'configurable': {'thread_id': thread_id}}
 
     async def stream_generator():
         async for stream_event in stream_manager.stream_response(

@@ -182,8 +182,6 @@ class OBPRequestsModule:
 
 
     async def async_obp_requests(self, method: str, path: str, body: str):
-
-        # TODO: Add more descriptive docstring, I think this is required for the llm to know when to call this tool
         """
         Executes a request to the OpenBankProject (OBP) API.
         Args:
@@ -194,7 +192,7 @@ class OBPRequestsModule:
             dict: The JSON response from the OBP API if the request is successful.
             dict: The error response from the OBP API if the request fails.
         Raises:
-            ValueError: If the response status code is not 200.
+            ValueError: If the response status code is not in the 2xx range.
         Example:
             response = await obp_requests('GET', '/obp/v4.0.0/banks', '')
             print(response)
@@ -229,7 +227,7 @@ class OBPRequestsModule:
             json_string = json.dumps({"error": "Failed to serialize OBP response", "details": str(json_response)})
             logger.error(f"async_obp_requests says: Using fallback error response")
 
-        if status == 200:
+        if 200 <= status < 300:  # Accept all 2xx status codes as success
             logger.info(f"async_obp_requests says: OBP request successful (status: {status})")
             return json_string
         else:

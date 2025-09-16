@@ -8,6 +8,7 @@ from .events import StreamEvent, StreamEventFactory
 from .processors import StreamEventOrchestrator
 from schema import StreamInput, ChatMessage
 from service.opey_session import OpeySession
+from .orchestrator_repository import orchestrator_repository
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class StreamManager:
             "message_length": len(stream_input.message) if stream_input.message else 0
         })
 
-        orchestrator = StreamEventOrchestrator(stream_input)
+        orchestrator = orchestrator_repository.get_or_create(thread_id, stream_input)
 
         try:
             # Parse input for the graph
