@@ -77,25 +77,37 @@ def process_glossary_data(glossary_data: Dict[str, Any]) -> List[Document]:
     # Debug: Print first item structure if available
     if glossary_items and len(glossary_items) > 0:
         print(f"Sample glossary item keys: {list(glossary_items[0].keys()) if isinstance(glossary_items[0], dict) else 'Not a dict'}")
+        print(f"Sample description structure: {type(glossary_items[0].get('description', ''))}")
 
     for item in glossary_items:
         if not isinstance(item, dict):
             continue
 
-        # Try different field name variations
+        # Extract title
         title = item.get("title") or item.get("name") or item.get("term") or ""
 
-        # Handle description which might be a string or an object with markdown
+        # Handle description which might be a string or an object with markdown/html
         description_raw = item.get("description") or item.get("definition") or item.get("desc") or ""
         description = ""
 
         if isinstance(description_raw, dict):
-            # If description is an object, try to get markdown or text content
-            description = description_raw.get("markdown") or description_raw.get("text") or description_raw.get("content") or str(description_raw)
+            # If description is an object, prefer markdown over html, then other text fields
+            description = (description_raw.get("markdown") or 
+                          description_raw.get("html") or 
+                          description_raw.get("text") or 
+                          description_raw.get("content") or 
+                          str(description_raw))
         elif isinstance(description_raw, str):
             description = description_raw
         else:
             description = str(description_raw) if description_raw else ""
+
+        # Clean up the description - remove excessive whitespace and newlines
+        if description:
+            description = description.strip()
+            # Skip items with empty or whitespace-only descriptions
+            if not description:
+                continue
 
         if title and description:
             # Create a comprehensive text for embedding
