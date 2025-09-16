@@ -30,7 +30,6 @@ class AssistantEventProcessor(BaseEventProcessor):
         super().__init__(stream_input)
         self.assistant_started = False
         self.streaming_content = ""
-        self.current_tool_calls = []
         self.current_message_id = None
         self.run_id = None
 
@@ -58,6 +57,10 @@ class AssistantEventProcessor(BaseEventProcessor):
                         # Extract message ID, fallback to generating one if not available
                         message_id = getattr(message, 'id', None) or str(uuid.uuid4())
                         run_id = self.run_id or event.get("run_id", None)
+
+                        # CRITICAL FIX: Reset streaming state for new message
+                        # This ensures each assistant response gets a fresh state
+                        self._reset_streaming_state()
 
                         yield StreamEventFactory.assistant_complete(
                             content=content,
@@ -88,8 +91,9 @@ class AssistantEventProcessor(BaseEventProcessor):
             try:
                 content = event["data"]["chunk"].content
                 if content:
-                    # Initialize message ID for streaming if not already set
-                    if not self.current_message_id:
+                    # CRITICAL FIX: Generate new message ID for each new streaming session
+                    # This prevents token mixing between different assistant responses
+                    if not self.current_message_id or not self.assistant_started:
                         # Try to get message ID from the chunk if available, otherwise generate one
                         chunk = event["data"]["chunk"]
                         self.current_message_id = getattr(chunk, 'id', None) or str(uuid.uuid4())
@@ -134,13 +138,22 @@ class AssistantEventProcessor(BaseEventProcessor):
         node_name = event["metadata"].get("langgraph_node", "")
         return node_name not in excluded_nodes
 
-    def reset_for_new_message(self):
-        """Reset state for a new message"""
+    def _reset_streaming_state(self):
+        """
+        Reset streaming state for a new assistant response.
+        
+        This method implements the Command Pattern to encapsulate
+        state reset logic and ensure clean separation between responses.
+        """
         self.assistant_started = False
         self.streaming_content = ""
-        self.current_tool_calls = []
         self.current_message_id = None
-        self.run_id = None
+        # Note: We don't reset run_id as it should persist across the entire request
+
+    def reset_for_new_message(self):
+        """Reset state for a new message (external interface)"""
+        self._reset_streaming_state()
+        self.run_id = None  # Also reset run_id for completely new conversations
 
 
 class ToolEventProcessor(BaseEventProcessor):
