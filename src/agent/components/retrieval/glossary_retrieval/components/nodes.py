@@ -1,13 +1,11 @@
-from agent.components.retrieval.retriever_config import setup_chroma_vector_store, setup_retriever
+import logging
+from agent.components.retrieval.retriever_config import get_retriever
 from agent.components.retrieval.endpoint_retrieval.components.chains import retrieval_grader
 from agent.components.retrieval.glossary_retrieval.components.states import SelfRAGGraphState, OutputState, InputState
 
-try:
-    glossary_vector_store = setup_chroma_vector_store("obp_glossary")
-except:
-    print("Glossary vector store not found, check configuration")
+logger = logging.getLogger("agent.components.retrieval.glossary_retrieval")
 
-glossary_retriever = setup_retriever(k=8, vector_store=glossary_vector_store)
+glossary_retriever = get_retriever("glossary", search_kwargs={"k": 8})
 
 async def retrieve_glossary(state):
     """
@@ -19,7 +17,7 @@ async def retrieve_glossary(state):
     Returns:
         state (dict): New key added to state, documents, that contains retrieved documents
     """
-    print("---RETRIEVE ITEMS---")
+    logging.info("---RETRIEVE ITEMS---")
     rewritten_question = state.get("rewritten_question", "")
     total_retries = state.get("total_retries", 0)
     
@@ -43,7 +41,7 @@ async def grade_documents_glossary(state):
         state (dict): Updates documents key with only filtered relevant documents
     """
 
-    print("---CHECK DOCUMENT RELEVANCE TO QUESTION---")
+    logging.info("---CHECK DOCUMENT RELEVANCE TO QUESTION---")
     question = state["question"]
     documents = state["documents"]
     
@@ -57,10 +55,10 @@ async def grade_documents_glossary(state):
         )
         grade = score.binary_score
         if grade == "yes":
-            print(f"{d.metadata["title"]}", " [RELEVANT]")
+            logging.info(f"{d.metadata["title"]}", " [RELEVANT]")
             filtered_docs.append(d)
         else:
-            print(f"{d.metadata["title"]}", " [NOT RELEVANT]")
+            logging.info(f"{d.metadata["title"]}", " [NOT RELEVANT]")
             continue
         
     # If there are three or less relevant endpoints then retry query after rewriting question
@@ -69,11 +67,11 @@ async def grade_documents_glossary(state):
     if len(filtered_docs) <= retry_threshold:
         retry_query=True
         
-    #print("Documents: \n", "\n".join(f"{doc.metadata["title"]}" for doc in filtered_docs))
+    #logging.info("Documents: \n", "\n".join(f"{doc.metadata["title"]}" for doc in filtered_docs))
     return {"documents": documents, "relevant_documents": filtered_docs, "question": question, "retry_query": retry_query}
               
 async def return_documents(state) -> OutputState:
     """Return the relevant documents"""
-    print("---RETRUN RELEVANT DOCUMENTS---")
+    logging.info("---RETRUN RELEVANT DOCUMENTS---")
     relevant_documents = state["relevant_documents"]
     return {"relevant_documents": relevant_documents}

@@ -4,19 +4,21 @@ import json
 from langchain_core.documents import Document
 from typing import List
 from agent.components.retrieval.endpoint_retrieval.components.states import OutputState
-from agent.components.retrieval.retriever_config import setup_chroma_vector_store, setup_retriever
+from agent.components.retrieval.retriever_config import get_retriever
 from agent.components.retrieval.endpoint_retrieval.components.chains import retrieval_grader, endpoint_question_rewriter
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Setup vector store and retriever
-retriever_batch_size = os.getenv("ENDPOINT_RETRIEVER_BATCH_SIZE", 5)
-retriever_retry_threshold = os.getenv("ENDPOINT_RETRIEVER_RETRY_THRESHOLD", 2)
-retriever_max_retries = os.getenv("ENDPOINT_RETRIEVER_MAX_RETRIES", 2)
+# Configuration from environment variables
+RETRIEVER_BATCH_SIZE = int(os.getenv("ENDPOINT_RETRIEVER_BATCH_SIZE", "5"))
+RETRIEVER_RETRY_THRESHOLD = int(os.getenv("ENDPOINT_RETRIEVER_RETRY_THRESHOLD", "2"))
+RETRIEVER_MAX_RETRIES = int(os.getenv("ENDPOINT_RETRIEVER_MAX_RETRIES", "2"))
 
-endpoint_vector_store = setup_chroma_vector_store("obp_endpoints")
-endpoint_retriever = setup_retriever(k=int(retriever_batch_size), vector_store=endpoint_vector_store)
+endpoint_retriever = get_retriever(
+    collection_name="obp_endpoints",
+    search_kwargs={"k": RETRIEVER_BATCH_SIZE}
+)
 
 async def retrieve_endpoints(state):
     """
