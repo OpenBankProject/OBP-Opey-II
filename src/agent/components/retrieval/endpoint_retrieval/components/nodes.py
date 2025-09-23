@@ -3,9 +3,9 @@ import json
 
 from langchain_core.documents import Document
 from typing import List
-from agent.components.sub_graphs.endpoint_retrieval.components.states import OutputState
-from agent.components.sub_graphs.retriever_config import setup_chroma_vector_store, setup_retriever
-from agent.components.sub_graphs.endpoint_retrieval.components.chains import retrieval_grader, endpoint_question_rewriter
+from agent.components.retrieval.endpoint_retrieval.components.states import OutputState
+from agent.components.retrieval.retriever_config import setup_chroma_vector_store, setup_retriever
+from agent.components.retrieval.endpoint_retrieval.components.chains import retrieval_grader, endpoint_question_rewriter
 from dotenv import load_dotenv
 
 load_dotenv()

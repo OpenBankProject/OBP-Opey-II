@@ -1,8 +1,9 @@
 from typing_extensions import TypedDict
-from typing import List, Annotated, Dict
-from agent.components.sub_graphs.endpoint_retrieval.components.reducers import add_docs
+from typing import List, Annotated
+from agent.components.retrieval.endpoint_retrieval.components.reducers import add_docs
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
+
 class InputState(BaseModel):
     question: str = Field(description="query to search vector database with")
 
@@ -37,4 +38,4 @@ class OutputState(TypedDict):
     """
     Graph returns relevant endpoints
     """
-    output_documents: List[Dict[str, str]]
+    relevant_documents: Annotated[List[str], add_docs]

@@ -1,5 +1,5 @@
-from agent.components.sub_graphs.endpoint_retrieval.endpoint_retrieval_graph import endpoint_retrieval_graph
-from agent.components.sub_graphs.glossary_retrieval.glossary_retrieval_graph import glossary_retrieval_graph
+from agent.components.retrieval.endpoint_retrieval.endpoint_retrieval_graph import endpoint_retrieval_graph
+from agent.components.retrieval.glossary_retrieval.glossary_retrieval_graph import glossary_retrieval_graph
 
 # Define endpoint retrieval tool nodes
 

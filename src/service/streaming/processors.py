@@ -20,7 +20,9 @@ class BaseEventProcessor:
 
     async def process(self, event: LangGraphStreamEvent) -> AsyncGenerator[StreamEvent, None]:
         """Process a LangGraph event and yield stream events"""
-        yield  # Make this an async generator
+        yield StreamEventFactory.error(
+            error_message="BaseEventProcessor cannot process events directly",
+        )
 
 
 class AssistantEventProcessor(BaseEventProcessor):

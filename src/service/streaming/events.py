@@ -190,7 +190,7 @@ class StreamEventFactory:
             log_parts.append(event_data)
         
         # Add footer
-        log_parts.append("=" * len(header))
+        log_parts.append("=" * len(header) + "\n")
         
         # Join all parts and log as a single message
         log_message = "\n".join(log_parts)

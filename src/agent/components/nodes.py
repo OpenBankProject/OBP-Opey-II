@@ -12,8 +12,8 @@ from langchain_anthropic.chat_models import ChatAnthropic
 from langchain_core.messages import ToolMessage, SystemMessage, RemoveMessage, AIMessage, trim_messages
 #from langchain_community.callbacks import get_openai_callback, get_bedrock_anthropic_callback
 
-from agent.components.sub_graphs.endpoint_retrieval.endpoint_retrieval_graph import endpoint_retrieval_graph
-from agent.components.sub_graphs.glossary_retrieval.glossary_retrieval_graph import glossary_retrieval_graph
+from agent.components.retrieval.endpoint_retrieval.endpoint_retrieval_graph import endpoint_retrieval_graph
+from agent.components.retrieval.glossary_retrieval.glossary_retrieval_graph import glossary_retrieval_graph
 from agent.components.states import OpeyGraphState
 from agent.components.chains import conversation_summarizer_chain
 from agent.utils.model_factory import get_llm

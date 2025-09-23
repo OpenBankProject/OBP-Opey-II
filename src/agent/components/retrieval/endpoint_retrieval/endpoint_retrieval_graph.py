@@ -1,11 +1,10 @@
 from langgraph.graph import END, StateGraph, START
-from agent.components.sub_graphs.endpoint_retrieval.components.states import SelfRAGGraphState, OutputState, InputState
-from agent.components.sub_graphs.endpoint_retrieval.components.nodes import grade_documents, retrieve_endpoints, transform_query, return_documents
-from agent.components.sub_graphs.endpoint_retrieval.components.edges import decide_to_generate
+from agent.components.retrieval.endpoint_retrieval.components.states import SelfRAGGraphState, OutputState, InputState
+from agent.components.retrieval.endpoint_retrieval.components.nodes import grade_documents, retrieve_endpoints, transform_query, return_documents
+from agent.components.retrieval.endpoint_retrieval.components.edges import decide_to_generate
 
 workflow = StateGraph(SelfRAGGraphState, input=InputState, output=OutputState)
 
-# Define the nodes
 # Define the nodes
 
 workflow.add_node("retrieve_endpoints", retrieve_endpoints)  # retrieve

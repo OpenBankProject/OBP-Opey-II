@@ -118,7 +118,7 @@ class OBPConsentAuth(BaseAuth):
                 logger.debug(f"OBP consent validation successful - Full response: {response_data}")
                 return True
             else:
-                error_text = await response.text()
+                error_text = await response.read()
                 logger.error(f'Error checking OBP consent: {error_text}')
                 logger.debug(f"OBP consent validation failed - Status: {response.status}")
                 logger.debug(f"OBP consent validation failed - Response headers: {dict(response.headers)}")

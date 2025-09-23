@@ -1,6 +1,6 @@
-from agent.components.sub_graphs.retriever_config import setup_chroma_vector_store, setup_retriever
-from agent.components.sub_graphs.endpoint_retrieval.components.chains import retrieval_grader
-from agent.components.sub_graphs.glossary_retrieval.components.states import SelfRAGGraphState, OutputState, InputState
+from agent.components.retrieval.retriever_config import setup_chroma_vector_store, setup_retriever
+from agent.components.retrieval.endpoint_retrieval.components.chains import retrieval_grader
+from agent.components.retrieval.glossary_retrieval.components.states import SelfRAGGraphState, OutputState, InputState
 
 try:
     glossary_vector_store = setup_chroma_vector_store("obp_glossary")
