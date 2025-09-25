@@ -37,6 +37,7 @@ class VectorStoreConfig:
     embedding_model: str = "text-embedding-3-large"
     search_type: str = "similarity"
     search_kwargs: Optional[Dict[str, Any]] = field(default_factory=lambda: {"k": 5})
+    overwrite_existing: bool = False
     
     def __post_init__(self):
         """Validate configuration parameters (Fail-Fast)"""
@@ -52,6 +53,9 @@ class VectorStoreConfig:
         # Ensure k parameter is valid
         if "k" in self.search_kwargs and not isinstance(self.search_kwargs["k"], int):
             raise ConfigurationError("search_kwargs['k'] must be an integer")
+        
+        if not isinstance(self.overwrite_existing, bool):
+            raise ConfigurationError("overwrite_existing must be a boolean")
 
 
 class EmbeddingsFactory:
@@ -86,11 +90,11 @@ class EmbeddingsFactory:
         except Exception as e:
             raise VectorStoreError(f"Failed to create embeddings for model '{model_name}': {e}")
 
-class VectorStoreFactory(ABC):
+class VectorStoreProvider(ABC):
     """
-    Abstract factory for creating vector stores.
+    Abstract provider for vector stores with lifecycle management.
     
-    Implements the Abstract Factory pattern (GoF Design Patterns).
+    Provides methods to access, validate and manage vector stores.
     """
     @abstractmethod
     def is_empty(self, vector_store: VectorStore) -> bool:
@@ -102,7 +106,7 @@ class VectorStoreFactory(ABC):
         Returns:
             bool: True if empty, False otherwise
         """
-        pass
+        raise NotImplementedError("is_empty is not implemented for this provider")
     
     @abstractmethod
     def get_all_collection_names(self) -> list:
@@ -112,7 +116,7 @@ class VectorStoreFactory(ABC):
         Returns:
             list: List of collection names
         """
-        pass
+        raise NotImplementedError("get_all_collection_names is not implemented for this provider")
     
     @abstractmethod
     def get_vector_store(self, config: VectorStoreConfig) -> VectorStore:
@@ -128,30 +132,58 @@ class VectorStoreFactory(ABC):
         Raises:
             VectorStoreError: If vector store creation fails
         """
-        pass
+        raise NotImplementedError("get_vector_store is not implemented for this provider")
+    
+    @abstractmethod
+    def create_vector_store(self, config: VectorStoreConfig) -> VectorStore:
+        """
+        Create a new vector store instance.
+        
+        Args:
+            config: Vector store configuration
+            
+        Returns:
+            VectorStore: New vector store instance
+            
+        Raises:
+            VectorStoreError: If vector store creation fails
+        """
+        raise NotImplementedError("create_vector_store is not implemented for this provider")
     
     @abstractmethod
     def validate_configuration(self) -> None:
         """
-        Validate factory-specific configuration.
+        Validate provider-specific configuration.
         
         Raises:
             ConfigurationError: If configuration is invalid
         """
-        pass
-
-
-class ChromaVectorStoreFactory(VectorStoreFactory):
-    """
-    Factory for creating Chroma vector stores.
+        raise NotImplementedError("validate_configuration is not implemented for this provider")
     
-    Implements the Factory Method pattern with proper validation
+    def validate_document_schemas(self, vector_store, collection_name: str) -> bool:
+        """
+        Optional method to validate document schemas in the vector store.
+        
+        Args:
+            vector_store: Instance of VectorStore
+            collection_name: Name of the collection to validate
+        Returns:
+            bool: True if schemas are valid, False otherwise
+        """
+        raise NotImplementedError("validate_document_schemas is not implemented for this provider")
+
+
+class ChromaVectorStoreProvider(VectorStoreProvider):
+    """
+    Provider for Chroma vector stores.
+    
+    Implements vector store operations with proper validation
     following the Fail-Fast principle.
     """
     
     def __init__(self, persist_directory: Optional[Union[str, Path]] = None):
         """
-        Initialize Chroma factory with directory validation.
+        Initialize Chroma provider with directory validation.
         
         Args:
             persist_directory: Path to ChromaDB persistence directory
@@ -162,7 +194,7 @@ class ChromaVectorStoreFactory(VectorStoreFactory):
         self.persist_directory = self._resolve_directory(persist_directory)
         self.validate_configuration()
         
-        logger.info(f"ChromaDB factory initialized with directory: {self.persist_directory}")
+        logger.info(f"ChromaDB provider initialized with directory: {self.persist_directory}")
     
     def is_empty(self, vector_store: VectorStore) -> bool:
         """
@@ -236,7 +268,7 @@ class ChromaVectorStoreFactory(VectorStoreFactory):
     
     def get_vector_store(self, config: VectorStoreConfig) -> Chroma:
         """
-        Create a Chroma vector store with proper error handling.
+        Get an existing Chroma vector store.
         
         Args:
             config: Vector store configuration
@@ -258,12 +290,105 @@ class ChromaVectorStoreFactory(VectorStoreFactory):
             )
         except Exception as e:
             raise VectorStoreError(
+                f"Failed to get Chroma vector store for collection "
+                f"'{config.collection_name}': {e}"
+            )
+            
+    def create_vector_store(self, config: VectorStoreConfig) -> Chroma:
+        """
+        Create a new Chroma vector store instance.
+        
+        Args:
+            config: Vector store configuration
+            
+        Returns:
+            Chroma: New Chroma vector store instance
+            
+        Raises:
+            VectorStoreError: If vector store creation fails
+            ConfigurationError: If attempting to overwrite existing collection without permission
+        """
+        try:
+            # Check if collection already exists
+            existing_collections = self.get_all_collection_names()
+            
+            # If collection exists and overwrite is not explicitly allowed
+            if config.collection_name in existing_collections and not config.overwrite_existing:
+                raise ConfigurationError(
+                    f"Collection '{config.collection_name}' already exists. "
+                    f"Set 'overwrite_existing=True' in the config to overwrite."
+                )
+            
+            embeddings = EmbeddingsFactory.create_embeddings(config.embedding_model)
+            
+            # Create the vector store with explicit overwrite permission
+            return Chroma(
+                collection_name=config.collection_name,
+                embedding_function=embeddings,
+                persist_directory=str(self.persist_directory),
+                create_collection_if_not_exists=True
+            )
+        except ConfigurationError:
+            # Re-raise configuration errors directly
+            raise
+        except Exception as e:
+            raise VectorStoreError(
                 f"Failed to create Chroma vector store for collection "
                 f"'{config.collection_name}': {e}"
             )
+    
+    def validate_document_schemas(self, vector_store: Chroma, collection_name: str) -> bool:
+        """
+        Validate that documents in the vector store conform to expected schemas.
+        
+        Args:
+            vector_store: The vector store to validate
+            collection_name: Name of the collection
+            
+        Returns:
+            bool: True if valid, False otherwise
+        """
+        try:
+            # Get a sample of documents to validate (limit to 5 for efficiency)
+            if hasattr(vector_store, "_collection"):
+                sample = vector_store.get(limit=5)
+                
+                if not sample or not sample["documents"]:
+                    logger.warning(f"No documents found in collection '{collection_name}' for schema validation")
+                    return False
+                    
+                # Validate based on collection type
+                if collection_name == "obp_glossary":
+                    from src.database.document_schemas import GlossaryDocumentSchema
+                    for i, doc in enumerate(sample["documents"]):
+                        metadata = {k: sample["metadatas"][i][k] for k in sample["metadatas"][i]}
+                        try:
+                            GlossaryDocumentSchema.from_document(doc, metadata)
+                        except Exception as e:
+                            logger.warning(f"Schema validation failed for glossary document: {e}")
+                            return False
+                
+                elif collection_name == "obp_endpoints":
+                    from src.database.document_schemas import EndpointDocumentSchema
+                    for i, doc in enumerate(sample["documents"]):
+                        metadata = {k: sample["metadatas"][i][k] for k in sample["metadatas"][i]}
+                        try:
+                            EndpointDocumentSchema.from_document(doc, metadata)
+                        except Exception as e:
+                            logger.warning(f"Schema validation failed for endpoint document: {e}")
+                            return False
+                        
+                else:
+                    logger.warning(f"No specific schema validation implemented for collection '{collection_name}'")
+                
+                return True
+        except Exception as e:
+            logger.warning(f"Error during schema validation: {e}")
+            
+        return False
 
 
-class RetrieverManager:
+class VectorStoreManager:
     """
     Manager for vector store retrievers with caching.
     
@@ -271,14 +396,14 @@ class RetrieverManager:
     Uses caching to improve performance (Industry standard pattern).
     """
     
-    def __init__(self, vector_store_factory: VectorStoreFactory):
+    def __init__(self, vector_store_factory: VectorStoreProvider):
         """
         Initialize retriever manager with dependency injection.
         
         Args:
             vector_store_factory: Factory for creating vector stores
         """
-        if not isinstance(vector_store_factory, VectorStoreFactory):
+        if not isinstance(vector_store_factory, VectorStoreProvider):
             raise ConfigurationError("vector_store_factory must implement VectorStoreFactory")
         
         self._vector_store_factory = vector_store_factory
@@ -289,7 +414,7 @@ class RetrieverManager:
         """Generate cache key for vector store instances"""
         return f"{config.collection_name}_{config.embedding_model}"
     
-    def get_vector_store(self, config: VectorStoreConfig) -> VectorStore:
+    def get_langchain_vector_store(self, config: VectorStoreConfig) -> VectorStore:
         """
         Get or create a vector store instance with caching.
         
@@ -336,7 +461,7 @@ class RetrieverManager:
             
         return vector_store
     
-    def get_retriever(self, config: VectorStoreConfig) -> VectorStoreRetriever:
+    def get_langchain_retriever(self, config: VectorStoreConfig) -> VectorStoreRetriever:
         """
         Get a retriever from the vector store.
         
@@ -350,7 +475,7 @@ class RetrieverManager:
             VectorStoreError: If retriever creation fails
         """
         try:
-            vector_store = self.get_vector_store(config)
+            vector_store = self.get_langchain_vector_store(config)
             
             return vector_store.as_retriever(
                 search_type=config.search_type,
@@ -368,28 +493,28 @@ class RetrieverManager:
 # Thread-safe singleton implementation (Industry standard pattern)
 _factory_lock = Lock()
 _default_vector_store_type = os.getenv("VECTOR_STORE_TYPE", "chroma").lower()
-_default_retriever_manager: Optional[RetrieverManager] = None
+_default_vector_store_manager: Optional[VectorStoreManager] = None
 
 
-def _get_vector_store_factory() -> VectorStoreFactory:
+def _get_vector_store_provider() -> VectorStoreProvider:
     """
-    Factory method to create the appropriate vector store factory.
+    Factory method to create the appropriate vector store provider.
     
     Implements the Factory Method pattern with proper error handling.
     
     Returns:
-        VectorStoreFactory: Configured factory instance
+        VectorStoreProvider: Configured provider instance
         
     Raises:
         ConfigurationError: If vector store type is unsupported
     """
     if _default_vector_store_type == "chroma":
-        return ChromaVectorStoreFactory()
+        return ChromaVectorStoreProvider()
     # TODO: Add other vector store types here following the same pattern
     # elif _default_vector_store_type == "pinecone":
-    #     return PineconeVectorStoreFactory()
+    #     return PineconeVectorStoreProvider()
     # elif _default_vector_store_type == "weaviate":
-    #     return WeaviateVectorStoreFactory()
+    #     return WeaviateVectorStoreProvider()
     else:
         raise ConfigurationError(
             f"Unsupported vector store type: '{_default_vector_store_type}'. "
@@ -397,7 +522,7 @@ def _get_vector_store_factory() -> VectorStoreFactory:
         )
 
 
-def get_retriever_manager() -> RetrieverManager:
+def get_vector_store_manager() -> VectorStoreManager:
     """
     Get the default retriever manager using thread-safe singleton pattern.
     
@@ -411,8 +536,8 @@ def get_retriever_manager() -> RetrieverManager:
             # Double-checked locking pattern
             if _default_retriever_manager is None:
                 try:
-                    factory = _get_vector_store_factory()
-                    _default_retriever_manager = RetrieverManager(factory)
+                    factory = _get_vector_store_provider()
+                    _default_retriever_manager = VectorStoreManager(factory)
                     logger.info("Default RetrieverManager initialized")
                 except Exception as e:
                     logger.error(f"Failed to initialize RetrieverManager: {e}")
@@ -439,8 +564,8 @@ def get_retriever(collection_name: str, **kwargs) -> VectorStoreRetriever:
     """
     try:
         config = VectorStoreConfig(collection_name=collection_name, **kwargs)
-        manager = get_retriever_manager()
-        return manager.get_retriever(config)
+        manager = get_vector_store_manager()
+        return manager.get_langchain_retriever(config)
     except Exception as e:
         logger.error(f"Failed to get retriever for collection '{collection_name}': {e}")
         raise
@@ -463,8 +588,8 @@ def get_vector_store(collection_name: str, **kwargs) -> VectorStore:
     """
     try:
         config = VectorStoreConfig(collection_name=collection_name, **kwargs)
-        manager = get_retriever_manager()
-        return manager.get_vector_store(config)
+        manager = get_vector_store_manager()
+        return manager.get_langchain_vector_store(config)
     except Exception as e:
         logger.error(f"Failed to get vector store for collection '{collection_name}': {e}")
         raise
