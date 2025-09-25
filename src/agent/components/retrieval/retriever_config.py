@@ -39,7 +39,7 @@ class VectorStoreConfig:
     search_kwargs: Optional[Dict[str, Any]] = field(default_factory=lambda: {"k": 5})
     
     def __post_init__(self):
-        """Validate configuration parameters (Fail-Fast principle)"""
+        """Validate configuration parameters (Fail-Fast)"""
         if not isinstance(self.collection_name, str) or not self.collection_name.strip():
             raise ConfigurationError("collection_name must be a non-empty string")
         
@@ -76,28 +76,48 @@ class EmbeddingsFactory:
         Raises:
             ConfigurationError: If model_name is invalid
         """
+        from agent.utils.model_factory import get_embedding_model
+        
         if not isinstance(model_name, str) or not model_name.strip():
             raise ConfigurationError("model_name must be a non-empty string")
         
         try:
-            # TODO: Integrate with model_factory when embedding models are added
-            return OpenAIEmbeddings(model=model_name)
+            return get_embedding_model(model_name)
         except Exception as e:
             raise VectorStoreError(f"Failed to create embeddings for model '{model_name}': {e}")
-
 
 class VectorStoreFactory(ABC):
     """
     Abstract factory for creating vector stores.
     
     Implements the Abstract Factory pattern (GoF Design Patterns).
-    Follows the Open/Closed Principle - open for extension, closed for modification.
     """
+    @abstractmethod
+    def is_empty(self, vector_store: VectorStore) -> bool:
+        """
+        Check if the vector store is empty.
+        
+        Args:
+            vector_store: Instance of VectorStore
+        Returns:
+            bool: True if empty, False otherwise
+        """
+        pass
     
     @abstractmethod
-    def create_vector_store(self, config: VectorStoreConfig) -> VectorStore:
+    def get_all_collection_names(self) -> list:
         """
-        Create a vector store instance.
+        Retrieve all collection names from the vector store.
+        
+        Returns:
+            list: List of collection names
+        """
+        pass
+    
+    @abstractmethod
+    def get_vector_store(self, config: VectorStoreConfig) -> VectorStore:
+        """
+        Get an existing vector store.
         
         Args:
             config: Vector store configuration
@@ -144,6 +164,37 @@ class ChromaVectorStoreFactory(VectorStoreFactory):
         
         logger.info(f"ChromaDB factory initialized with directory: {self.persist_directory}")
     
+    def is_empty(self, vector_store: VectorStore) -> bool:
+        """
+        Check if a Chroma vector store is empty.
+        
+        Args:
+            vector_store: The Chroma vector store to check
+            
+        Returns:
+            bool: True if empty, False otherwise
+        """
+        try:
+            # For Chroma, we can check the number of elements in the collection
+            # The _collection attribute holds the underlying Chroma collection
+            if hasattr(vector_store, "_collection"):
+                count = vector_store._collection.count()
+                return count == 0
+            return True  # If no _collection attribute, assume empty
+        except Exception as e:
+            logger.warning(f"Failed to check if vector store is empty: {e}")
+            return False  # Conservative approach: assume not empty on error
+
+    def get_all_collection_names(self) -> list:
+        """Retrieve all collection names from the ChromaDB directory"""
+        try:
+            import chromadb
+            client = chromadb.PersistentClient(path=str(self.persist_directory))
+            collections = client.list_collections()
+            return [col.name for col in collections]
+        except Exception as e:
+            raise VectorStoreError(f"Failed to list collections: {e}")
+    
     def _resolve_directory(self, persist_directory: Optional[Union[str, Path]]) -> Path:
         """Resolve and validate the persistence directory"""
         if persist_directory:
@@ -183,7 +234,7 @@ class ChromaVectorStoreFactory(VectorStoreFactory):
                 f"ChromaDB directory '{self.persist_directory}' is not writable"
             )
     
-    def create_vector_store(self, config: VectorStoreConfig) -> Chroma:
+    def get_vector_store(self, config: VectorStoreConfig) -> Chroma:
         """
         Create a Chroma vector store with proper error handling.
         
@@ -202,7 +253,8 @@ class ChromaVectorStoreFactory(VectorStoreFactory):
             return Chroma(
                 collection_name=config.collection_name,
                 embedding_function=embeddings,
-                persist_directory=str(self.persist_directory)
+                persist_directory=str(self.persist_directory),
+                create_collection_if_not_exists=False
             )
         except Exception as e:
             raise VectorStoreError(
@@ -257,11 +309,32 @@ class RetrieverManager:
         
         if cache_key not in self._vector_stores:
             logger.info(f"Creating new vector store for collection: {config.collection_name}")
-            self._vector_stores[cache_key] = self._vector_store_factory.create_vector_store(config)
+            self._vector_stores[cache_key] = self._vector_store_factory.get_vector_store(config)
         else:
             logger.debug(f"Using cached vector store for collection: {config.collection_name}")
         
-        return self._vector_stores[cache_key]
+        vector_store = self._vector_stores[cache_key]
+        
+        # Check if the vector store is empty and log a warning
+        if self._vector_store_factory.is_empty(vector_store):
+            logger.warning(
+                f"Vector store for collection '{config.collection_name}' appears to be empty. "
+                f"This may cause retrieval operations to return empty results."
+            )
+        elif not self._vector_store_factory.get_all_collection_names():
+            logger.warning(
+                f"No collections found in the vector store directory. "
+                f"{'Ensure that the directory \'' + str(self._vector_store_factory.persist_directory) + '\' ' if hasattr(self._vector_store_factory, 'persist_directory') else ''}"
+                f"contains valid collections."
+            )
+        else:
+            logger.info(
+                f"Vector store for collection '{config.collection_name}' is ready with "
+                f"{self._vector_store_factory.get_all_collection_names()} collections available."
+            )
+            
+            
+        return vector_store
     
     def get_retriever(self, config: VectorStoreConfig) -> VectorStoreRetriever:
         """
@@ -328,9 +401,6 @@ def get_retriever_manager() -> RetrieverManager:
     """
     Get the default retriever manager using thread-safe singleton pattern.
     
-    Implements the Singleton pattern with double-checked locking
-    (Industry standard for thread-safe singletons).
-    
     Returns:
         RetrieverManager: Thread-safe singleton instance
     """
@@ -355,8 +425,6 @@ def get_retriever_manager() -> RetrieverManager:
 def get_retriever(collection_name: str, **kwargs) -> VectorStoreRetriever:
     """
     Get a retriever for the specified collection (database-agnostic).
-    
-    Implements the Facade pattern to simplify client interaction.
     
     Args:
         collection_name: Name of the collection

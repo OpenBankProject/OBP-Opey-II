@@ -2,8 +2,6 @@
 ai_env
 .vscode/
 __pycache__/
-src/data/
-src/data*
 checkpoints.db
 checkpoints.db-shm
 checkpoints.db-wal

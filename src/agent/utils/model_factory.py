@@ -7,6 +7,8 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_ollama import ChatOllama
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_openai import OpenAIEmbeddings
+from langchain_core.embeddings import Embeddings
 
 from dotenv import load_dotenv
 
@@ -43,6 +45,19 @@ MODEL_CONFIGS = {
     "llama3.1:70b": ModelConfig("llama3.1:70b", "ollama"),
     "qwen2.5": ModelConfig("qwen2.5", "ollama"),
     "mistral": ModelConfig("mistral", "ollama"),
+}
+
+# Add embedding model configs
+EMBEDDING_MODELS = {
+    "text-embedding-3-large": {
+        "provider": "openai",
+        "api_key_env": "OPENAI_API_KEY",
+    },
+    "text-embedding-3-small": {
+        "provider": "openai", 
+        "api_key_env": "OPENAI_API_KEY",
+    },
+    # Add more embedding models as needed
 }
 
 # Define size categories with fallback chains
@@ -92,6 +107,47 @@ class ModelFactory:
             return False
             
         return True
+    
+    def _check_embedding_model_availability(self, model_name: str) -> bool:
+        """Check if an embedding model is available"""
+        if model_name not in EMBEDDING_MODELS:
+            return False
+            
+        config = EMBEDDING_MODELS[model_name]
+        
+        # Check if required API key is available
+        if config.get("api_key_env") and not os.getenv(config["api_key_env"]):
+            return False
+            
+        return True
+    
+    def get_embedding_model(self, model_name: str = "text-embedding-3-large") -> Embeddings:
+        """
+        Get an embedding model instance
+        
+        Args:
+            model_name: Name of the embedding model
+            
+        Returns:
+            An embedding model instance
+            
+        Raises:
+            ValueError: If the model is unknown or unavailable
+        """
+        if model_name not in EMBEDDING_MODELS:
+            raise ValueError(f"Unknown embedding model: {model_name}")
+        
+        config = EMBEDDING_MODELS[model_name]
+        
+        if not self._check_embedding_model_availability(model_name):
+            raise ValueError(f"Embedding model {model_name} is not available. Check API keys.")
+        
+        if config["provider"] == "openai":
+            return OpenAIEmbeddings(model=model_name)
+        
+        # Add support for other providers here
+        raise ValueError(f"Unsupported embedding model provider: {config['provider']}")
+
     
     def get_available_models(self) -> List[str]:
         """Get list of available models based on current environment"""
@@ -225,6 +281,18 @@ def get_model(model_name: str, **kwargs) -> BaseChatModel:
         >>> model = get_model("claude-3-5-sonnet-20241022")
     """
     return model_factory.get_model(model_name, **kwargs)
+
+def get_embedding_model(model_name: str = "text-embedding-3-large") -> Embeddings:
+    """
+    Get an embedding model instance
+    
+    Args:
+        model_name: Name of the embedding model
+        
+    Returns:
+        An embedding model instance
+    """
+    return model_factory.get_embedding_model(model_name)
 
 def get_available_models() -> List[str]:
     """Get list of currently available models"""

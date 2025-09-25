@@ -31,9 +31,10 @@ class TestBaseAuth:
 
 class TestAuthConfig:
     def test_init_with_auth_types(self):
-        mock_auth = Mock()
-        config = AuthConfig({'consent': mock_auth})
-        assert config.consent == mock_auth
+        mock_auth = Mock(spec=BaseAuth)
+        config = AuthConfig()
+        config.register_auth_strategy('consent', mock_auth)
+        assert config.auth_strategies['consent'] == mock_auth
 
 
 class TestOBPConsentAuth:
