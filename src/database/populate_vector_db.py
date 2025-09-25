@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Script to populate ChromaDB with OBP glossary and endpoint documentation.
-This script matches the original working database format.
+Script to populate vector databases with OBP glossary and endpoint documentation.
+Uses the vector store provider abstraction for database agnosticism.
 """
 
 import os
@@ -14,9 +14,14 @@ from dotenv import load_dotenv
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings
 from langchain.schema import Document
+from agent.components.retrieval.retriever_config import (
+    VectorStoreConfig, 
+    get_vector_store_manager, 
+    VectorStoreError,
+    ConfigurationError
+)
+from database.document_schemas import GlossaryDocumentSchema, EndpointDocumentSchema
 
 # Load environment variables
 load_dotenv()
@@ -51,9 +56,10 @@ def fetch_obp_data(url: str) -> Dict[str, Any]:
         raise
 
 def process_glossary_data(glossary_data: Dict[str, Any]) -> List[Document]:
-    """Process OBP glossary data into documents for vector storage."""
-    documents = []
-
+    """Process OBP glossary data into documents for vector storage with schema validation."""
+    validated_documents = []
+    validation_errors = 0
+    
     # Debug: Print the structure to understand the data format
     print(f"Glossary data keys: {list(glossary_data.keys()) if isinstance(glossary_data, dict) else 'Not a dict'}")
 
@@ -74,13 +80,9 @@ def process_glossary_data(glossary_data: Dict[str, Any]) -> List[Document]:
 
     print(f"Found {len(glossary_items)} glossary items to process")
 
-    # Debug: Print first item structure if available
-    if glossary_items and len(glossary_items) > 0:
-        print(f"Sample glossary item keys: {list(glossary_items[0].keys()) if isinstance(glossary_items[0], dict) else 'Not a dict'}")
-        print(f"Sample description structure: {type(glossary_items[0].get('description', ''))}")
-
     for item in glossary_items:
         if not isinstance(item, dict):
+            validation_errors += 1
             continue
 
         # Extract title
@@ -105,62 +107,42 @@ def process_glossary_data(glossary_data: Dict[str, Any]) -> List[Document]:
         # Clean up the description - remove excessive whitespace and newlines
         if description:
             description = description.strip()
-            # Skip items with empty or whitespace-only descriptions
-            if not description:
+
+        # Validate using schema
+        try:
+            # Skip items with empty title or description
+            if not title or not description:
+                validation_errors += 1
                 continue
-
-        if title and description:
-            # Create a comprehensive text for embedding
-            content = f"Title: {title}\nDescription: {description}"
-
-            # Add metadata for filtering and identification
-            metadata = {
-                "source": "obp_glossary",
-                "title": title,
-                "type": "glossary_item"
-            }
-
-            documents.append(Document(
-                page_content=content,
-                metadata=metadata
+                
+            # Create schema instance for validation
+            schema = GlossaryDocumentSchema(
+                title=title,
+                description=description
+            )
+            
+            # Transform to Document using schema methods
+            validated_documents.append(Document(
+                page_content=schema.to_document_content(),
+                metadata=schema.to_metadata()
             ))
+            
+        except Exception as e:
+            validation_errors += 1
+            print(f"Validation error for glossary item '{title}': {e}")
+            continue
 
-    print(f"Created {len(documents)} glossary documents")
-    return documents
-
-def get_all_obp_tags() -> List[str]:
-    """Get all possible OBP tags for metadata initialization."""
-    return [
-        "Old-Style", "Transaction-Request", "API", "Bank", "Account", "Account-Access",
-        "Direct-Debit", "Standing-Order", "Account-Metadata", "Account-Application",
-        "Account-Public", "Account-Firehose", "FirehoseData", "PublicData", "PrivateData",
-        "Transaction", "Transaction-Firehose", "Counterparty-Metadata", "Transaction-Metadata",
-        "View-Custom", "View-System", "Entitlement", "Role", "Scope", "OwnerViewRequired",
-        "Counterparty", "KYC", "Customer", "Onboarding", "User", "User-Invitation",
-        "Customer-Meeting", "Experimental", "Person", "Card", "Sandbox", "Branch", "ATM",
-        "Product", "Product-Collection", "Open-Data", "Consumer", "Data-Warehouse", "FX",
-        "Customer-Message", "Metric", "Documentation", "Berlin-Group", "Signing Baskets",
-        "UKOpenBanking", "MXOpenFinance", "Aggregate-Metrics", "System-Integrity", "Webhook",
-        "Mocked-Data", "Consent", "Method-Routing", "WebUi-Props", "Endpoint-Mapping",
-        "Rate-Limits", "Counterparty-Limits", "Api-Collection", "Dynamic-Resource-Doc",
-        "Dynamic-Message-Doc", "DAuth", "Dynamic", "Dynamic-Entity", "Dynamic-Entity-Manage",
-        "Dynamic-Endpoint", "Dynamic-Endpoint-Manage", "JSON-Schema-Validation",
-        "Authentication-Type-Validation", "Connector-Method", "Berlin-Group-M", "PSD2",
-        "Account Information Service (AIS)", "Confirmation of Funds Service (PIIS)",
-        "Payment Initiation Service (PIS)", "Directory", "UK-AccountAccess", "UK-Accounts",
-        "UK-Balances", "UK-Beneficiaries", "UK-DirectDebits", "UK-DomesticPayments",
-        "UK-DomesticScheduledPayments", "UK-DomesticStandingOrders", "UK-FilePayments",
-        "UK-FundsConfirmations", "UK-InternationalPayments", "UK-InternationalScheduledPayments",
-        "UK-InternationalStandingOrders", "UK-Offers", "UK-Partys", "UK-Products",
-        "UK-ScheduledPayments", "UK-StandingOrders", "UK-Statements", "UK-Transactions",
-        "AU-Banking"
-    ]
+    print(f"Created {len(validated_documents)} valid glossary documents")
+    if validation_errors > 0:
+        print(f"Skipped {validation_errors} invalid glossary items")
+    
+    return validated_documents
 
 def process_swagger_data(swagger_data: Dict[str, Any]) -> List[Document]:
-    """Process OBP swagger documentation into documents matching original format."""
-    documents = []
-    all_tags = get_all_obp_tags()
-
+    """Process OBP swagger documentation into documents with schema validation."""
+    validated_documents = []
+    validation_errors = 0
+    
     # Process paths (endpoints)
     paths = swagger_data.get("paths", {})
     print(f"Processing {len(paths)} API endpoints...")
@@ -168,87 +150,184 @@ def process_swagger_data(swagger_data: Dict[str, Any]) -> List[Document]:
     for path, methods in paths.items():
         for method, details in methods.items():
             if isinstance(details, dict):
-                # Extract key information
-                summary = details.get("summary", "")
-                operation_id = details.get("operationId", "")
-                tags = details.get("tags", [])
+                try:
+                    # Extract key information
+                    operation_id = details.get("operationId", "")
+                    tags = details.get("tags", [])
+                    
+                    # Validate using schema
+                    schema = EndpointDocumentSchema(
+                        path=path,
+                        method=method,
+                        operation_id=operation_id,
+                        details=details,
+                        tags=tags
+                    )
+                    
+                    # Transform to Document using schema methods
+                    validated_documents.append(Document(
+                        page_content=schema.to_document_content(),
+                        metadata=schema.to_metadata()
+                    ))
+                    
+                except Exception as e:
+                    validation_errors += 1
+                    print(f"Validation error for endpoint {method.upper()} {path}: {e}")
+                    continue
 
-                # Create the raw JSON content that matches original format
-                # This is a single path object as it appears in swagger
-                path_content = {path: {method: details}}
+    print(f"Created {len(validated_documents)} valid endpoint documents")
+    if validation_errors > 0:
+        print(f"Skipped {validation_errors} invalid endpoint definitions")
+        
+    return validated_documents
 
-                # Convert to JSON string for storage
-                content = json.dumps(path_content)
+def validate_document_collection(documents: List[Document], collection_name: str) -> bool:
+    """
+    Validate an entire collection of documents against schema requirements.
+    
+    Args:
+        documents: List of documents to validate
+        collection_name: Name of the collection for logging
+        
+    Returns:
+        bool: True if all documents are valid
+    """
+    if not documents:
+        print(f"No documents to validate for {collection_name}")
+        return False
+    
+    print(f"Validating {len(documents)} documents for {collection_name}...")
+    
+    schema_class = None
+    if collection_name == "obp_glossary":
+        schema_class = GlossaryDocumentSchema
+    elif collection_name == "obp_endpoints":
+        schema_class = EndpointDocumentSchema
+    else:
+        print(f"Unknown collection type: {collection_name}")
+        return False
+    
+    valid_count = 0
+    errors = []
+    
+    for i, doc in enumerate(documents):
+        try:
+            # Try to reconstruct schema from document to validate format
+            schema_instance = schema_class.from_document(doc.page_content, doc.metadata)
+            
+            # Verify we can convert it back
+            test_content = schema_instance.to_document_content()
+            test_metadata = schema_instance.to_metadata()
+            
+            if not test_content or not test_metadata:
+                errors.append(f"Document {i} produced empty content or metadata")
+                continue
+                
+            valid_count += 1
+            
+        except Exception as e:
+            errors.append(f"Document {i} validation error: {e}")
+    
+    # Report validation results
+    if valid_count == len(documents):
+        print(f"✓ All {valid_count} documents in {collection_name} are valid")
+        return True
+    else:
+        print(f"✗ Only {valid_count}/{len(documents)} documents in {collection_name} are valid")
+        if errors:
+            print(f"First few errors:")
+            for e in errors[:3]:  # Show only first few errors
+                print(f"  - {e}")
+            if len(errors) > 3:
+                print(f"  ... and {len(errors) - 3} more errors")
+        return False
 
-                # Create metadata that matches original format
-                metadata = {
-                    "document_id": f"{method.upper()}-{path.replace('/', '-').replace('{', '').replace('}', '')}",
-                    "method": method.upper(),
-                    "operation_id": operation_id,
-                    "path": path,
-                    "tags": ", ".join(tags) if tags else ""
-                }
-
-                # Add OBP tag metadata (all false except for matching tags)
-                for tag in all_tags:
-                    metadata[f"OBP_tag_{tag}"] = tag in tags
-
-                documents.append(Document(
-                    page_content=content,
-                    metadata=metadata
-                ))
-
-    print(f"Created {len(documents)} endpoint documents")
-    return documents
-
-def setup_vector_store(collection_name: str, chroma_dir: str) -> Chroma:
-    """Set up ChromaDB vector store."""
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
-
-    # Ensure directory exists
-    os.makedirs(chroma_dir, exist_ok=True)
-
-    vector_store = Chroma(
-        collection_name=collection_name,
-        embedding_function=embeddings,
-        persist_directory=chroma_dir
-    )
-
-    return vector_store
-
-def populate_collection(documents: List[Document], collection_name: str, chroma_dir: str):
-    """Populate a specific ChromaDB collection with documents."""
+def populate_collection(documents: List[Document], collection_name: str, chroma_dir: str = None):
+    """
+    Populate a vector database collection using the provider abstraction with schema validation.
+    
+    Args:
+        documents: List of documents to add to the collection
+        collection_name: Name of the collection
+        chroma_dir: Legacy parameter (optional, kept for compatibility)
+    """
     if not documents:
         print(f"No documents to add to {collection_name}")
         return
 
-    print(f"Setting up vector store for collection: {collection_name}")
-    vector_store = setup_vector_store(collection_name, chroma_dir)
-
-    print(f"Adding {len(documents)} documents to {collection_name}...")
-
-    # Clear existing collection
     try:
-        vector_store.delete_collection()
-        print(f"Cleared existing {collection_name} collection")
+        # Validate documents against schema
+        if not validate_document_collection(documents, collection_name):
+            print(f"WARNING: Some documents for {collection_name} failed validation")
+            proceed = input("Do you want to proceed with insertion anyway? (y/n): ").lower()
+            if proceed != 'y':
+                print(f"Aborting population of {collection_name}")
+                return
+            print(f"Proceeding with insertion despite validation errors")
+        
+        print(f"Setting up vector store for collection: {collection_name}")
+        
+        # Get the vector store manager using the configured provider
+        manager = get_vector_store_manager()
+        
+        # Create configuration with overwrite_existing=True to replace existing collection
+        config = VectorStoreConfig(
+            collection_name=collection_name,
+            embedding_model="text-embedding-3-large",
+            overwrite_existing=True  # Important: We want to replace existing collections
+        )
+        
+        print(f"Getting vector store provider for collection: {collection_name}")
+        # Get the provider from the manager to use lower-level operations
+        provider = manager._vector_store_provider
+        
+        # Check if collection exists
+        existing_collections = provider.get_all_collection_names()
+        if collection_name in existing_collections:
+            print(f"Collection {collection_name} already exists, it will be replaced")
+        
+        # Create a new vector store with overwrite permission
+        print(f"Creating vector store for collection: {collection_name}")
+        vector_store = provider.create_vector_store(config)
+        
+        print(f"Adding {len(documents)} documents to {collection_name}...")
+        
+        # Add documents in batches to avoid memory issues
+        batch_size = 100
+        for i in range(0, len(documents), batch_size):
+            batch = documents[i:i + batch_size]
+            vector_store.add_documents(batch)
+            print(f"Added batch {i//batch_size + 1}/{(len(documents) + batch_size - 1)//batch_size}")
+        
+        print(f"Successfully populated {collection_name} with {len(documents)} documents")
+        
+        # Verify document schemas in the vector store
+        if hasattr(provider, 'validate_document_schemas'):
+            try:
+                schema_valid = provider.validate_document_schemas(vector_store, collection_name)
+                if schema_valid:
+                    print(f"✓ Document schemas in {collection_name} validated successfully")
+                else:
+                    print(f"✗ Document schemas in {collection_name} validation failed")
+            except NotImplementedError:
+                print(f"Schema validation not supported by the current provider")
+        
+        # Clear cache to ensure fresh data on next retrieval
+        manager.clear_cache()
+        
+    except ConfigurationError as e:
+        print(f"Configuration error: {e}")
+        sys.exit(1)
+    except VectorStoreError as e:
+        print(f"Vector store error: {e}")
+        sys.exit(1)
     except Exception as e:
-        print(f"Note: Could not clear existing collection (this is normal if collection doesn't exist): {e}")
-
-    # Recreate vector store after clearing
-    vector_store = setup_vector_store(collection_name, chroma_dir)
-
-    # Add documents in batches to avoid memory issues
-    batch_size = 100
-    for i in range(0, len(documents), batch_size):
-        batch = documents[i:i + batch_size]
-        vector_store.add_documents(batch)
-        print(f"Added batch {i//batch_size + 1}/{(len(documents) + batch_size - 1)//batch_size}")
-
-    print(f"Successfully populated {collection_name} with {len(documents)} documents")
+        print(f"Unexpected error: {e}")
+        sys.exit(1)
 
 def main():
-    """Main function to populate ChromaDB collections."""
-    print("Starting ChromaDB population script...")
+    """Main function to populate vector database collections."""
+    print("Starting vector database population script...")
 
     try:
         # Get configuration
@@ -272,11 +351,12 @@ def main():
 
         # Populate collections
         print("\n" + "="*50)
-        print("POPULATING CHROMADB")
+        print("POPULATING VECTOR DATABASE")
         print("="*50)
 
-        populate_collection(glossary_documents, "obp_glossary", config["chroma_dir"])
-        populate_collection(endpoint_documents, "obp_endpoints", config["chroma_dir"])
+        # Now using the database-agnostic population method
+        populate_collection(glossary_documents, "obp_glossary")
+        populate_collection(endpoint_documents, "obp_endpoints")
 
         print("\n" + "="*50)
         print("POPULATION COMPLETE")

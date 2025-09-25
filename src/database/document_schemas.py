@@ -16,6 +16,7 @@ class GlossaryDocumentSchema:
     def to_metadata(self) -> Dict[str, Any]:
         """Convert schema to document metadata"""
         return {
+            "document_id": self.title.replace(" ", "_").lower(),
             "title": self.title,
             "type": self.type
         }

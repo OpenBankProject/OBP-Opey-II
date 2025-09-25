@@ -96,6 +96,16 @@ class VectorStoreProvider(ABC):
     
     Provides methods to access, validate and manage vector stores.
     """
+    
+    def __init__(self, persist_directory: Optional[Union[str, Path]] = None):
+        """
+        Initialize provider with optional directory configuration.
+        
+        Args:
+            persist_directory: Path to persistence directory (if applicable)
+        """
+        self.persist_directory = persist_directory
+    
     @abstractmethod
     def is_empty(self, vector_store: VectorStore) -> bool:
         """
@@ -396,19 +406,19 @@ class VectorStoreManager:
     Uses caching to improve performance (Industry standard pattern).
     """
     
-    def __init__(self, vector_store_factory: VectorStoreProvider):
+    def __init__(self, vector_store_provider: VectorStoreProvider):
         """
         Initialize retriever manager with dependency injection.
         
         Args:
-            vector_store_factory: Factory for creating vector stores
+            vector_store_provider: Factory for creating vector stores
         """
-        if not isinstance(vector_store_factory, VectorStoreProvider):
-            raise ConfigurationError("vector_store_factory must implement VectorStoreFactory")
+        if not isinstance(vector_store_provider, VectorStoreProvider):
+            raise ConfigurationError("vector_store_provider must implement VectorStoreProvider")
         
-        self._vector_store_factory = vector_store_factory
+        self._vector_store_provider = vector_store_provider
         self._vector_stores: Dict[str, VectorStore] = {}
-        logger.info(f"RetrieverManager initialized with {type(vector_store_factory).__name__}")
+        logger.info(f"RetrieverManager initialized with {type(vector_store_provider).__name__}")
     
     def _generate_cache_key(self, config: VectorStoreConfig) -> str:
         """Generate cache key for vector store instances"""
@@ -433,29 +443,29 @@ class VectorStoreManager:
         cache_key = self._generate_cache_key(config)
         
         if cache_key not in self._vector_stores:
-            logger.info(f"Creating new vector store for collection: {config.collection_name}")
-            self._vector_stores[cache_key] = self._vector_store_factory.get_vector_store(config)
+            logger.info(f"Caching new vector store for collection: {config.collection_name}")
+            self._vector_stores[cache_key] = self._vector_store_provider.get_vector_store(config)
         else:
             logger.debug(f"Using cached vector store for collection: {config.collection_name}")
         
         vector_store = self._vector_stores[cache_key]
         
         # Check if the vector store is empty and log a warning
-        if self._vector_store_factory.is_empty(vector_store):
+        if self._vector_store_provider.is_empty(vector_store):
             logger.warning(
                 f"Vector store for collection '{config.collection_name}' appears to be empty. "
                 f"This may cause retrieval operations to return empty results."
             )
-        elif not self._vector_store_factory.get_all_collection_names():
+        elif not self._vector_store_provider.get_all_collection_names():
             logger.warning(
                 f"No collections found in the vector store directory. "
-                f"{'Ensure that the directory \'' + str(self._vector_store_factory.persist_directory) + '\' ' if hasattr(self._vector_store_factory, 'persist_directory') else ''}"
+                f"{'Ensure that the directory \'' + str(self._vector_store_provider.persist_directory) + '\' ' if hasattr(self._vector_store_provider, 'persist_directory') else ''}"
                 f"contains valid collections."
             )
         else:
             logger.info(
                 f"Vector store for collection '{config.collection_name}' is ready with "
-                f"{self._vector_store_factory.get_all_collection_names()} collections available."
+                f"{self._vector_store_provider.get_all_collection_names()} collections available."
             )
             
             
@@ -524,26 +534,26 @@ def _get_vector_store_provider() -> VectorStoreProvider:
 
 def get_vector_store_manager() -> VectorStoreManager:
     """
-    Get the default retriever manager using thread-safe singleton pattern.
+    Get the default vector store manager using thread-safe singleton pattern.
     
     Returns:
-        RetrieverManager: Thread-safe singleton instance
+        VectorStoreManager: Thread-safe singleton instance
     """
-    global _default_retriever_manager
+    global _default_vector_store_manager
     
-    if _default_retriever_manager is None:
+    if _default_vector_store_manager is None:
         with _factory_lock:
             # Double-checked locking pattern
-            if _default_retriever_manager is None:
+            if _default_vector_store_manager is None:
                 try:
-                    factory = _get_vector_store_provider()
-                    _default_retriever_manager = VectorStoreManager(factory)
-                    logger.info("Default RetrieverManager initialized")
+                    provider = _get_vector_store_provider()
+                    _default_vector_store_manager = VectorStoreManager(provider)
+                    logger.info("Default VectorStoreManager initialized")
                 except Exception as e:
-                    logger.error(f"Failed to initialize RetrieverManager: {e}")
-                    raise ConfigurationError(f"Failed to initialize retriever manager: {e}")
+                    logger.error(f"Failed to initialize VectorStoreManager: {e}")
+                    raise ConfigurationError(f"Failed to initialize vector store manager: {e}")
     
-    return _default_retriever_manager
+    return _default_vector_store_manager
 
 
 # Database-agnostic convenience functions (Facade pattern)
@@ -602,9 +612,9 @@ def reset_singleton() -> None:
     This function is useful for unit testing to ensure clean state
     between test runs.
     """
-    global _default_retriever_manager
+    global _default_vector_store_manager
     with _factory_lock:
-        if _default_retriever_manager:
-            _default_retriever_manager.clear_cache()
-        _default_retriever_manager = None
+        if _default_vector_store_manager:
+            _default_vector_store_manager.clear_cache()
+        _default_vector_store_manager = None
         logger.info("Singleton instance reset")

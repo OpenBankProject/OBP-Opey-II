@@ -5,7 +5,7 @@ from agent.components.retrieval.glossary_retrieval.components.states import Self
 
 logger = logging.getLogger("agent.components.retrieval.glossary_retrieval")
 
-glossary_retriever = get_retriever("glossary", search_kwargs={"k": 8})
+glossary_retriever = get_retriever("obp_glossary", search_kwargs={"k": 8})
 
 async def retrieve_glossary(state):
     """
@@ -55,10 +55,10 @@ async def grade_documents_glossary(state):
         )
         grade = score.binary_score
         if grade == "yes":
-            logging.info(f"{d.metadata["title"]}", " [RELEVANT]")
+            logging.info(f"{d.metadata["title"]}" + " [RELEVANT]")
             filtered_docs.append(d)
         else:
-            logging.info(f"{d.metadata["title"]}", " [NOT RELEVANT]")
+            logging.info(f"{d.metadata["title"]}" + " [NOT RELEVANT]")
             continue
         
     # If there are three or less relevant endpoints then retry query after rewriting question
