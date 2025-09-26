@@ -99,7 +99,7 @@ async def grade_documents(state):
             continue
 
     # If there are less documents than the threshold then retry query after rewriting question
-    retry_threshold = int(retriever_retry_threshold)
+    retry_threshold = int(RETRIEVER_RETRY_THRESHOLD)
 
     if len(filtered_docs) < retry_threshold:
         retry_query=True
