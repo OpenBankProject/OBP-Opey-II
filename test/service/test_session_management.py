@@ -7,29 +7,6 @@ import os
 import json
 
 
-@pytest.fixture
-def get_obp_consent():
-
-    consumer_id = os.getenv("OBP_CONSUMER_ID")
-    print("Consumer ID:", consumer_id)  
-
-    consent_body = {
-        "everything": True,
-        "entitlements": [],
-        "views": [],
-        "consumer_id": consumer_id # set consumer ID to Opey Consumer ID
-    }
-
-    print("Consent Body:", consent_body)
-
-    consent_response = sync_obp_requests("POST", "/obp/v5.1.0/my/consents/IMPLICIT", json.dumps(consent_body), consumer_key=os.getenv("API_EXPLORER_CONSUMER_KEY"))
-    if not consent_response:
-        raise ValueError(f"Error fetching consent from OBP")
-    consent = consent_response.json()
-
-    return consent.get("jwt")
-
-
 @pytest_asyncio.fixture(loop_scope="session")
 async def create_session(client: AsyncClient, get_obp_consent):
     """
