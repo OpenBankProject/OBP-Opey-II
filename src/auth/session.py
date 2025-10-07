@@ -1,6 +1,7 @@
 import os
 
 from fastapi_sessions.frontends.implementations import SessionCookie, CookieParameters
+from fastapi_sessions.frontends.implementations.cookie import SameSiteEnum
 from uuid import UUID
 from fastapi_sessions.backends.implementations import InMemoryBackend
 from fastapi_sessions.session_verifier import SessionVerifier
@@ -20,7 +21,7 @@ secure_cookies = os.getenv("SECURE_COOKIES", "true").lower() == "true"
 
 cookie_params = CookieParameters(
     secure=secure_cookies,
-    samesite="lax",
+    samesite=SameSiteEnum.none,
     domain=None,  # Allow cookies on any domain including localhost
     path="/",
 )
