@@ -32,7 +32,17 @@ python src/scripts/populate_vector_db.py
 ### 3. Setting up the environemnet 
 First you will need to rename the `.env.example` file to `.env` and change several parameters. You have options on which LLM provider you decide to use for the backend agent system. 
 ### Using different AI models
-MODE
+To use change the model used by opey set the environment variables:
+
+```env
+MODEL_PROVIDER="anthropic"
+MODEL_NAME="claude-sonnet-4"
+```
+Just note that the provider must match the MODEL_NAME i.e. you cannot use MODEL_PROVDER="anthropic" and MODEL_NAME="gpt-4.1"
+
+### Adding a new LLM
+Not all LLMs are supported by default, they need to be manually added in the config.
+If you want to add a new model, edit `MODEL_CONFIGS` in `./src/agent/utils/model_factory.py`
 
 ```
 ### Ollama (Run models locally)
@@ -46,12 +56,10 @@ Pull a model that you want (and that supports [tool calling](https://ollama.com/
 
 Then set
 ```
-MODEL_PROVIDER='anthropic'
+MODEL_PROVIDER='ollama'
 
-OLLAMA_SMALL_MODEL="llama3.2"
-OLLAMA_MEDIUM_MODEL="llama3.2"
+MODEL_NAME="llama3.2"
 ```
-Note that the small and medium models are set as the same here, but you can pull a different model and set that.
 
 ### 4. Open Bank Project (OBP) credentials
 In order for the agent to communicate with the Open Bank Project API, we need to set credentials in the env. First sign up and get an API key on your specific instance of OBP i.e. https://apisandbox.openbankproject.com/ (this should match the `OBP_BASE_URL` in the env). Then set:

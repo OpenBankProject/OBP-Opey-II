@@ -42,6 +42,7 @@ MODEL_CONFIGS = {
     
     # Anthropic models
     "claude-sonnet-4": ModelConfig("claude-sonnet-4-20250514", LLMProviders.ANTHROPIC, "ANTHROPIC_API_KEY"),
+    "claude-sonnet-4.5": ModelConfig("claude-sonnet-4-5-20250929", LLMProviders.ANTHROPIC, "ANTHROPIC_API_KEY"),
     
     # Ollama models (no API key required)
     "llama3.1": ModelConfig("llama3.1", LLMProviders.OLLAMA),
@@ -198,7 +199,6 @@ class ModelFactory:
             return ChatAnthropic(
                 model_name=config.model_id,
                 api_key=os.getenv(config.api_key_env),
-                max_tokens=kwargs.get("max_tokens", config.default_max_tokens),
                 **model_kwargs
             )
         elif config.provider == LLMProviders.OLLAMA:
@@ -316,8 +316,6 @@ def get_available_models(provider: Optional[LLMProviders] = None) -> List[str]:
     provider: Optional[LLMProviders] specifies filtering by provider
     
     """
-    
-    
     return model_factory.get_available_models(provider)
 
 def list_models_by_provider() -> Dict[str, List[str]]:
