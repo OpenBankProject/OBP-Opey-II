@@ -99,11 +99,9 @@ class OpeySession:
             case "DANGEROUS":
                 logger.info("OBP API mode set to DANGEROUS: All requests to the OBP-API will be available subject to user approval.")
                 tools = base_tools + [self.obp_requests.get_langchain_tool('dangerous')]
-                danger_prompt = "IMPORTANT: You are in DANGEROUS mode. Always request human approval for destructive operations."
                 self.graph = (OpeyAgentGraphBuilder()
                              .with_tools(tools)
                              .with_model(self._model_name, temperature=0.5)
-                             .add_to_system_prompt(danger_prompt)
                              .with_checkpointer(checkpointer)
                              .enable_human_review(True)
                              .build())
