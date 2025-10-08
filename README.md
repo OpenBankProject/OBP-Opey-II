@@ -31,28 +31,11 @@ python src/scripts/populate_vector_db.py
 ```
 ### 3. Setting up the environemnet 
 First you will need to rename the `.env.example` file to `.env` and change several parameters. You have options on which LLM provider you decide to use for the backend agent system. 
-#### OpenAI
-Obtain an OpenAI API key and set `OPENAI_API_KEY="sk-proj-..."` 
+### Using different AI models
+MODE
 
-Then set:
 ```
-MODEL_PROVIDER='openai'
-
-OPENAI_SMALL_MODEL="gpt-4o-mini"
-OPENAI_MEDIUM_MODEL="gpt-4o"
-```
-
-#### Anthropic
-Obtain an Anthropic API key and set `ANTHROPIC_API_KEY="sk-ant-..."`
-
-Then set:
-```
-MODEL_PROVIDER='anthropic'
-
-ANTHROPIC_SMALL_MODEL="claude-3-haiku-20240307"
-ANTHROPIC_MEDIUM_MODEL="claude-3-sonnet-20240229"
-```
-#### Ollama (Run models locally)
+### Ollama (Run models locally)
 This is only reccomended if you can run models on a decent size GPU. Trying to run on CPU will take ages, not run properly or even crash your computer.
 
 [Install](https://ollama.com/download) Ollama on your machine. I.e. for linux:

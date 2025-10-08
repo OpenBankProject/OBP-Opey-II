@@ -43,7 +43,10 @@ class OpeySession:
         # Get consent_jwt from the session data (None for anonymous sessions)
         self.consent_jwt = session_data.consent_jwt
         self.is_anonymous = session_data.is_anonymous
-
+        
+        # Set up the model used
+        self._setup_model()
+        
         # Initialize auth object only if not anonymous
         if not self.is_anonymous:
             self.auth = OBPConsentAuth(consent_jwt=self.consent_jwt)
@@ -67,6 +70,7 @@ class OpeySession:
                 logger.info("OBP API mode set to NONE: Calls to the OBP-API will not be available")
                 self.graph = (OpeyAgentGraphBuilder()
                               .with_tools(base_tools)
+                              .with_model(self._model_name, temperature=0.5)
                               .with_checkpointer(checkpointer)
                               .enable_human_review(False)
                               .build())
@@ -77,6 +81,7 @@ class OpeySession:
                     prompt_addition = "Note: This is an anonymous session with limited capabilities. User can only make GET requests to the OBP-API. Ensure all responses adhere to this restriction."
                     self.graph = (OpeyAgentGraphBuilder()
                                  .with_tools(base_tools)
+                                 .with_model(self._model_name, temperature=0.5)
                                  .add_to_system_prompt(prompt_addition)
                                  .with_checkpointer(checkpointer)
                                  .enable_human_review(False)
@@ -86,6 +91,7 @@ class OpeySession:
                     tools = base_tools + [self.obp_requests.get_langchain_tool('safe')]
                     self.graph = (OpeyAgentGraphBuilder()
                                  .with_tools(tools)
+                                 .with_model(self._model_name, temperature=0.5)
                                  .with_checkpointer(checkpointer)
                                  .enable_human_review(False)
                                  .build())
@@ -96,6 +102,7 @@ class OpeySession:
                 danger_prompt = "IMPORTANT: You are in DANGEROUS mode. Always request human approval for destructive operations."
                 self.graph = (OpeyAgentGraphBuilder()
                              .with_tools(tools)
+                             .with_model(self._model_name, temperature=0.5)
                              .add_to_system_prompt(danger_prompt)
                              .with_checkpointer(checkpointer)
                              .enable_human_review(True)
@@ -108,7 +115,7 @@ class OpeySession:
                 self.graph = (OpeyAgentGraphBuilder()
                              .with_tools(tools)
                              .add_to_system_prompt(test_prompt)
-                             .with_model("large", temperature=0.5)  # Example: use larger model in test
+                             .with_model(self._model_name, temperature=0.5)  # Example: use larger model in test
                              .with_checkpointer(checkpointer)
                              .enable_human_review(False)
                              .build())
@@ -120,7 +127,50 @@ class OpeySession:
 
 
         self.graph.checkpointer = checkpointer
-
+        
+    def _setup_model(self):
+        """
+        Set up the model for the session.
+        """
+        from agent.utils.model_factory import LLMProviders, get_available_models
+        model_provider = os.getenv("MODEL_PROVIDER")
+        if not model_provider:
+            raise ValueError("MODEL_PROVIDER environment variable must be set")
+        
+        if not (model_provider := model_provider.lower()) in [provider.value for provider in LLMProviders]:
+            raise ValueError(f"Unsupported MODEL_PROVIDER: {model_provider}. Supported providers: {[provider.value for provider in LLMProviders]}")
+        
+        try:
+            
+            available_models = get_available_models(LLMProviders(model_provider))
+        except RuntimeError as e:
+            logger.error(f"Error checking available models: {e}")
+            raise
+        
+        logger.info(f"Using model provider: {model_provider}")
+        logger.info(f"Available models for provider {model_provider}: {available_models}")
+        
+        model_name = os.getenv("MODEL_NAME")
+        if not model_name:
+            raise ValueError("MODEL_NAME environment variable must be set")
+        
+        if model_name not in available_models:
+            raise ValueError(f"MODEL_NAME {model_name} is not available for provider {model_provider}. Available models: {available_models}")
+        
+        logger.info(f"Using model: {model_name}")
+        self._model_name = model_name
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
 
     def update_token_usage(self, token_count: int) -> None:
         """
