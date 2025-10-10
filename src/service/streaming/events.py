@@ -115,7 +115,25 @@ class ApprovalRequestEvent(BaseStreamEvent):
     tool_call_id: str = Field(description="Unique identifier for this tool call")
     tool_input: Dict[str, Any] = Field(description="Input arguments to the tool")
     message: str = Field(description="Human readable message about what needs approval")
+    risk_level: str = Field(default="moderate", description="Risk level of the operation (low, moderate, high)")
+    affected_resources: list = Field(default_factory=list, description="List of resources that will be affected")
+    reversible: bool = Field(default=True, description="Whether the operation can be easily reversed")
+    estimated_impact: str = Field(default="", description="Description of the estimated impact")
+    similar_operations_count: int = Field(default=0, description="Number of similar operations performed recently")
+    available_approval_levels: list = Field(default_factory=lambda: ["once"], description="Available approval levels")
+    default_approval_level: str = Field(default="once", description="Default approval level")
 
+    def to_sse_data(self) -> str:
+        return f"data: {self.model_dump_json()}\n\n"
+
+
+class BatchApprovalRequestEvent(BaseStreamEvent):
+    """Event fired when human approval is required for multiple tool calls"""
+    type: Literal["batch_approval_request"] = "batch_approval_request"
+    tool_calls: list = Field(description="List of tool calls requiring approval with their contexts")
+    options: list = Field(default_factory=lambda: ["approve_all", "deny_all", "approve_selected"], 
+                         description="Available batch approval options")
+    
     def to_sse_data(self) -> str:
         return f"data: {self.model_dump_json()}\n\n"
 
@@ -139,6 +157,7 @@ StreamEvent = Union[
     ErrorEvent,
     KeepAliveEvent,
     ApprovalRequestEvent,
+    BatchApprovalRequestEvent,
     StreamEndEvent
 ]
 
@@ -313,19 +332,68 @@ class StreamEventFactory:
         tool_name: str,
         tool_call_id: str,
         tool_input: Dict[str, Any],
-        message: str
+        message: str,
+        risk_level: str = "moderate",
+        affected_resources: Optional[list] = None,
+        reversible: bool = True,
+        estimated_impact: str = "",
+        similar_operations_count: int = 0,
+        available_approval_levels: Optional[list] = None,
+        default_approval_level: str = "once"
     ) -> ApprovalRequestEvent:
         event = ApprovalRequestEvent(
             tool_name=tool_name,
             tool_call_id=tool_call_id,
             tool_input=tool_input,
-            message=message
+            message=message,
+            risk_level=risk_level,
+            affected_resources=affected_resources or [],
+            reversible=reversible,
+            estimated_impact=estimated_impact,
+            similar_operations_count=similar_operations_count,
+            available_approval_levels=available_approval_levels or ["once"],
+            default_approval_level=default_approval_level
         )
         StreamEventFactory._log_event(
             event, 
             "APPROVAL_REQUEST", 
-            {"tool_name": tool_name, "tool_call_id": tool_call_id},
-            {"Approval message": message}
+            {
+                "tool_name": tool_name, 
+                "tool_call_id": tool_call_id,
+                "risk_level": risk_level,
+                "reversible": reversible,
+                "affected_resources_count": len(affected_resources or []),
+                "similar_operations_count": similar_operations_count,
+                "default_approval_level": default_approval_level
+            },
+            {"Approval message": message, "Estimated impact": estimated_impact or "Not specified"}
+        )
+        return event
+
+    @staticmethod
+    def batch_approval_request(
+        tool_calls: list,
+        options: Optional[list] = None
+    ) -> BatchApprovalRequestEvent:
+        """
+        Create a batch approval request event for multiple tool calls.
+        
+        Args:
+            tool_calls: List of approval contexts (from ApprovalContext.model_dump())
+            options: Available batch operations (default: approve_all, deny_all, approve_selected)
+        """
+        event = BatchApprovalRequestEvent(
+            tool_calls=tool_calls,
+            options=options or ["approve_all", "deny_all", "approve_selected"]
+        )
+        StreamEventFactory._log_event(
+            event,
+            "BATCH_APPROVAL_REQUEST",
+            {
+                "tool_calls_count": len(tool_calls),
+                "options": options or ["approve_all", "deny_all", "approve_selected"]
+            },
+            {"Batch approval message": f"Approval required for {len(tool_calls)} operations"}
         )
         return event
 
@@ -338,3 +406,4 @@ class StreamEventFactory:
             {"message": "Stream completed"}
         )
         return event
+

@@ -207,8 +207,11 @@ class OpeyAgentGraphBuilder:
         else:
             compile_kwargs["checkpointer"] = MemorySaver()
         
-        if self._enable_human_review:
-            compile_kwargs["interrupt_before"] = ["human_review"]
+        # Note: We no longer use interrupt_before because human_review_node
+        # uses dynamic interrupt() internally. This allows the node to:
+        # 1. Check pre-existing approvals first
+        # 2. Only interrupt when actually needed
+        # 3. Support batch approvals
         
         return opey_workflow.compile(**compile_kwargs)
     
