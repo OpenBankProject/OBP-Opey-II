@@ -451,7 +451,7 @@ async def user_approval(
     thread_id: str,
     stream_manager: StreamManager = Depends(get_stream_manager)
 ) -> StreamingResponse:
-    print(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
+    logger.info(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
 
     # Create stream input for approval continuation
     approval_user_input = StreamInput(

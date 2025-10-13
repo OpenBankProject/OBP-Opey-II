@@ -2,8 +2,9 @@ import json
 import uuid
 import os
 import logging
+import datetime
 
-from typing import List, Optional
+from typing import List, Dict
 
 from pprint import pprint
 
@@ -16,8 +17,10 @@ from langgraph.types import interrupt
 
 from agent.components.retrieval.endpoint_retrieval.endpoint_retrieval_graph import endpoint_retrieval_graph
 from agent.components.retrieval.glossary_retrieval.glossary_retrieval_graph import glossary_retrieval_graph
-from agent.components.states import OpeyGraphState
+from agent.components.states import OpeyGraphState, make_approval_key
 from agent.components.chains import conversation_summarizer_chain
+from agent.components.tools import ApprovalManager
+from agent.components.tools.approval_models import ApprovalLevel, ApprovalDecision
 from agent.utils.model_factory import get_llm
 
 logger = logging.getLogger("uvicorn.error")
@@ -104,224 +107,164 @@ async def human_review_node(state: OpeyGraphState, config: RunnableConfig):
     """
     Enhanced human review node with dynamic interrupt and ApprovalManager.
     
-    This node:
-    1. Checks if tool calls have pre-existing approvals (session/user/workspace)
-    2. If not approved, uses interrupt() to pause and request approval
-    3. Processes approval decision and updates state
-    4. Only interrupts when actually needed (not on every call)
+    Handles tool call approval workflow:
+    1. Checks for pre-existing approvals (session/user/workspace levels)
+    2. For unapproved calls, uses interrupt() to request human approval
+    3. Processes approval decision and persists based on approval level
     
     Args:
-        state: The graph state
-        config: RunnableConfig containing 'approval_manager' in configurable section
+        state: Graph state containing messages and approval history
+        config: RunnableConfig with 'approval_manager' in configurable section
     """
     logger.info("Entering human review node")
     
-    # Import here to avoid circular dependency
     from agent.components.tools import get_tool_registry
     
     messages = state["messages"]
     if not messages:
         logger.warning("No messages in state")
-        return state
+        return {}
     
     tool_call_message = messages[-1]
     if not (hasattr(tool_call_message, 'tool_calls') and tool_call_message.tool_calls):
-        logger.warning("No tool calls found in latest message")
-        return state
+        logger.warning("No tool calls found in last message")
+        return {}
     
     tool_registry = get_tool_registry()
     
-    # Get approval_manager from config (LangGraph's recommended pattern)
     configurable = config.get("configurable", {}) if config else {}
-    approval_manager = configurable.get("approval_manager")
+    approval_manager: ApprovalManager | None = configurable.get("approval_manager")
     
     if not approval_manager:
-        logger.warning("No approval_manager in config, approval system not configured")
-        # Fallback: use basic interrupt without approval checking
-        return state
+        logger.error("No approval_manager in config")
+        return {}
     
-    # Track which tool calls need approval
-    pending_approvals = []
-    approved_tool_calls = []
+    tool_calls = tool_call_message.tool_calls
+    logger.info(f"Requesting approval for {len(tool_calls)} tool call(s)")
     
-    for tool_call in tool_call_message.tool_calls:
+    tool_messages = []
+    updated_session_approvals = state.get("session_approvals", {}).copy()
+    updated_approval_timestamps = state.get("approval_timestamps", {}).copy()
+    
+    for tool_call in tool_calls:
         tool_name = tool_call["name"]
         tool_args = tool_call["args"]
+        tool_call_id = tool_call["id"]
+        operation = _extract_operation(tool_args)
         
-        # Determine the "operation" key for this tool
-        # For obp_requests, it's the HTTP method
-        operation = tool_args.get("method", "execute").upper()
-        
-        # Check if this tool call requires approval
-        if not tool_registry.should_require_approval(tool_name, tool_args):
-            logger.info(f"Tool call auto-approved by pattern: {tool_name}")
-            approved_tool_calls.append(tool_call["id"])
-            continue
-        
-        # Check multi-level approval (session/user/workspace)
+        # Check if approval already exists at any level
         approval_status = await approval_manager.check_approval(
             state=state,
             tool_name=tool_name,
             operation=operation,
-            config={}  # Will be injected by graph runtime
+            config={}
         )
         
         if approval_status == "approved":
-            logger.info(f"Tool call pre-approved from persistence: {tool_name} {operation}")
-            approved_tool_calls.append(tool_call["id"])
+            logger.info(f"Tool call pre-approved: {tool_name}")
             continue
-        elif approval_status == "denied":
-            logger.info(f"Tool call pre-denied from persistence: {tool_name} {operation}")
-            # Inject denial message immediately
-            state["messages"].append(ToolMessage(
-                content=f"This operation was previously denied: {tool_name} {operation}",
-                tool_call_id=tool_call["id"]
+        
+        if approval_status == "denied":
+            logger.warning(f"Tool call denied: {tool_name}")
+            tool_messages.append(ToolMessage(
+                content=f"Tool call denied by approval policy",
+                tool_call_id=tool_call_id
             ))
             continue
         
-        # Needs approval - build rich context
-        session_history = {
-            "similar_count": _count_similar_operations(state, tool_name, operation),
-            "last_similar_approval": _get_last_approval_time(state, tool_name, operation)
-        }
+        # Check if tool requires approval
+        if not tool_registry.should_require_approval(tool_name, tool_args):
+            logger.info(f"Tool {tool_name} auto-approved by pattern")
+            continue
         
+        # Build rich approval context
+        session_history = _build_session_history(state, tool_name, operation)
         approval_context = tool_registry.build_approval_context(
             tool_name=tool_name,
-            tool_call_id=tool_call["id"],
+            tool_call_id=tool_call_id,
             tool_args=tool_args,
             session_history=session_history
         )
         
-        pending_approvals.append(approval_context)
-    
-    # If all tool calls are already approved/denied, no need to interrupt
-    if not pending_approvals:
-        logger.info("All tool calls pre-approved or denied, continuing without interrupt")
-        return state
-    
-    # Now we need approval - use LangGraph's interrupt()
-    logger.info(f"Requesting approval for {len(pending_approvals)} tool call(s)")
-    
-    # For single tool call approval
-    if len(pending_approvals) == 1:
-        approval_context = pending_approvals[0]
+        logger.info(f"Calling interrupt() for tool: {tool_name}")
         
-        # Use interrupt() to pause execution
-        # NOTE: interrupt() raises a NodeInterrupt exception, it does NOT return a value
-        # The graph will pause here, and when resumed with Command(resume=user_response),
-        # the interrupt() call will return that user_response value
-        logger.info(f"Calling interrupt() for tool: {approval_context.tool_name}")
+        # Interrupt execution and wait for human decision
         user_response = interrupt(approval_context.model_dump())
-        logger.info(f"Interrupt returned with user response: {user_response}")
         
-        # This code only runs after the graph is resumed with user input
-        approved = user_response.get("approved", False)
-        approval_level = user_response.get("approval_level", "once")
+        logger.info(f"Received approval decision: {user_response}")
         
-        if approved:
-            logger.info(f"User approved tool call: {approval_context.tool_call_id}")
+        if user_response.get("approved"):
+            approval_level = user_response.get("approval_level", "once")
+            logger.info(f"User approved: {tool_call_id} at level: {approval_level}")
             
-            # Save approval at specified level
-            from agent.components.tools.approval_models import ApprovalDecision, ApprovalLevel
+            # Convert string to enum
+            try:
+                approval_level_enum = ApprovalLevel(approval_level)
+            except ValueError:
+                logger.warning(f"Invalid approval level '{approval_level}', defaulting to 'once'")
+                approval_level_enum = ApprovalLevel.ONCE
+            
+            # TODO: Allow modified args in the future
             decision = ApprovalDecision(
                 approved=True,
-                approval_level=ApprovalLevel(approval_level)
+                approval_level=approval_level_enum,
+                #modified_args=None,
             )
             
+            # Save approval record
             await approval_manager.save_approval(
                 state=state,
-                tool_name=approval_context.tool_name,
-                operation=approval_context.tool_input.get("method", "execute").upper(),
+                tool_name=tool_name,
+                operation=operation,
                 decision=decision,
                 config={}
             )
-        else:
-            logger.info(f"User denied tool call: {approval_context.tool_call_id}")
             
-            # Inject denial message
-            state["messages"].append(ToolMessage(
-                content=f"User denied request: {user_response.get('feedback', 'Operation not approved')}",
-                tool_call_id=approval_context.tool_call_id
+            # Update session state if session-level approval
+            if approval_level_enum == ApprovalLevel.SESSION:
+                approval_key = make_approval_key(tool_name, operation)
+                updated_session_approvals[approval_key] = True
+                updated_approval_timestamps[approval_key] = datetime.datetime.now()
+        else:
+            logger.info(f"User denied: {tool_call_id}")
+            tool_messages.append(ToolMessage(
+                content=f"Tool call denied by user",
+                tool_call_id=tool_call_id
             ))
     
-    # For batch approval (multiple tool calls)
-    else:
-        batch_payload = {
-            "approval_type": "batch",
-            "tool_calls": [ctx.model_dump() for ctx in pending_approvals],
-            "options": ["approve_all", "deny_all", "approve_selected"]
-        }
-        
-        logger.info(f"Calling interrupt() for batch approval of {len(pending_approvals)} tools")
-        user_response = interrupt(batch_payload)
-        logger.info(f"Batch interrupt returned with user response: {user_response}")
-        
-        # This code only runs after the graph is resumed
-        action = user_response.get("action", "deny_all")
-        
-        if action == "approve_all":
-            for approval_context in pending_approvals:
-                # Save approvals
-                from agent.components.tools.approval_models import ApprovalDecision, ApprovalLevel
-                decision = ApprovalDecision(
-                    approved=True,
-                    approval_level=ApprovalLevel(user_response.get("approval_level", "once"))
-                )
-                await approval_manager.save_approval(
-                    state=state,
-                    tool_name=approval_context.tool_name,
-                    operation=approval_context.tool_input.get("method", "execute").upper(),
-                    decision=decision,
-                    config={}
-                )
-        
-        elif action == "approve_selected":
-            approved_ids = user_response.get("approved_ids", [])
-            for approval_context in pending_approvals:
-                if approval_context.tool_call_id in approved_ids:
-                    # Approve
-                    from agent.components.tools.approval_models import ApprovalDecision, ApprovalLevel
-                    decision = ApprovalDecision(
-                        approved=True,
-                        approval_level=ApprovalLevel.ONCE
-                    )
-                    await approval_manager.save_approval(
-                        state=state,
-                        tool_name=approval_context.tool_name,
-                        operation=approval_context.tool_input.get("method", "execute").upper(),
-                        decision=decision,
-                        config={}
-                    )
-                else:
-                    # Deny
-                    state["messages"].append(ToolMessage(
-                        content="User denied this operation in batch approval",
-                        tool_call_id=approval_context.tool_call_id
-                    ))
-        
-        else:  # deny_all
-            for approval_context in pending_approvals:
-                state["messages"].append(ToolMessage(
-                    content="User denied all operations in batch",
-                    tool_call_id=approval_context.tool_call_id
-                ))
+    # Return state updates
+    return {
+        "messages": tool_messages,
+        "session_approvals": updated_session_approvals,
+        "approval_timestamps": updated_approval_timestamps
+    }
+
+
+def _extract_operation(tool_args: Dict) -> str:
+    """Extract operation identifier from tool args"""
+    if "method" in tool_args and "path" in tool_args:
+        return f"{tool_args['method']}:{tool_args['path']}"
+    return "unknown"
+
+
+def _build_session_history(
+    state: OpeyGraphState, 
+    tool_name: str, 
+    operation: str
+) -> Dict:
+    """Build session history for approval context"""
+    approvals = state.get("session_approvals", {})
+    timestamps = state.get("approval_timestamps", {})
     
-    return state
-
-
-def _count_similar_operations(state: OpeyGraphState, tool_name: str, operation: str) -> int:
-    """Count similar operations in session history"""
-    count = 0
-    session_approvals = state.get("session_approvals", {})
-    for key in session_approvals:
-        if key[0] == tool_name and key[1] == operation:
-            count += 1
-    return count
-
-
-def _get_last_approval_time(state: OpeyGraphState, tool_name: str, operation: str) -> Optional[str]:
-    """Get timestamp of last similar approval"""
-    approval_timestamps = state.get("approval_timestamps", {})
-    key = (tool_name, operation)
-    timestamp = approval_timestamps.get(key)
-    return timestamp.isoformat() if timestamp else None
+    approval_key = make_approval_key(tool_name, operation)
+    
+    # Count similar approved operations
+    similar_count = sum(1 for k in approvals.keys() if k == approval_key)
+    
+    # Get last approval time
+    last_approval_time = timestamps.get(approval_key)
+    
+    return {
+        "similar_count": similar_count,
+        "last_similar_approval": last_approval_time
+    }

@@ -13,7 +13,7 @@ from .approval_models import (
     ApprovalDecision, ApprovalRecord, ApprovalLevel,
     RiskLevel
 )
-from agent.components.states import OpeyGraphState
+from agent.components.states import OpeyGraphState, make_approval_key, parse_approval_key
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class ApprovalManager:
             "denied" - Already denied, reject
             "requires_approval" - Need to ask user
         """
-        key = (tool_name, operation)
+        key = make_approval_key(tool_name, operation)
         thread_id = config.get("configurable", {}).get("thread_id")
         
         # Level 1: Session-level (stored in state)
@@ -136,7 +136,7 @@ class ApprovalManager:
     def _check_session_approval(
         self,
         state: OpeyGraphState,
-        key: Tuple[str, str]
+        key: str
     ) -> Optional[bool]:
         """Check session-level approval from graph state"""
         session_approvals = state.get("session_approvals", {})
@@ -161,13 +161,15 @@ class ApprovalManager:
     async def _check_user_approval(
         self,
         thread_id: str,
-        key: Tuple[str, str]
+        key: str
     ) -> Optional[bool]:
         """Check user-level approval from Redis"""
         if not self.redis:
             return None
         
-        redis_key = f"approval:user:{thread_id}:{key[0]}:{key[1]}"
+        # Parse key to get tool_name and operation
+        tool_name, operation = parse_approval_key(key)
+        redis_key = f"approval:user:{thread_id}:{tool_name}:{operation}"
         
         try:
             result = await self.redis.get(redis_key)
@@ -287,7 +289,7 @@ class ApprovalManager:
             decision: User's approval decision (includes level)
             config: LangGraph config with thread_id
         """
-        key = (tool_name, operation)
+        key = make_approval_key(tool_name, operation)
         thread_id = config.get("configurable", {}).get("thread_id")
         
         logger.info("Saving approval", extra={
@@ -313,18 +315,11 @@ class ApprovalManager:
                 logger.warning("Cannot save user-level approval: Redis not available")
                 # Fallback to session level
                 self._save_session_approval(state, key, decision.approved)
-        
-        elif decision.approval_level == ApprovalLevel.WORKSPACE:
-            logger.warning("WORKSPACE level approval requires admin action - not implemented")
-            # Workspace-level requires config file update (admin only)
-            # For now, save as user-level
-            if self.redis and thread_id:
-                await self._save_user_approval(thread_id, key, decision.approved)
     
     def _save_session_approval(
         self,
         state: OpeyGraphState,
-        key: Tuple[str, str],
+        key: str,
         approved: bool
     ) -> None:
         """Save approval to session state (in-memory, persisted by checkpointer)"""
@@ -345,16 +340,18 @@ class ApprovalManager:
     async def _save_user_approval(
         self,
         thread_id: str,
-        key: Tuple[str, str],
+        key: str,
         approved: bool
     ) -> None:
         """Save approval to Redis for user-level persistence"""
-        redis_key = f"approval:user:{thread_id}:{key[0]}:{key[1]}"
+        # Parse key to get tool_name and operation
+        tool_name, operation = parse_approval_key(key)
+        redis_key = f"approval:user:{thread_id}:{tool_name}:{operation}"
         data = {
             "approved": approved,
             "timestamp": datetime.now().isoformat(),
-            "tool_name": key[0],
-            "operation": key[1]
+            "tool_name": tool_name,
+            "operation": operation
         }
         
         try:
@@ -430,7 +427,7 @@ class ApprovalManager:
         }
         
         for key, approved in session_approvals.items():
-            tool_name, operation = key
+            tool_name, operation = parse_approval_key(key)
             timestamp = approval_timestamps.get(key)
             
             summary["session_approvals"].append({

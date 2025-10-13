@@ -54,31 +54,39 @@ class StreamManager:
                 # Handle approval/denial
                 approved = stream_input.tool_call_approval.approval == "approve"
                 tool_call_id = stream_input.tool_call_approval.tool_call_id
+                approval_level = getattr(stream_input.tool_call_approval, 'level', 'once')
                 
                 if approved:
                     logger.info(f"Tool call approved: {tool_call_id}", extra={
                         "event_type": "tool_approved",
                         "thread_id": thread_id,
-                        "tool_call_id": tool_call_id
+                        "tool_call_id": tool_call_id,
+                        "approval_level": approval_level
                     })
-                    # For approval, just continue - no state change needed
-                    graph_input = None
+                    # Command() resumes the graph and passes the value in the 'resume' argument
+                    # to the interrupted human_review node
+                    from langgraph.types import Command
+                    graph_input = Command(
+                        resume={
+                            "approved": True,
+                            "approval_level": approval_level,
+                            "tool_call_id": tool_call_id
+                        }
+                    )
                 else:
                     logger.info(f"Tool call denied: {tool_call_id}", extra={
                         "event_type": "tool_denied", 
                         "thread_id": thread_id,
                         "tool_call_id": tool_call_id
                     })
-                    # Inject denial message into graph state
-                    await self.graph.aupdate_state(
-                        config,
-                        {"messages": [ToolMessage(
-                            content="User denied request to OBP API",
-                            tool_call_id=tool_call_id
-                        )]},
-                        as_node="tools"
+                    # Resume with denial
+                    from langgraph.types import Command
+                    graph_input = Command(
+                        resume={
+                            "approved": False,
+                            "tool_call_id": tool_call_id
+                        }
                     )
-                    graph_input = None
                     
                 logger.debug("Processing tool call approval", extra={
                     "event_type": "tool_approval_processing",
@@ -105,14 +113,6 @@ class StreamManager:
             last_event = None
             async for langgraph_event in self.graph.astream_events(**kwargs, version="v2"):
                 event_count += 1
-                last_event = langgraph_event
-                
-                # Check if this event contains interrupt information
-                if langgraph_event.get("event") == "on_chain_end":
-                    event_data = langgraph_event.get("data", {})
-                    output = event_data.get("output", {})
-                    if "__interrupt__" in output:
-                        logger.info(f"Found __interrupt__ in stream event: {output['__interrupt__']}")
                 
                 try:
                     # Process each LangGraph event through our orchestrator
@@ -127,10 +127,16 @@ class StreamManager:
                         "langgraph_event_type": langgraph_event.get("event"),
                         "langgraph_event_metadata": langgraph_event.get("metadata", {})
                     })
+                    # Sanitize event data for serialization
+                    safe_details = {
+                        "event_count": event_count,
+                        "event_type": langgraph_event.get("event"),
+                        "error_type": type(e).__name__
+                    }
                     yield StreamEventFactory.error(
                         error_message=error_msg,
                         error_code="langgraph_event_error",
-                        details={"event_count": event_count, "langgraph_event": langgraph_event}
+                        details=safe_details
                     )
 
             logger.info(f"Processed {event_count} LangGraph events", extra={
@@ -141,9 +147,10 @@ class StreamManager:
 
             # After streaming completes, check the final state for interrupts
             # According to LangGraph docs, __interrupt__ appears in the state after stream ends
-            logger.info("Stream completed, checking for interrupts...")
-            async for approval_event in self._handle_approval(config):
-                yield approval_event
+            if not stream_input.tool_call_approval:
+                logger.info("Stream completed, checking for interrupts...")
+                async for approval_event in self._handle_approval(config):
+                    yield approval_event
 
         except Exception as e:
             error_msg = f"Streaming error: {str(e)}"
@@ -153,10 +160,15 @@ class StreamManager:
                 "stream_tokens": stream_input.stream_tokens,
                 "tool_approval": stream_input.tool_call_approval.model_dump() if stream_input.tool_call_approval else None,
             })
+            # Sanitize error details to avoid serialization issues
+            safe_details = {
+                "thread_id": thread_id,
+                "error_type": type(e).__name__
+            }
             yield StreamEventFactory.error(
                 error_message=error_msg,
                 error_code="stream_error",
-                details={"thread_id": thread_id, "config": config}
+                details=safe_details
             )
         finally:
             # Always send stream end event
@@ -265,7 +277,7 @@ class StreamManager:
             yield StreamEventFactory.error(
                 error_message=error_msg,
                 error_code="approval_check_error",
-                details={"thread_id": thread_id}
+                details={"thread_id": thread_id, "error_type": type(e).__name__}
             )
 
     def _requires_approval(self, tool_call: dict) -> bool:

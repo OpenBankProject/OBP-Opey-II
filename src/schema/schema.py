@@ -180,6 +180,9 @@ class ToolCallApproval(BaseModel):
     approval: Literal["approve", "deny"] = Field(
         description="Approval status for the tool call.",
     )
+    level: Literal["once", "session", "user"] = Field(
+        description="Level of approval.",
+    )
     tool_call_id: str = Field(
         description="Tool call ID to approve or deny.",
         examples=["call_Jja7J89XsjrOLA5r!MEOW!SL"],
