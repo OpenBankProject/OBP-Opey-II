@@ -11,8 +11,8 @@ applyTo: '**'
 - Stick to industry standards and best practices. Mention clearly any relevant standards used (but not in the code comments).
 
 # Docs
+- DO NOT CREATE UNNESSECARY DOCUMENTATION OR SUMMARIES OF CHANGES UNLESS EXPLICITLY ASKED.
 - Write clear and concise documentation.
-- Do not create unnessecary documentaion or summaries of changes unless explicitly asked.
 - When writing documentation, prefer diagrams and examples over long text explanations.
 - Prefer in-line code comments over separate documentation when possible.
 - Document functions according to industry standards (e.g. docstrings in Python).

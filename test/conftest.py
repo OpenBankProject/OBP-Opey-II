@@ -6,10 +6,6 @@ import pytest_asyncio
 import logging
 
 from unittest.mock import patch, MagicMock
-from src.agent.components.retrieval.retriever_config import (
-    ChromaVectorStoreFactory,
-    VectorStoreConfig
-)
 
 import pytest
 from service.service import app
@@ -25,6 +21,14 @@ async def client():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost:5000") as client:
         print("Client is ready")
         yield client
+
+@pytest.fixture(scope="session")
+def get_obp_consent():
+    """Fixture to provide OBP consent JWT for testing"""
+    # This is a mock JWT token for testing purposes
+    # In a real scenario, you would generate or retrieve a real JWT
+    return "mock.jwt.token.for.testing"
+
 # Add the parent directory to sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -45,18 +49,4 @@ def mock_chroma_environment():
         yield
 
 
-@pytest.fixture
-def chroma_factory(mock_chroma_environment):
-    """Create a properly configured ChromaVectorStoreFactory"""
-    return ChromaVectorStoreFactory()
-
-
-@pytest.fixture
-def valid_config():
-    """Create a valid VectorStoreConfig"""
-    return VectorStoreConfig(
-        collection_name="test_collection",
-        embedding_model="text-embedding-3-large",
-        search_type="similarity",
-        search_kwargs={"k": 5}
-    )
+# Removed unused fixtures that depend on missing imports
