@@ -145,6 +145,7 @@ async def human_review_node(state: OpeyGraphState, config: RunnableConfig):
     tool_messages = []
     updated_session_approvals = state.get("session_approvals", {}).copy()
     updated_approval_timestamps = state.get("approval_timestamps", {}).copy()
+    interrupted = False  # Track if we called interrupt()
     
     for tool_call in tool_calls:
         tool_name = tool_call["name"]
@@ -187,11 +188,18 @@ async def human_review_node(state: OpeyGraphState, config: RunnableConfig):
         )
         
         logger.info(f"Calling interrupt() for tool: {tool_name}")
+        logger.info(f"Interrupt will suspend graph execution until Command(resume=...) is provided")
         
         # Interrupt execution and wait for human decision
+        # After calling interrupt(), the node MUST complete (not return early)
+        # The graph will suspend AFTER this node completes
+        # On resumption with Command(resume=...), this node runs AGAIN from the start
+        # But this time interrupt() returns the resume value instead of suspending
         user_response = interrupt(approval_context.model_dump())
+        interrupted = True
         
-        logger.info(f"Received approval decision: {user_response}")
+        # === CODE BELOW ONLY RUNS AFTER GRAPH RESUMPTION ===
+        logger.info(f"Graph resumed with approval decision: {user_response}")
         
         if user_response.get("approved"):
             approval_level = user_response.get("approval_level", "once")
@@ -233,6 +241,14 @@ async def human_review_node(state: OpeyGraphState, config: RunnableConfig):
             ))
     
     # Return state updates
+    # CRITICAL: If we called interrupt(), the graph will suspend AFTER this return
+    # This return is for when we resume or when no interrupt was needed
+    if interrupted:
+        logger.info(f"human_review_node completed AFTER interrupt - graph will now suspend")
+    else:
+        logger.info(f"human_review_node completed without interrupt - proceeding to next node")
+    
+    logger.info(f"Returning with {len(tool_messages)} tool message(s)")
     return {
         "messages": tool_messages,
         "session_approvals": updated_session_approvals,

@@ -22,6 +22,34 @@ import os
 class OpeyAgentGraphBuilder:
     """
     Builder pattern for creating flexible Opey agent configurations.
+    
+    Architecture Notes:
+    -------------------
+    When human_review is enabled, the graph follows a clean separation of concerns:
+    
+    1. **Edge Function (needs_human_review)**: Simple routing logic
+       - Checks: "Are there tool calls?"
+       - Routes to: human_review_node OR END
+       - Does NOT duplicate approval logic
+    
+    2. **ToolRegistry**: Declarative approval rules
+       - Defines which tools/patterns require approval
+       - Provides metadata about risk levels, affected resources
+       - Supports custom approval logic per tool
+    
+    3. **ApprovalManager**: Multi-level approval state
+       - Checks existing approvals (session/user/workspace)
+       - Persists approval decisions
+       - Handles TTL and expiration
+    
+    4. **human_review_node**: Intelligent approval orchestration
+       - Uses ToolRegistry to check if approval needed
+       - Uses ApprovalManager to check for existing approvals
+       - Only interrupts when truly needed
+       - Handles approval decisions and persistence
+    
+    This design eliminates duplication and makes approval rules easy to modify
+    without touching the graph structure.
     """
 
     def __init__(self):
@@ -165,15 +193,17 @@ class OpeyAgentGraphBuilder:
         
         if self._enable_human_review:
             # Human review workflow
+            # Route to human_review node when tool calls are present
+            # The human_review_node will intelligently decide whether to interrupt
             opey_workflow.add_conditional_edges(
                 "opey",
                 needs_human_review,
                 {
-                    "tools": "tools" if self._tools else END,
                     "human_review": "human_review",
                     END: END
                 }
             )
+            # After human_review, always proceed to tools (approval logic is in human_review_node)
             opey_workflow.add_edge("human_review", "tools" if self._tools else "opey")
         elif self._tools:
             # Direct tool routing

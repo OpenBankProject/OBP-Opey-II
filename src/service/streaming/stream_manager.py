@@ -145,12 +145,17 @@ class StreamManager:
                 "event_count": event_count
             })
 
-            # After streaming completes, check the final state for interrupts
+            # After streaming completes, ALWAYS check the final state for interrupts
+            # Even if this request was resuming from a previous interrupt, the graph
+            # might have hit ANOTHER interrupt that needs to be handled
             # According to LangGraph docs, __interrupt__ appears in the state after stream ends
-            if not stream_input.tool_call_approval:
-                logger.info("Stream completed, checking for interrupts...")
-                async for approval_event in self._handle_approval(config):
-                    yield approval_event
+            logger.info("Stream completed, checking for interrupts...", extra={
+                "event_type": "checking_interrupts",
+                "thread_id": thread_id,
+                "was_approval_response": bool(stream_input.tool_call_approval)
+            })
+            async for approval_event in self._handle_approval(config):
+                yield approval_event
 
         except Exception as e:
             error_msg = f"Streaming error: {str(e)}"
@@ -198,21 +203,34 @@ class StreamManager:
             # According to LangGraph docs, __interrupt__ appears in state.values after stream ends
             agent_state = await self.graph.aget_state(config)
 
+            logger.info(f"=== CHECKING FOR INTERRUPTS ===", extra={
+                "event_type": "interrupt_check_start",
+                "thread_id": thread_id
+            })
             logger.info(f"Agent state details:")
             logger.info(f"  - Next nodes: {agent_state.next}")
             logger.info(f"  - Tasks: {len(agent_state.tasks) if agent_state.tasks else 0} tasks")
             logger.info(f"  - Has __interrupt__ in values: {'__interrupt__' in agent_state.values}")
+            logger.info(f"  - State values keys: {list(agent_state.values.keys()) if agent_state.values else 'None'}")
             
             # Collect all interrupts from tasks
             interrupts = []
             if agent_state.tasks:
-                for task in agent_state.tasks:
-                    if hasattr(task, 'interrupts') and task.interrupts:
-                        logger.info(f"  - Found {len(task.interrupts)} interrupt(s) in task '{task.name}'")
-                        interrupts.extend(task.interrupts)
+                logger.info(f"  - Inspecting {len(agent_state.tasks)} task(s) for interrupts")
+                for i, task in enumerate(agent_state.tasks):
+                    logger.info(f"    Task {i}: name='{task.name}', has_interrupts={hasattr(task, 'interrupts')}")
+                    if hasattr(task, 'interrupts'):
+                        logger.info(f"      Interrupts count: {len(task.interrupts) if task.interrupts else 0}")
+                        if task.interrupts:
+                            interrupts.extend(task.interrupts)
+            else:
+                logger.info(f"  - No tasks in agent state")
             
             if not interrupts:
-                logger.debug("No interrupts found, continuing without approval")
+                logger.info("No interrupts found in state after stream completed", extra={
+                    "event_type": "no_interrupts_found",
+                    "thread_id": thread_id
+                })
                 return
             
             logger.info(f"Processing {len(interrupts)} interrupt(s)")

@@ -11,13 +11,14 @@ applyTo: '**'
 - Stick to industry standards and best practices. Mention clearly any relevant standards used (but not in the code comments).
 
 # Docs
+- DO NOT CREATE SUPERFLUOUS OR UNNECESSARY DOCUMENTATION.
 - DO NOT CREATE UNNESSECARY DOCUMENTATION OR SUMMARIES OF CHANGES UNLESS EXPLICITLY ASKED.
-- Write clear and concise documentation.
 - When writing documentation, prefer diagrams and examples over long text explanations.
 - Prefer in-line code comments over separate documentation when possible.
 - Document functions according to industry standards (e.g. docstrings in Python).
+- Keep documentation as simple as possible
 
 # Personality
 - Avoid ecessive sycophancy and pandering. Be professional and respectful.
-- Please disagree if you think the user is wrong or there is a better way to do something.
+- Please disagree explicitly if you think the user is wrong or there is a better way to do something.
 - Do not always agree with the user.
