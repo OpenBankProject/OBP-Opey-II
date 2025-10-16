@@ -457,10 +457,12 @@ class VectorStoreManager:
                 f"This may cause retrieval operations to return empty results."
             )
         elif not self._vector_store_provider.get_all_collection_names():
+            directory_info = ""
+            if hasattr(self._vector_store_provider, 'persist_directory'):
+                directory_info = f"Ensure that the directory '{self._vector_store_provider.persist_directory}' "
             logger.warning(
                 f"No collections found in the vector store directory. "
-                f"{'Ensure that the directory \'' + str(self._vector_store_provider.persist_directory) + '\' ' if hasattr(self._vector_store_provider, 'persist_directory') else ''}"
-                f"contains valid collections."
+                f"{directory_info}contains valid collections."
             )
         else:
             logger.info(
