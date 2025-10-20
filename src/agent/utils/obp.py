@@ -125,13 +125,14 @@ class OBPRequestsModule:
             logger.error(f"_async_request says: Request to {url} timed out")
 
 
-    async def async_obp_get_requests(self, path: str):
+    async def async_obp_get_requests(self, path: str, operation_id: str | None = None):
         """
         Exectues a GET request to the OpenBankProject (OBP) API.
         ONLY GET requests are allowed in this mode, but OBP supports all kinds of requests.
         This is a tool that only allows GET requests to be made to the OBP API as a safety measure.
         Args:
             path (str): The API endpoint path to send the request to.
+            operation_id (str, optional): The OBP API operation ID for this endpoint (used for approval tracking).
         Returns:
             dict: The JSON response from the OBP API if the request is successful.
             dict: The error response from the OBP API if the request fails.
@@ -181,13 +182,14 @@ class OBPRequestsModule:
 
 
 
-    async def async_obp_requests(self, method: str, path: str, body: str):
+    async def async_obp_requests(self, method: str, path: str, body: str, operation_id: str | None = None):
         """
         Executes a request to the OpenBankProject (OBP) API.
         Args:
             method (str): The HTTP method to use for the request (e.g., 'GET', 'POST').
             path (str): The API endpoint path to send the request to.
             body (str): The JSON body to include in the request. If empty, no body is sent.
+            operation_id (str, optional): The OBP API operation ID for this endpoint (used for approval tracking). Use the same operationId as in the docs.
         Returns:
             dict: The JSON response from the OBP API if the request is successful.
             dict: The error response from the OBP API if the request fails.

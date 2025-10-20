@@ -107,11 +107,41 @@ async def return_message(state: OpeyGraphState):
 # Human Review Node - Helper Functions
 # ============================================================================
 
-def _extract_operation(tool_args: Dict) -> str:
-    """Extract operation identifier from tool args"""
-    if "method" in tool_args and "path" in tool_args:
-        return f"{tool_args['method']}:{tool_args['path']}"
-    return "unknown"
+def _extract_operation(tool_name: str, tool_args: Dict) -> str:
+    """
+    Extract operation identifier from tool args.
+    
+    For obp_requests tool, prioritizes operation_id if available,
+    otherwise falls back to method:path.
+    For other tools, uses generic descriptors or returns the tool name.
+    
+    Args:
+        tool_name: Name of the tool being called
+        tool_args: Arguments passed to the tool
+        
+    Returns:
+        str: Operation identifier for approval keying
+    """
+    # OBP requests tool - use operation_id if available
+    if tool_name == "obp_requests":
+        if "operation_id" in tool_args and tool_args["operation_id"]:
+            return tool_args["operation_id"]
+        elif "method" in tool_args and "path" in tool_args:
+            # Fallback for when operation_id isn't available
+            return f"{tool_args['method']}:{tool_args['path']}"
+        return "unknown_operation"
+    
+    # For other tools, try to extract a meaningful operation identifier
+    # This makes the system more generic and not API-specific
+    if "operation" in tool_args:
+        return tool_args["operation"]
+    
+    if "action" in tool_args:
+        return tool_args["action"]
+    
+    # Fallback: use the tool name itself as the operation
+    # This means approval is per-tool rather than per-operation
+    return tool_name
 
 
 def _build_session_history(
@@ -159,7 +189,7 @@ async def _categorize_tool_calls(
         tool_name = tool_call["name"]
         tool_args = tool_call["args"]
         tool_call_id = tool_call["id"]
-        operation = _extract_operation(tool_args)
+        operation = _extract_operation(tool_name, tool_args)
         
         # Check existing approvals
         approval_status = await approval_manager.check_approval(
@@ -213,7 +243,7 @@ def _build_approval_contexts(
         tool_name = tool_call["name"]
         tool_args = tool_call["args"]
         tool_call_id = tool_call["id"]
-        operation = _extract_operation(tool_args)
+        operation = _extract_operation(tool_name, tool_args)
         
         session_history = _build_session_history(state, tool_name, operation)
         approval_context = tool_registry.build_approval_context(
@@ -287,7 +317,7 @@ async def _process_batch_approval_response(
         tool_call_id = tool_call["id"]
         tool_name = tool_call["name"]
         tool_args = tool_call["args"]
-        operation = _extract_operation(tool_args)
+        operation = _extract_operation(tool_name, tool_args)
         
         decision = decisions.get(tool_call_id)
         if not decision:
@@ -364,7 +394,7 @@ async def _process_single_approval_response(
     tool_call_id = tool_call["id"]
     tool_name = tool_call["name"]
     tool_args = tool_call["args"]
-    operation = _extract_operation(tool_args)
+    operation = _extract_operation(tool_name, tool_args)
     
     if user_response.get("approved"):
         approval_level = user_response.get("approval_level", "once")
