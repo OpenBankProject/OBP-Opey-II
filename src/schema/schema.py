@@ -1,5 +1,5 @@
 from concurrent.futures import thread
-from typing import Any, Literal
+from typing import Any, Literal, Optional, Dict
 
 from langchain_core.messages import (
     AIMessage,
@@ -176,17 +176,60 @@ class Feedback(BaseModel):
 class FeedbackResponse(BaseModel):
     status: Literal["success"] = "success"
 
-class ToolCallApproval(BaseModel):
-    approval: Literal["approve", "deny"] = Field(
-        description="Approval status for the tool call.",
-    )
+
+class SingleApprovalDecision(BaseModel):
+    """Single tool call approval decision"""
+    approved: bool = Field(description="Whether to approve or deny")
     level: Literal["once", "session", "user"] = Field(
-        description="Level of approval.",
+        default="once",
+        description="Approval persistence level"
     )
-    tool_call_id: str = Field(
-        description="Tool call ID to approve or deny.",
+
+
+class ToolCallApproval(BaseModel):
+    """
+    Tool call approval - supports both single and batch approvals.
+    
+    For single approval (backward compatible):
+        approval: "approve" | "deny"
+        level: "once" | "session" | "user"  
+        tool_call_id: "call_xyz123"
+        
+    For batch approval:
+        batch_decisions: {
+            "call_xyz123": {"approved": true, "level": "once"},
+            "call_abc456": {"approved": false},
+            "call_def789": {"approved": true, "level": "session"}
+        }
+    """
+    # Single approval fields (optional for backward compat)
+    approval: Optional[Literal["approve", "deny"]] = Field(
+        default=None,
+        description="Single approval status (legacy format)",
+    )
+    level: Optional[Literal["once", "session", "user"]] = Field(
+        default=None,
+        description="Single approval level (legacy format)",
+    )
+    tool_call_id: Optional[str] = Field(
+        default=None,
+        description="Single tool call ID (legacy format)",
         examples=["call_Jja7J89XsjrOLA5r!MEOW!SL"],
     )
+    
+    # Batch approval field
+    batch_decisions: Optional[Dict[str, SingleApprovalDecision]] = Field(
+        default=None,
+        description="Batch approval decisions keyed by tool_call_id"
+    )
+    
+    def is_batch(self) -> bool:
+        """Check if this is a batch approval"""
+        return self.batch_decisions is not None
+    
+    def is_single(self) -> bool:
+        """Check if this is a single approval"""
+        return self.tool_call_id is not None
 
 class UserInput(BaseModel):
     """Basic user input for the agent."""

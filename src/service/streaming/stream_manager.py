@@ -51,47 +51,66 @@ class StreamManager:
         try:
             # Parse input for the graph
             if stream_input.tool_call_approval:
-                # Handle approval/denial
-                approved = stream_input.tool_call_approval.approval == "approve"
-                tool_call_id = stream_input.tool_call_approval.tool_call_id
-                approval_level = getattr(stream_input.tool_call_approval, 'level', 'once')
+                approval = stream_input.tool_call_approval
                 
-                if approved:
-                    logger.info(f"Tool call approved: {tool_call_id}", extra={
-                        "event_type": "tool_approved",
+                if approval.is_batch():
+                    # Batch approval response
+                    batch_decisions = approval.batch_decisions
+                    if not batch_decisions:  # Type narrowing for linter
+                        raise ValueError("Batch approval must have batch_decisions")
+                    
+                    logger.info(f"Processing batch approval", extra={
+                        "event_type": "batch_approval_processing",
                         "thread_id": thread_id,
-                        "tool_call_id": tool_call_id,
+                        "decision_count": len(batch_decisions)
+                    })
+                    
+                    # Convert to format expected by human_review_node
+                    decisions = {}
+                    for tool_call_id, decision in batch_decisions.items():
+                        decisions[tool_call_id] = {
+                            "approved": decision.approved,
+                            "approval_level": decision.level
+                        }
+                    
+                    from langgraph.types import Command
+                    graph_input = Command(
+                        resume={"decisions": decisions}
+                    )
+                
+                elif approval.is_single():
+                    # Single approval (backward compatible)
+                    approved = approval.approval == "approve"
+                    tool_call_id = approval.tool_call_id
+                    approval_level = approval.level
+                    
+                    logger.info(f"Processing single approval: {tool_call_id}", extra={
+                        "event_type": "single_approval_processing",
+                        "thread_id": thread_id,
+                        "approved": approved,
                         "approval_level": approval_level
                     })
-                    # Command() resumes the graph and passes the value in the 'resume' argument
-                    # to the interrupted human_review node
+                    
                     from langgraph.types import Command
                     graph_input = Command(
                         resume={
-                            "approved": True,
+                            "approved": approved,
                             "approval_level": approval_level,
                             "tool_call_id": tool_call_id
                         }
                     )
                 else:
-                    logger.info(f"Tool call denied: {tool_call_id}", extra={
-                        "event_type": "tool_denied", 
-                        "thread_id": thread_id,
-                        "tool_call_id": tool_call_id
+                    error_msg = "ToolCallApproval must be either batch or single format"
+                    logger.error(error_msg, extra={
+                        "event_type": "invalid_approval_format",
+                        "thread_id": thread_id
                     })
-                    # Resume with denial
-                    from langgraph.types import Command
-                    graph_input = Command(
-                        resume={
-                            "approved": False,
-                            "tool_call_id": tool_call_id
-                        }
-                    )
+                    raise ValueError(error_msg)
                     
                 logger.debug("Processing tool call approval", extra={
                     "event_type": "tool_approval_processing",
                     "thread_id": thread_id,
-                    "approved": approved
+                    "is_batch": approval.is_batch()
                 })
             else:
                 # Regular user message
