@@ -80,7 +80,11 @@ class OBPConsentAuth(BaseAuth):
         if not self.opey_consumer_key:
             raise ValueError('OBP_CONSUMER_KEY not set in environment variables')
         
-        self.current_user_url = self.base_uri + '/obp/v5.1.0/users/current' # type: ignore
+        version = os.getenv('OBP_API_VERSION')
+        if not version:
+            raise ValueError('OBP_API_VERSION not set in environment variables')
+        
+        self.current_user_url = self.base_uri + f'/obp/{version}/users/current' # type: ignore
  
     # Asynchronous method to check if the token is valid
     async def acheck_auth(self, token: str | None = None) -> bool:
