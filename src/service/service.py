@@ -429,7 +429,12 @@ async def stream_agent(
 
     # Get the actual thread_id that will be used
     thread_id = user_input.thread_id or str(stream_manager.opey_session.session_id)
-    config = {'configurable': {'thread_id': thread_id}}
+    config = {
+        'configurable': {
+            'thread_id': thread_id,
+            'approval_manager': stream_manager.opey_session.approval_manager
+        }
+    }
 
     async def stream_generator():
         async for stream_event in stream_manager.stream_response(user_input, config):
@@ -446,7 +451,7 @@ async def user_approval(
     thread_id: str,
     stream_manager: StreamManager = Depends(get_stream_manager)
 ) -> StreamingResponse:
-    print(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
+    logger.info(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
 
     # Create stream input for approval continuation
     approval_user_input = StreamInput(
@@ -455,7 +460,12 @@ async def user_approval(
         tool_call_approval=user_approval_response,
     )
 
-    config = {'configurable': {'thread_id': thread_id}}
+    config = {
+        'configurable': {
+            'thread_id': thread_id,
+            'approval_manager': stream_manager.opey_session.approval_manager
+        }
+    }
 
     async def stream_generator():
         async for stream_event in stream_manager.stream_response(

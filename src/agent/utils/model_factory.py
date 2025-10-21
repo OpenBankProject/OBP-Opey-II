@@ -9,6 +9,7 @@ from langchain_ollama import ChatOllama
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import OpenAIEmbeddings
 from langchain_core.embeddings import Embeddings
+from enum import StrEnum
 
 from dotenv import load_dotenv
 
@@ -16,11 +17,16 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+class LLMProviders(StrEnum):
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    OLLAMA = "ollama"
+
 @dataclass
 class ModelConfig:
     """Configuration for a specific model"""
     model_id: str
-    provider: str
+    provider: LLMProviders
     api_key_env: Optional[str] = None
     base_url_env: Optional[str] = None
     default_max_tokens: int = 4096
@@ -29,22 +35,17 @@ class ModelConfig:
 # Define available models with their configurations
 MODEL_CONFIGS = {
     # OpenAI models
-    "gpt-4o": ModelConfig("gpt-4o", "openai", "OPENAI_API_KEY"),
-    "gpt-4o-mini": ModelConfig("gpt-4o-mini", "openai", "OPENAI_API_KEY"),
-    "gpt-4-turbo": ModelConfig("gpt-4-turbo", "openai", "OPENAI_API_KEY"),
-    "gpt-3.5-turbo": ModelConfig("gpt-3.5-turbo", "openai", "OPENAI_API_KEY"),
+    "gpt-4o": ModelConfig("gpt-4o", LLMProviders.OPENAI, "OPENAI_API_KEY"),
+    "gpt-4o-mini": ModelConfig("gpt-4o-mini", LLMProviders.OPENAI, "OPENAI_API_KEY"),
+    "gpt-4-turbo": ModelConfig("gpt-4-turbo", LLMProviders.OPENAI, "OPENAI_API_KEY"),
+    "gpt-3.5-turbo": ModelConfig("gpt-3.5-turbo", LLMProviders.OPENAI, "OPENAI_API_KEY"),
     
     # Anthropic models
-    "claude-3-5-sonnet-20241022": ModelConfig("claude-3-5-sonnet-20241022", "anthropic", "ANTHROPIC_API_KEY"),
-    "claude-3-5-haiku-20241022": ModelConfig("claude-3-5-haiku-20241022", "anthropic", "ANTHROPIC_API_KEY"),
-    "claude-3-opus-20240229": ModelConfig("claude-3-opus-20240229", "anthropic", "ANTHROPIC_API_KEY"),
+    "claude-sonnet-4": ModelConfig("claude-sonnet-4-20250514", LLMProviders.ANTHROPIC, "ANTHROPIC_API_KEY"),
+    "claude-sonnet-4.5": ModelConfig("claude-sonnet-4-5-20250929", LLMProviders.ANTHROPIC, "ANTHROPIC_API_KEY"),
     
     # Ollama models (no API key required)
-    "llama3.1": ModelConfig("llama3.1", "ollama"),
-    "llama3.1:8b": ModelConfig("llama3.1:8b", "ollama"),
-    "llama3.1:70b": ModelConfig("llama3.1:70b", "ollama"),
-    "qwen2.5": ModelConfig("qwen2.5", "ollama"),
-    "mistral": ModelConfig("mistral", "ollama"),
+    "llama3.1": ModelConfig("llama3.1", LLMProviders.OLLAMA),
 }
 
 # Add embedding model configs
@@ -89,7 +90,7 @@ class ModelFactory:
     
     def __init__(self):
         self._model_cache: Dict[str, BaseChatModel] = {}
-        self._available_models: Optional[List[str]] = None
+        self._available_models_cache: Dict[str, List[str]] = {}
     
     def _check_model_availability(self, model_name: str) -> bool:
         """Check if a model is available (has required API keys, etc.)"""
@@ -99,7 +100,7 @@ class ModelFactory:
         config = MODEL_CONFIGS[model_name]
         
         # For Ollama, assume available (could ping the server in future)
-        if config.provider == "ollama":
+        if config.provider == LLMProviders.OLLAMA:
             return True
             
         # Check if required API key is available
@@ -149,14 +150,30 @@ class ModelFactory:
         raise ValueError(f"Unsupported embedding model provider: {config['provider']}")
 
     
-    def get_available_models(self) -> List[str]:
+    def get_available_models(self, provider: Optional[LLMProviders] = None) -> List[str]:
         """Get list of available models based on current environment"""
-        if self._available_models is None:
-            self._available_models = [
-                model for model in MODEL_CONFIGS.keys() 
-                if self._check_model_availability(model)
-            ]
-        return self._available_models
+        cache_key = provider.value if provider else "all"
+        
+        if cache_key not in self._available_models_cache:
+            if provider:
+                available = [
+                    model for model, cfg in MODEL_CONFIGS.items() 
+                    if cfg.provider == provider and self._check_model_availability(model)
+                ]
+            else:
+                available = [
+                    model for model in MODEL_CONFIGS.keys() 
+                    if self._check_model_availability(model)
+                ]
+            
+            if not available:
+                provider_msg = f" for provider '{provider}'" if provider else ""
+                raise RuntimeError(f"No available models found{provider_msg}. Please check your API key configurations.")
+            
+            self._available_models_cache[cache_key] = available
+            logger.debug(f"Cached {len(available)} available models for provider: {cache_key}")
+        
+        return self._available_models_cache[cache_key]
     
     def _create_model(self, model_name: str, **kwargs) -> BaseChatModel:
         """Create a model instance"""
@@ -171,21 +188,20 @@ class ModelFactory:
             **{k: v for k, v in kwargs.items() if k != "temperature"}
         }
         
-        if config.provider == "openai":
+        if config.provider == LLMProviders.OPENAI:
             return ChatOpenAI(
                 model=config.model_id,
                 api_key=os.getenv(config.api_key_env),
                 max_tokens=kwargs.get("max_tokens", config.default_max_tokens),
                 **model_kwargs
             )
-        elif config.provider == "anthropic":
+        elif config.provider == LLMProviders.ANTHROPIC:
             return ChatAnthropic(
                 model_name=config.model_id,
                 api_key=os.getenv(config.api_key_env),
-                max_tokens=kwargs.get("max_tokens", config.default_max_tokens),
                 **model_kwargs
             )
-        elif config.provider == "ollama":
+        elif config.provider == LLMProviders.OLLAMA:
             base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
             return ChatOllama(
                 model=config.model_id,
@@ -294,9 +310,13 @@ def get_embedding_model(model_name: str = "text-embedding-3-large") -> Embedding
     """
     return model_factory.get_embedding_model(model_name)
 
-def get_available_models() -> List[str]:
-    """Get list of currently available models"""
-    return model_factory.get_available_models()
+def get_available_models(provider: Optional[LLMProviders] = None) -> List[str]:
+    """
+    Get list of currently available models
+    provider: Optional[LLMProviders] specifies filtering by provider
+    
+    """
+    return model_factory.get_available_models(provider)
 
 def list_models_by_provider() -> Dict[str, List[str]]:
     """List available models grouped by provider"""

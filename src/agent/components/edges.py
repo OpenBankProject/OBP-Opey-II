@@ -28,21 +28,16 @@ def should_summarize(state: OpeyGraphState) -> Literal["summarize_conversation",
     print(f"Conversation less than token limit of {token_limit}, Descision: Do not summarize")
     return END
         
-def needs_human_review(state:OpeyGraphState) -> Literal["human_review", "tools", END]:
+def needs_human_review(state:OpeyGraphState) -> Literal["human_review", END]:
     """
     Conditional edge to decide whther to route to the tools, return an answer from opey.
     If the tool called is obp_requests, we need to route to the human_review node to wait for human approval of tool
     """
     messages = state["messages"]
     tool_calls = messages[-1].tool_calls
-    if not tool_calls:
-        return END
     
-    for tool_call in tool_calls:
-        if (tool_call["name"] == "obp_requests"):
-            if not (tool_call["args"]["method"] == "GET"):
-                return "human_review"
-            else:
-                return "tools"
-        return "tools"
+    if tool_calls:
+        return "human_review"
+    
+    return END
 

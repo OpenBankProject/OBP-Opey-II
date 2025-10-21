@@ -26,6 +26,7 @@ async def test_create_session_incorrect_format(client: AsyncClient):
 
 @pytest.mark.dependency()
 @pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.skip("Requires valid OBP JWT token - run with real credentials to test")
 async def test_create_session(client: AsyncClient, get_obp_consent):
     consent_jwt = get_obp_consent
     response = await client.post("/create-session", headers={'Consent-JWT': consent_jwt})
