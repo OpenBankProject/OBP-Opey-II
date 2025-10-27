@@ -130,6 +130,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     redis_client = await get_redis_client()
 
     cleanup_task = asyncio.create_task(periodic_orchestrator_cleanup())
+    cancellation_cleanup_task = asyncio.create_task(periodic_cancellation_cleanup())
     
     # Ensures that the checkpointer is created and closed properly, and that only this one is used
     # for the whole app
@@ -137,12 +138,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         checkpointers['aiosql'] = sql_checkpointer
         yield
 
-    # Cancel cleanup task during shutdown
+    # Cancel cleanup tasks during shutdown
     cleanup_task.cancel()
+    cancellation_cleanup_task.cancel()
     try:
         await cleanup_task
     except asyncio.CancelledError:
         logger.info("Orchestrator cleanup task cancelled during shutdown")
+    try:
+        await cancellation_cleanup_task
+    except asyncio.CancelledError:
+        logger.info("Cancellation cleanup task cancelled during shutdown")
 
 
 async def periodic_orchestrator_cleanup(interval_seconds: int = 600):
@@ -154,6 +160,22 @@ async def periodic_orchestrator_cleanup(interval_seconds: int = 600):
             logger.info(f"Orchestrator cleanup completed: removed {removed} inactive orchestrators")
         except Exception as e:
             logger.error(f"Error during orchestrator cleanup: {e}", exc_info=True)
+        
+        await asyncio.sleep(interval_seconds)
+
+
+async def periodic_cancellation_cleanup(interval_seconds: int = 300):
+    """Periodically clean up stale cancellation flags"""
+    from utils.cancellation_manager import cancellation_manager
+    
+    while True:
+        try:
+            logger.info("Running scheduled cleanup of cancellation flags")
+            removed = await cancellation_manager.cleanup_old_flags(max_age_minutes=10)
+            if removed > 0:
+                logger.info(f"Cancellation cleanup completed: removed {removed} stale flags")
+        except Exception as e:
+            logger.error(f"Error during cancellation cleanup: {e}", exc_info=True)
         
         await asyncio.sleep(interval_seconds)
 
@@ -437,13 +459,61 @@ async def stream_agent(
     }
 
     async def stream_generator():
-        async for stream_event in stream_manager.stream_response(user_input, config):
-            yield stream_manager.to_sse_format(stream_event)
+        from utils.cancellation_manager import cancellation_manager
+        
+        # Clear any stale cancellation flags from previous requests
+        # This ensures a fresh start for each new stream request
+        await cancellation_manager.clear_cancellation(thread_id)
+        
+        try:
+            async for stream_event in stream_manager.stream_response(user_input, config):
+                # Check if client disconnected
+                if await request.is_disconnected():
+                    logger.info(f"Client disconnected for thread {thread_id}")
+                    await cancellation_manager.request_cancellation(thread_id)
+                    break
+                
+                # Check if cancellation was requested via API
+                if await cancellation_manager.is_cancelled(thread_id):
+                    logger.info(f"Cancellation requested for thread {thread_id}, stopping stream")
+                    break
+                
+                yield stream_manager.to_sse_format(stream_event)
+        except GeneratorExit:
+            # Handle generator being closed gracefully
+            logger.info(f"Stream generator closed for thread {thread_id}")
+            raise  # Re-raise to properly close the generator
+        finally:
+            # Clear cancellation flag after handling
+            await cancellation_manager.clear_cancellation(thread_id)
 
     # Add thread_id to response headers for frontend synchronization
     headers = {"X-Thread-ID": thread_id}
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream", headers=headers)
+
+@app.post("/stream/{thread_id}/stop", dependencies=[Depends(session_cookie)])
+async def stop_stream(thread_id: str) -> dict:
+    """
+    Request cancellation of an active stream.
+    
+    This signals to the streaming endpoint that the user wants to stop
+    receiving tokens. The graph execution will cooperatively cancel when
+    nodes check the cancellation flag.
+    
+    Note: This is cooperative cancellation - the actual stop may not be
+    immediate as it depends on when the next cancellation check occurs.
+    """
+    from utils.cancellation_manager import cancellation_manager
+    
+    logger.info(f"Stop requested for thread: {thread_id}")
+    await cancellation_manager.request_cancellation(thread_id)
+    
+    return {
+        "status": "cancellation_requested",
+        "thread_id": thread_id,
+        "message": "Stream cancellation requested. The stream will stop at the next checkpoint."
+    }
 
 @app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
 async def user_approval(

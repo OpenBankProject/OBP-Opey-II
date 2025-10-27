@@ -345,6 +345,10 @@ class ToolEventProcessor(BaseEventProcessor):
                                 details={"tool_call_id": tool_call_id, "original_event": event}
                             )
 
+    def reset_for_new_message(self):
+        """Reset tool processor state for a new message"""
+        self.pending_tool_calls = {}
+
 
 class ApprovalEventProcessor(BaseEventProcessor):
     """Processes events related to human approval requests"""
@@ -464,3 +468,25 @@ class StreamEventOrchestrator:
         for processor in self.processors:
             if hasattr(processor, 'reset_for_new_message'):
                 processor.reset_for_new_message()
+
+    def reset_for_new_request(self):
+        """
+        Reset processors for a new user message request.
+        
+        This ensures that message IDs and run IDs from previous requests
+        (especially cancelled ones) don't leak into the new request.
+        Called when reusing an orchestrator for a new user message
+        (not an approval response).
+        """
+        # Reset assistant processor to clear message_id and run_id
+        assistant_processor = self.get_assistant_processor()
+        assistant_processor.reset_for_new_message()
+        
+        # Reset tool processor if it has the method
+        try:
+            tool_processor = self.get_tool_processor()
+            if hasattr(tool_processor, 'reset_for_new_message'):
+                tool_processor.reset_for_new_message()
+        except RuntimeError:
+            # Tool processor not found, that's okay
+            pass

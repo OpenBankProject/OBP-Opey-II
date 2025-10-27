@@ -47,6 +47,9 @@ class StreamManager:
         })
 
         orchestrator = orchestrator_repository.get_or_create(thread_id, stream_input)
+        
+        # Track if generator is being closed to avoid yielding in finally block
+        generator_closing = False
 
         try:
             # Parse input for the graph
@@ -137,6 +140,14 @@ class StreamManager:
                     # Process each LangGraph event through our orchestrator
                     async for stream_event in orchestrator.process_event(langgraph_event):
                         yield stream_event
+                except GeneratorExit:
+                    # Generator being closed - stop processing and cleanup
+                    logger.info(f"Stream generator closed during event processing", extra={
+                        "event_type": "generator_closed",
+                        "thread_id": thread_id,
+                        "event_count": event_count
+                    })
+                    raise  # Re-raise to propagate closure
                 except Exception as e:
                     error_msg = f"Error processing LangGraph event: {str(e)}"
                     logger.error(error_msg, exc_info=True, extra={
@@ -176,6 +187,14 @@ class StreamManager:
             async for approval_event in self._handle_approval(config):
                 yield approval_event
 
+        except GeneratorExit:
+            # Generator being closed - log and re-raise
+            generator_closing = True
+            logger.info(f"Stream response generator closed", extra={
+                "event_type": "stream_generator_closed",
+                "thread_id": thread_id
+            })
+            raise  # Re-raise to properly close the generator
         except Exception as e:
             error_msg = f"Streaming error: {str(e)}"
             logger.error(error_msg, exc_info=True, extra={
@@ -195,12 +214,13 @@ class StreamManager:
                 details=safe_details
             )
         finally:
-            # Always send stream end event
-            logger.info("Stream response completed", extra={
-                "event_type": "stream_end",
-                "thread_id": thread_id
-            })
-            yield StreamEventFactory.stream_end()
+            # Only send stream end event if generator is not being forcefully closed
+            if not generator_closing:
+                logger.info("Stream response completed", extra={
+                    "event_type": "stream_end",
+                    "thread_id": thread_id
+                })
+                yield StreamEventFactory.stream_end()
 
     async def _handle_approval(
         self,

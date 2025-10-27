@@ -15,12 +15,24 @@ class OrchestratorRepository:
         self._last_access: Dict[str, float] = {}
     
     def get_or_create(self, thread_id: str, stream_input: StreamInput) -> StreamEventOrchestrator:
-        """Get existing orchestrator or create a new one if it doesn't exist"""
+        """
+        Get existing orchestrator or create a new one if it doesn't exist.
+        
+        If this is a new user message (not an approval response), reset the orchestrator's
+        state to ensure message IDs and run IDs don't leak between requests.
+        """
         if thread_id not in self._orchestrators:
             logger.info(f"Creating new StreamEventOrchestrator for thread_id {thread_id}")
             self._orchestrators[thread_id] = StreamEventOrchestrator(stream_input)
         else:
             logger.info(f"Reusing existing StreamEventOrchestrator for thread_id {thread_id}")
+            
+            # Reset orchestrator state for new user messages (not approval responses)
+            # This prevents message_id and run_id from previous requests (especially cancelled ones)
+            # from bleeding into the new request
+            if not stream_input.tool_call_approval:
+                logger.info(f"Resetting orchestrator state for new user message on thread_id {thread_id}")
+                self._orchestrators[thread_id].reset_for_new_request()
         
         # Update last access time
         self._last_access[thread_id] = time.time()
