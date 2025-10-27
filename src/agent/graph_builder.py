@@ -8,13 +8,14 @@ from langchain_core.prompts import SystemMessagePromptTemplate, ChatPromptTempla
 from langchain_core.messages import SystemMessage
 from langchain_core.runnables import Runnable
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.runnables import RunnableConfig
 
 from agent.components.states import OpeyGraphState
 from agent.components.chains import opey_system_prompt_template
 from agent.components.nodes import human_review_node, run_summary_chain
 from agent.components.edges import should_summarize, needs_human_review
-
 from agent.utils.model_factory import get_model
+from agent.utils.decorators import cancellable
 
 from typing import List, Optional, Dict, Any, Literal
 import os
@@ -141,7 +142,8 @@ class OpeyAgentGraphBuilder:
         
         opey_agent = prompt | opey_llm
         
-        async def run_opey(state: OpeyGraphState):
+        @cancellable(preserve_state_keys=["total_tokens"])
+        async def run_opey(state: OpeyGraphState, config: RunnableConfig):
             # Check if we have a conversation summary
             summary = state.get("conversation_summary", "")
             if summary:
@@ -150,7 +152,7 @@ class OpeyAgentGraphBuilder:
             else:
                 messages = state["messages"]
 
-            response = await opey_agent.ainvoke({"messages": messages})
+            response = await opey_agent.ainvoke({"messages": messages}, config)
 
             # Count the tokens in the messages
             total_tokens = state.get("total_tokens", 0)

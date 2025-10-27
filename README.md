@@ -44,7 +44,6 @@ Just note that the provider must match the MODEL_NAME i.e. you cannot use MODEL_
 Not all LLMs are supported by default, they need to be manually added in the config.
 If you want to add a new model, edit `MODEL_CONFIGS` in `./src/agent/utils/model_factory.py`
 
-```
 ### Ollama (Run models locally)
 This is only reccomended if you can run models on a decent size GPU. Trying to run on CPU will take ages, not run properly or even crash your computer.
 
