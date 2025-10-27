@@ -461,6 +461,10 @@ async def stream_agent(
     async def stream_generator():
         from utils.cancellation_manager import cancellation_manager
         
+        # Clear any stale cancellation flags from previous requests
+        # This ensures a fresh start for each new stream request
+        await cancellation_manager.clear_cancellation(thread_id)
+        
         try:
             async for stream_event in stream_manager.stream_response(user_input, config):
                 # Check if client disconnected
@@ -475,6 +479,10 @@ async def stream_agent(
                     break
                 
                 yield stream_manager.to_sse_format(stream_event)
+        except GeneratorExit:
+            # Handle generator being closed gracefully
+            logger.info(f"Stream generator closed for thread {thread_id}")
+            raise  # Re-raise to properly close the generator
         finally:
             # Clear cancellation flag after handling
             await cancellation_manager.clear_cancellation(thread_id)
