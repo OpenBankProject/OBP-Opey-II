@@ -10,11 +10,14 @@ def should_summarize(state: OpeyGraphState) -> Literal["summarize_conversation",
     """
     print("----- DECIDING WHETHER TO SUMMARIZE -----")
     messages = state["messages"]
-    total_tokens = state["total_tokens"]
+    total_tokens = state.get("total_tokens", 0)  # Use .get() with default
     print(f"Total tokens in conversation: {total_tokens}")
 
+    # If total_tokens is None or 0, we shouldn't summarize
+    # (either counting failed or conversation was cancelled)
     if not total_tokens:
-        raise ValueError("Total tokens not found in state")
+        print("Total tokens is 0 or not set, skipping summarization")
+        return END
 
     token_limit = os.getenv("CONVERSATION_TOKEN_LIMIT")
     if not token_limit:
