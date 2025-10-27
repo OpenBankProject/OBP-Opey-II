@@ -10,11 +10,14 @@ def should_summarize(state: OpeyGraphState) -> Literal["summarize_conversation",
     """
     print("----- DECIDING WHETHER TO SUMMARIZE -----")
     messages = state["messages"]
-    total_tokens = state["total_tokens"]
+    total_tokens = state.get("total_tokens", 0)  # Use .get() with default
     print(f"Total tokens in conversation: {total_tokens}")
 
+    # If total_tokens is None or 0, we shouldn't summarize
+    # (either counting failed or conversation was cancelled)
     if not total_tokens:
-        raise ValueError("Total tokens not found in state")
+        print("Total tokens is 0 or not set, skipping summarization")
+        return END
 
     token_limit = os.getenv("CONVERSATION_TOKEN_LIMIT")
     if not token_limit:
@@ -28,21 +31,16 @@ def should_summarize(state: OpeyGraphState) -> Literal["summarize_conversation",
     print(f"Conversation less than token limit of {token_limit}, Descision: Do not summarize")
     return END
         
-def needs_human_review(state:OpeyGraphState) -> Literal["human_review", "tools", END]:
+def needs_human_review(state:OpeyGraphState) -> Literal["human_review", END]:
     """
     Conditional edge to decide whther to route to the tools, return an answer from opey.
     If the tool called is obp_requests, we need to route to the human_review node to wait for human approval of tool
     """
     messages = state["messages"]
     tool_calls = messages[-1].tool_calls
-    if not tool_calls:
-        return END
     
-    for tool_call in tool_calls:
-        if (tool_call["name"] == "obp_requests"):
-            if not (tool_call["args"]["method"] == "GET"):
-                return "human_review"
-            else:
-                return "tools"
-        return "tools"
+    if tool_calls:
+        return "human_review"
+    
+    return END
 

@@ -7,29 +7,6 @@ import os
 import json
 
 
-@pytest.fixture
-def get_obp_consent():
-
-    consumer_id = os.getenv("OBP_CONSUMER_ID")
-    print("Consumer ID:", consumer_id)  
-
-    consent_body = {
-        "everything": True,
-        "entitlements": [],
-        "views": [],
-        "consumer_id": consumer_id # set consumer ID to Opey Consumer ID
-    }
-
-    print("Consent Body:", consent_body)
-
-    consent_response = sync_obp_requests("POST", "/obp/v5.1.0/my/consents/IMPLICIT", json.dumps(consent_body), consumer_key=os.getenv("API_EXPLORER_CONSUMER_KEY"))
-    if not consent_response:
-        raise ValueError(f"Error fetching consent from OBP")
-    consent = consent_response.json()
-
-    return consent.get("jwt")
-
-
 @pytest_asyncio.fixture(loop_scope="session")
 async def create_session(client: AsyncClient, get_obp_consent):
     """
@@ -49,6 +26,7 @@ async def test_create_session_incorrect_format(client: AsyncClient):
 
 @pytest.mark.dependency()
 @pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.skip("Requires valid OBP JWT token - run with real credentials to test")
 async def test_create_session(client: AsyncClient, get_obp_consent):
     consent_jwt = get_obp_consent
     response = await client.post("/create-session", headers={'Consent-JWT': consent_jwt})
@@ -87,7 +65,7 @@ async def test_get_protected_streaming_route(client: AsyncClient, create_session
     # Test with the mock
     response = await client.post(
         "/stream", 
-        json={'message': 'Hello opey.', 'thread_id': '12345', 'is_tool_call_approval': False},
+        json={'message': 'Hello opey.', 'thread_id': '12345', 'tool_call_approval': {'approval': 'approve', 'tool_call_id': 'call_12345'}},
         headers={'Content-Type': 'application/json'}
     )
     assert response.status_code == 200

@@ -45,9 +45,22 @@ class BaseAuth():
 
 class AuthConfig:
     # This class is used to store different types of authentication methods
-    def __init__(self, auth_types: Dict[str, BaseAuth]):
-        for key, value in auth_types.items():
-            setattr(self, key, value)
+
+
+    def __init__(self):
+        self.auth_strategies = {}
+
+    def register_auth_strategy(self, name: str, auth_strategy: BaseAuth):
+        """
+        Register a new authentication strategy.
+        
+        Args:
+            name (str): The name of the authentication strategy.
+            auth_strategy (BaseAuth): An instance of a class that inherits from BaseAuth.
+        """
+        if not isinstance(auth_strategy, BaseAuth):
+            raise TypeError(f"{name} must be an instance of BaseAuth")
+        self.auth_strategies[name] = auth_strategy
 
 # Define differnt auth types here
 class OBPConsentAuth(BaseAuth):
@@ -67,7 +80,11 @@ class OBPConsentAuth(BaseAuth):
         if not self.opey_consumer_key:
             raise ValueError('OBP_CONSUMER_KEY not set in environment variables')
         
-        self.current_user_url = self.base_uri + '/obp/v5.1.0/users/current' # type: ignore
+        version = os.getenv('OBP_API_VERSION')
+        if not version:
+            raise ValueError('OBP_API_VERSION not set in environment variables')
+        
+        self.current_user_url = self.base_uri + f'/obp/{version}/users/current' # type: ignore
  
     # Asynchronous method to check if the token is valid
     async def acheck_auth(self, token: str | None = None) -> bool:
@@ -91,13 +108,25 @@ class OBPConsentAuth(BaseAuth):
 
         headers = self.construct_headers(token)
 
+        # DEBUG: Log consent validation attempt
+        masked_token = f"{token[:20]}...{token[-10:]}" if len(token) > 30 else token[:10] + "..." if len(token) > 10 else token
+        logger.debug(f"OBP consent validation - URL: {self.current_user_url}")
+        logger.debug(f"OBP consent validation - Headers (JWT masked): {{'Consent-JWT': '{masked_token}', 'Consumer-Key': '{headers.get('Consumer-Key')}'}}")
+
         client = await self.get_client()
         async with client.get(self.current_user_url, headers=headers) as response:
             if response.status == 200:
-                logger.info(f'OBP consent check successful: {await response.json()}')
+                response_data = await response.json()
+                logger.info(f'OBP consent check successful: {response_data}')
+                logger.debug(f"OBP consent validation successful - Response headers: {dict(response.headers)}")
+                logger.debug(f"OBP consent validation successful - Full response: {response_data}")
                 return True
             else:
-                logger.error(f'Error checking OBP consent: {await response.text()}')
+                error_text = await response.read()
+                logger.error(f'Error checking OBP consent: {error_text}')
+                logger.debug(f"OBP consent validation failed - Status: {response.status}")
+                logger.debug(f"OBP consent validation failed - Response headers: {dict(response.headers)}")
+                logger.debug(f"OBP consent validation failed - Error details: {error_text}")
                 return False
             
     def construct_headers(self, token: str | None = None) -> Dict[str, str]:
@@ -112,8 +141,13 @@ class OBPConsentAuth(BaseAuth):
 
         headers = {
             'Consent-JWT': token,
-            'Consumer-Key': self.opey_consumer_key,
+            'Consumer-Key': os.getenv('OBP_CONSUMER_KEY'),
         }
+
+        # DEBUG: Log header construction
+        masked_token = f"{token[:20]}...{token[-10:]}" if len(token) > 30 else token[:10] + "..." if len(token) > 10 else token
+        logger.debug(f"OBPConsentAuth headers constructed - Consumer-Key: {headers.get('Consumer-Key')}")
+        logger.debug(f"OBPConsentAuth headers constructed - JWT length: {len(token)} chars, masked: {masked_token}")
 
         return headers
 

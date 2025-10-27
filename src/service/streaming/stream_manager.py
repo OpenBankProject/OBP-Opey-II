@@ -1,12 +1,15 @@
 import logging
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Optional, Literal
 from langchain_core.runnables.schema import StreamEvent as LangGraphStreamEvent
+from langchain_core.messages import ToolMessage
 from langgraph.graph.state import CompiledStateGraph
+from langchain_core.runnables import RunnableConfig
 
 from .events import StreamEvent, StreamEventFactory
 from .processors import StreamEventOrchestrator
 from schema import StreamInput, ChatMessage
 from service.opey_session import OpeySession
+from .orchestrator_repository import orchestrator_repository
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,7 @@ class StreamManager:
     async def stream_response(
         self,
         stream_input: StreamInput,
-        config: dict
+        config: RunnableConfig
     ) -> AsyncGenerator[StreamEvent, None]:
         """
         Main method to stream a response from the agent
@@ -39,21 +42,81 @@ class StreamManager:
             "event_type": "stream_start",
             "thread_id": thread_id,
             "stream_tokens": stream_input.stream_tokens,
-            "is_tool_approval": stream_input.is_tool_call_approval,
+            "tool_call_approval": stream_input.tool_call_approval.model_dump() if stream_input.tool_call_approval else None,
             "message_length": len(stream_input.message) if stream_input.message else 0
         })
 
-        orchestrator = StreamEventOrchestrator(stream_input)
+        orchestrator = orchestrator_repository.get_or_create(thread_id, stream_input)
+        
+        # Track if generator is being closed to avoid yielding in finally block
+        generator_closing = False
 
         try:
             # Parse input for the graph
-            if stream_input.is_tool_call_approval:
-                graph_input = None
+            if stream_input.tool_call_approval:
+                approval = stream_input.tool_call_approval
+                
+                if approval.is_batch():
+                    # Batch approval response
+                    batch_decisions = approval.batch_decisions
+                    if not batch_decisions:  # Type narrowing for linter
+                        raise ValueError("Batch approval must have batch_decisions")
+                    
+                    logger.info(f"Processing batch approval", extra={
+                        "event_type": "batch_approval_processing",
+                        "thread_id": thread_id,
+                        "decision_count": len(batch_decisions)
+                    })
+                    
+                    # Convert to format expected by human_review_node
+                    decisions = {}
+                    for tool_call_id, decision in batch_decisions.items():
+                        decisions[tool_call_id] = {
+                            "approved": decision.approved,
+                            "approval_level": decision.level
+                        }
+                    
+                    from langgraph.types import Command
+                    graph_input = Command(
+                        resume={"decisions": decisions}
+                    )
+                
+                elif approval.is_single():
+                    # Single approval (backward compatible)
+                    approved = approval.approval == "approve"
+                    tool_call_id = approval.tool_call_id
+                    approval_level = approval.level
+                    
+                    logger.info(f"Processing single approval: {tool_call_id}", extra={
+                        "event_type": "single_approval_processing",
+                        "thread_id": thread_id,
+                        "approved": approved,
+                        "approval_level": approval_level
+                    })
+                    
+                    from langgraph.types import Command
+                    graph_input = Command(
+                        resume={
+                            "approved": approved,
+                            "approval_level": approval_level,
+                            "tool_call_id": tool_call_id
+                        }
+                    )
+                else:
+                    error_msg = "ToolCallApproval must be either batch or single format"
+                    logger.error(error_msg, extra={
+                        "event_type": "invalid_approval_format",
+                        "thread_id": thread_id
+                    })
+                    raise ValueError(error_msg)
+                    
                 logger.debug("Processing tool call approval", extra={
                     "event_type": "tool_approval_processing",
-                    "thread_id": thread_id
+                    "thread_id": thread_id,
+                    "is_batch": approval.is_batch()
                 })
             else:
+                # Regular user message
                 input_message = ChatMessage(type="human", content=stream_input.message)
                 graph_input = {"messages": [input_message.to_langchain()]}
                 logger.debug("Processing user message", extra={
@@ -69,12 +132,22 @@ class StreamManager:
             }
 
             event_count = 0
+            last_event = None
             async for langgraph_event in self.graph.astream_events(**kwargs, version="v2"):
                 event_count += 1
+                
                 try:
                     # Process each LangGraph event through our orchestrator
                     async for stream_event in orchestrator.process_event(langgraph_event):
                         yield stream_event
+                except GeneratorExit:
+                    # Generator being closed - stop processing and cleanup
+                    logger.info(f"Stream generator closed during event processing", extra={
+                        "event_type": "generator_closed",
+                        "thread_id": thread_id,
+                        "event_count": event_count
+                    })
+                    raise  # Re-raise to propagate closure
                 except Exception as e:
                     error_msg = f"Error processing LangGraph event: {str(e)}"
                     logger.error(error_msg, exc_info=True, extra={
@@ -84,10 +157,16 @@ class StreamManager:
                         "langgraph_event_type": langgraph_event.get("event"),
                         "langgraph_event_metadata": langgraph_event.get("metadata", {})
                     })
+                    # Sanitize event data for serialization
+                    safe_details = {
+                        "event_count": event_count,
+                        "event_type": langgraph_event.get("event"),
+                        "error_type": type(e).__name__
+                    }
                     yield StreamEventFactory.error(
                         error_message=error_msg,
                         error_code="langgraph_event_error",
-                        details={"event_count": event_count, "langgraph_event": langgraph_event}
+                        details=safe_details
                     )
 
             logger.info(f"Processed {event_count} LangGraph events", extra={
@@ -96,97 +175,155 @@ class StreamManager:
                 "event_count": event_count
             })
 
-            # Check for human approval requirement
-            async for approval_event in self._handle_approval_if_needed(orchestrator, config):
+            # After streaming completes, ALWAYS check the final state for interrupts
+            # Even if this request was resuming from a previous interrupt, the graph
+            # might have hit ANOTHER interrupt that needs to be handled
+            # According to LangGraph docs, __interrupt__ appears in the state after stream ends
+            logger.info("Stream completed, checking for interrupts...", extra={
+                "event_type": "checking_interrupts",
+                "thread_id": thread_id,
+                "was_approval_response": bool(stream_input.tool_call_approval)
+            })
+            async for approval_event in self._handle_approval(config):
                 yield approval_event
 
+        except GeneratorExit:
+            # Generator being closed - log and re-raise
+            generator_closing = True
+            logger.info(f"Stream response generator closed", extra={
+                "event_type": "stream_generator_closed",
+                "thread_id": thread_id
+            })
+            raise  # Re-raise to properly close the generator
         except Exception as e:
             error_msg = f"Streaming error: {str(e)}"
             logger.error(error_msg, exc_info=True, extra={
                 "event_type": "stream_response_error",
                 "thread_id": thread_id,
                 "stream_tokens": stream_input.stream_tokens,
-                "is_tool_approval": stream_input.is_tool_call_approval
+                "tool_approval": stream_input.tool_call_approval.model_dump() if stream_input.tool_call_approval else None,
             })
+            # Sanitize error details to avoid serialization issues
+            safe_details = {
+                "thread_id": thread_id,
+                "error_type": type(e).__name__
+            }
             yield StreamEventFactory.error(
                 error_message=error_msg,
                 error_code="stream_error",
-                details={"thread_id": thread_id, "config": config}
+                details=safe_details
             )
         finally:
-            # Always send stream end event
-            logger.info("Stream response completed", extra={
-                "event_type": "stream_end",
-                "thread_id": thread_id
-            })
-            yield StreamEventFactory.stream_end()
+            # Only send stream end event if generator is not being forcefully closed
+            if not generator_closing:
+                logger.info("Stream response completed", extra={
+                    "event_type": "stream_end",
+                    "thread_id": thread_id
+                })
+                yield StreamEventFactory.stream_end()
 
-    async def _handle_approval_if_needed(
+    async def _handle_approval(
         self,
-        orchestrator: StreamEventOrchestrator,
-        config: dict
+        config: RunnableConfig
     ) -> AsyncGenerator[StreamEvent, None]:
-        """Handle human approval requirements"""
-
+        """
+        Handle human approval requirements by checking for LangGraph interrupts.
+        
+        According to LangGraph docs, after astream_events() completes:
+        - The state will contain '__interrupt__' key if interrupt() was called
+        - We extract the interrupt payload and send it to frontend
+        - User will resume with Command(resume=...) in a subsequent request
+        """
         thread_id = config.get("configurable", {}).get("thread_id")
+        approval_manager = config.get("configurable", {}).get("approval_manager")
 
         try:
             # Get current state to check for interruptions
+            # According to LangGraph docs, __interrupt__ appears in state.values after stream ends
             agent_state = await self.graph.aget_state(config)
 
-            logger.debug("Checking for approval requirements", extra={
-                "event_type": "approval_check",
-                "thread_id": thread_id,
-                "has_next": bool(agent_state.next),
-                "next_nodes": agent_state.next if agent_state.next else []
+            logger.info(f"=== CHECKING FOR INTERRUPTS ===", extra={
+                "event_type": "interrupt_check_start",
+                "thread_id": thread_id
             })
-
-            if agent_state.next and "human_review" in agent_state.next:
-                messages = agent_state.values.get("messages", [])
-
-                logger.info("Human approval required", extra={
-                    "event_type": "approval_required",
-                    "thread_id": thread_id,
-                    "message_count": len(messages)
-                })
-
-                if messages:
-                    tool_call_message = messages[-1]
-
-                    if hasattr(tool_call_message, 'tool_calls') and tool_call_message.tool_calls:
-                        for tool_call in tool_call_message.tool_calls:
-                            # Check if this is a tool that requires approval
-                            if self._requires_approval(tool_call):
-                                logger.info("Requesting approval for tool call", extra={
-                                    "event_type": "approval_request_created",
-                                    "thread_id": thread_id,
-                                    "tool_name": tool_call["name"],
-                                    "tool_call_id": tool_call["id"],
-                                    "method": tool_call["args"].get("method", "unknown")
-                                })
-                                yield StreamEventFactory.approval_request(
-                                    tool_name=tool_call["name"],
-                                    tool_call_id=tool_call["id"],
-                                    tool_input=tool_call["args"],
-                                    message=f"Approval required for {tool_call['name']} with {tool_call['args'].get('method', 'unknown')} request"
-                                )
-                            else:
-                                logger.debug("Tool call does not require approval", extra={
-                                    "event_type": "approval_not_required",
-                                    "thread_id": thread_id,
-                                    "tool_name": tool_call["name"],
-                                    "tool_call_id": tool_call["id"]
-                                })
-                else:
-                    logger.warning("Human review required but no messages found", extra={
-                        "event_type": "approval_no_messages",
-                        "thread_id": thread_id
-                    })
+            logger.info(f"Agent state details:")
+            logger.info(f"  - Next nodes: {agent_state.next}")
+            logger.info(f"  - Tasks: {len(agent_state.tasks) if agent_state.tasks else 0} tasks")
+            logger.info(f"  - Has __interrupt__ in values: {'__interrupt__' in agent_state.values}")
+            logger.info(f"  - State values keys: {list(agent_state.values.keys()) if agent_state.values else 'None'}")
+            
+            # Collect all interrupts from tasks
+            interrupts = []
+            if agent_state.tasks:
+                logger.info(f"  - Inspecting {len(agent_state.tasks)} task(s) for interrupts")
+                for i, task in enumerate(agent_state.tasks):
+                    logger.info(f"    Task {i}: name='{task.name}', has_interrupts={hasattr(task, 'interrupts')}")
+                    if hasattr(task, 'interrupts'):
+                        logger.info(f"      Interrupts count: {len(task.interrupts) if task.interrupts else 0}")
+                        if task.interrupts:
+                            interrupts.extend(task.interrupts)
             else:
-                logger.debug("No approval required", extra={
-                    "event_type": "approval_not_needed",
+                logger.info(f"  - No tasks in agent state")
+            
+            if not interrupts:
+                logger.info("No interrupts found in state after stream completed", extra={
+                    "event_type": "no_interrupts_found",
                     "thread_id": thread_id
                 })
+                return
+            
+            logger.info(f"Processing {len(interrupts)} interrupt(s)")
+            
+            # Process each interrupt
+            for interrupt_obj in interrupts:
+                approval_payload = interrupt_obj.value
+                
+                logger.info(f"Processing interrupt payload for tool: {approval_payload.get('tool_name')}")
+                
+                logger.info("Processing interrupt approval request", extra={
+                    "event_type": "approval_request_from_interrupt",
+                    "thread_id": thread_id,
+                    "payload_type": approval_payload.get("approval_type", "single")
+                })
+                
+                # Check if it's a batch approval or single approval
+                if approval_payload.get("approval_type") == "batch":
+                    # Batch approval request
+                    yield StreamEventFactory.batch_approval_request(
+                        tool_calls=approval_payload.get("tool_calls", []),
+                        options=approval_payload.get("options", [])
+                    )
+                else:
+                    # Single approval request with rich context
+                    # Convert enum values to strings for JSON serialization
+                    risk_level = approval_payload.get("risk_level", "moderate")
+                    if hasattr(risk_level, 'value'):
+                        risk_level = risk_level.value
+                    
+                    default_approval_level = approval_payload.get("default_approval_level", "once")
+                    if hasattr(default_approval_level, 'value'):
+                        default_approval_level = default_approval_level.value
+                    
+                    available_levels = approval_payload.get("available_approval_levels", ["once"])
+                    available_levels = [
+                        level.value if hasattr(level, 'value') else level
+                        for level in available_levels
+                    ]
+                    
+                    yield StreamEventFactory.approval_request(
+                        tool_name=approval_payload.get("tool_name"),
+                        tool_call_id=approval_payload.get("tool_call_id"),
+                        tool_input=approval_payload.get("tool_input", {}),
+                        message=approval_payload.get("message", "Approval required"),
+                        # Enhanced fields from ApprovalContext
+                        risk_level=risk_level,
+                        affected_resources=approval_payload.get("affected_resources", []),
+                        reversible=approval_payload.get("reversible", True),
+                        estimated_impact=approval_payload.get("estimated_impact", ""),
+                        similar_operations_count=approval_payload.get("similar_operations_count", 0),
+                        available_approval_levels=available_levels,
+                        default_approval_level=default_approval_level
+                    )
 
         except Exception as e:
             error_msg = f"Error handling approval check: {str(e)}"
@@ -197,7 +334,7 @@ class StreamManager:
             yield StreamEventFactory.error(
                 error_message=error_msg,
                 error_code="approval_check_error",
-                details={"thread_id": thread_id}
+                details={"thread_id": thread_id, "error_type": type(e).__name__}
             )
 
     def _requires_approval(self, tool_call: dict) -> bool:
@@ -226,119 +363,6 @@ class StreamManager:
         })
 
         return False
-
-    async def continue_after_approval(
-        self,
-        thread_id: str,
-        tool_call_id: str,
-        approved: bool,
-        stream_input: StreamInput
-    ) -> AsyncGenerator[StreamEvent, None]:
-        """Continue streaming after human approval/denial"""
-
-        config = {"configurable": {"thread_id": thread_id}}
-
-        logger.info("Continuing after approval decision", extra={
-            "event_type": "approval_continuation_start",
-            "thread_id": thread_id,
-            "tool_call_id": tool_call_id,
-            "approved": approved
-        })
-
-        try:
-            if approved:
-                logger.info("Tool call approved, continuing execution", extra={
-                    "event_type": "tool_approved",
-                    "thread_id": thread_id,
-                    "tool_call_id": tool_call_id
-                })
-                # Continue to the tools node
-                await self.graph.aupdate_state(
-                    config,
-                    values=None,
-                    as_node="human_review",
-                )
-            else:
-                logger.info("Tool call denied, injecting denial message", extra={
-                    "event_type": "tool_denied",
-                    "thread_id": thread_id,
-                    "tool_call_id": tool_call_id
-                })
-                # Inject a denial message
-                from langchain_core.messages import ToolMessage
-                await self.graph.aupdate_state(
-                    config,
-                    {"messages": [ToolMessage(
-                        content="User denied request to OBP API",
-                        tool_call_id=tool_call_id
-                    )]},
-                    as_node="tools",
-                )
-
-            # Continue streaming the response
-            orchestrator = StreamEventOrchestrator(stream_input)
-
-            event_count = 0
-            async for langgraph_event in self.graph.astream_events(
-                input=None,
-                config=config,
-                version="v2"
-            ):
-                event_count += 1
-                try:
-                    async for stream_event in orchestrator.process_event(langgraph_event):
-                        yield stream_event
-                except Exception as e:
-                    error_msg = f"Error processing post-approval event: {str(e)}"
-                    logger.error(error_msg, exc_info=True, extra={
-                        "event_type": "post_approval_event_error",
-                        "thread_id": thread_id,
-                        "tool_call_id": tool_call_id,
-                        "event_count": event_count,
-                        "langgraph_event_type": langgraph_event.get("event")
-                    })
-                    yield StreamEventFactory.error(
-                        error_message=error_msg,
-                        error_code="post_approval_event_error",
-                        details={
-                            "thread_id": thread_id,
-                            "tool_call_id": tool_call_id,
-                            "event_count": event_count
-                        }
-                    )
-
-            logger.info("Approval continuation completed", extra={
-                "event_type": "approval_continuation_completed",
-                "thread_id": thread_id,
-                "tool_call_id": tool_call_id,
-                "approved": approved,
-                "event_count": event_count
-            })
-
-        except Exception as e:
-            error_msg = f"Error continuing after approval: {str(e)}"
-            logger.error(error_msg, exc_info=True, extra={
-                "event_type": "approval_continuation_error",
-                "thread_id": thread_id,
-                "tool_call_id": tool_call_id,
-                "approved": approved
-            })
-            yield StreamEventFactory.error(
-                error_message=error_msg,
-                error_code="approval_continuation_error",
-                details={
-                    "thread_id": thread_id,
-                    "tool_call_id": tool_call_id,
-                    "approved": approved
-                }
-            )
-        finally:
-            logger.info("Approval continuation stream ended", extra={
-                "event_type": "approval_continuation_stream_end",
-                "thread_id": thread_id,
-                "tool_call_id": tool_call_id
-            })
-            yield StreamEventFactory.stream_end()
 
     def to_sse_format(self, event: StreamEvent) -> str:
         """Convert a stream event to SSE format"""

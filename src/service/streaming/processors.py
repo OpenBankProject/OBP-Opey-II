@@ -20,7 +20,9 @@ class BaseEventProcessor:
 
     async def process(self, event: LangGraphStreamEvent) -> AsyncGenerator[StreamEvent, None]:
         """Process a LangGraph event and yield stream events"""
-        yield  # Make this an async generator
+        yield StreamEventFactory.error(
+            error_message="BaseEventProcessor cannot process events directly",
+        )
 
 
 class AssistantEventProcessor(BaseEventProcessor):
@@ -30,8 +32,8 @@ class AssistantEventProcessor(BaseEventProcessor):
         super().__init__(stream_input)
         self.assistant_started = False
         self.streaming_content = ""
-        self.current_tool_calls = []
         self.current_message_id = None
+        self.run_id = None
 
     async def process(self, event: LangGraphStreamEvent) -> AsyncGenerator[StreamEvent, None]:
         """Process assistant-related events"""
@@ -56,10 +58,16 @@ class AssistantEventProcessor(BaseEventProcessor):
 
                         # Extract message ID, fallback to generating one if not available
                         message_id = getattr(message, 'id', None) or str(uuid.uuid4())
+                        run_id = self.run_id or event.get("run_id", None)
+
+                        # CRITICAL FIX: Reset streaming state for new message
+                        # This ensures each assistant response gets a fresh state
+                        self._reset_streaming_state()
 
                         yield StreamEventFactory.assistant_complete(
                             content=content,
                             message_id=message_id,
+                            run_id=run_id,
                             tool_calls=tool_calls
                         )
                     except Exception as e:
@@ -85,8 +93,9 @@ class AssistantEventProcessor(BaseEventProcessor):
             try:
                 content = event["data"]["chunk"].content
                 if content:
-                    # Initialize message ID for streaming if not already set
-                    if not self.current_message_id:
+                    # CRITICAL FIX: Generate new message ID for each new streaming session
+                    # This prevents token mixing between different assistant responses
+                    if not self.current_message_id or not self.assistant_started:
                         # Try to get message ID from the chunk if available, otherwise generate one
                         chunk = event["data"]["chunk"]
                         self.current_message_id = getattr(chunk, 'id', None) or str(uuid.uuid4())
@@ -94,7 +103,10 @@ class AssistantEventProcessor(BaseEventProcessor):
                     # Send assistant_start if this is the first token
                     if not self.assistant_started:
                         self.assistant_started = True
-                        yield StreamEventFactory.assistant_start(message_id=self.current_message_id)
+                        if not self.run_id:
+                            grabbed_run_id = event.get("run_id", None)
+                            self.run_id = grabbed_run_id
+                        yield StreamEventFactory.assistant_start(message_id=self.current_message_id, run_id=self.run_id)
 
                     token_content = convert_message_content_to_string(content)
                     if token_content:
@@ -128,12 +140,22 @@ class AssistantEventProcessor(BaseEventProcessor):
         node_name = event["metadata"].get("langgraph_node", "")
         return node_name not in excluded_nodes
 
-    def reset_for_new_message(self):
-        """Reset state for a new message"""
+    def _reset_streaming_state(self):
+        """
+        Reset streaming state for a new assistant response.
+        
+        This method implements the Command Pattern to encapsulate
+        state reset logic and ensure clean separation between responses.
+        """
         self.assistant_started = False
         self.streaming_content = ""
-        self.current_tool_calls = []
         self.current_message_id = None
+        # Note: We don't reset run_id as it should persist across the entire request
+
+    def reset_for_new_message(self):
+        """Reset state for a new message (external interface)"""
+        self._reset_streaming_state()
+        self.run_id = None  # Also reset run_id for completely new conversations
 
 
 class ToolEventProcessor(BaseEventProcessor):
@@ -154,14 +176,21 @@ class ToolEventProcessor(BaseEventProcessor):
             and "messages" in event["data"]["output"]
             and event["metadata"].get("langgraph_node", "") == "opey"
         ):
+            logger.info(f"TOOL_EVENT_DEBUG - Processing event: {event['event']} with metadata: {event.get('metadata', {})}")
+
             messages = event["data"]["output"]["messages"]
             if not isinstance(messages, list):
                 messages = [messages]
+
+
+            grabbed_run_id = event.get("run_id", None)
+            print(f"Grabbed run_id from tool: {grabbed_run_id}")  # Debugging line
 
             for message in messages:
                 if isinstance(message, AIMessage) and hasattr(message, 'tool_calls') and message.tool_calls:
                     for tool_call in message.tool_calls:
                         try:
+                            logger.info(f"TOOL_EVENT_DEBUG - Adding: {tool_call} to pending tool calls")
                             self.pending_tool_calls[tool_call["id"]] = {
                                 "name": tool_call["name"],
                                 "input": tool_call["args"]
@@ -200,17 +229,52 @@ class ToolEventProcessor(BaseEventProcessor):
             if not isinstance(messages, list):
                 messages = [messages]
 
+            logger.info(f"\n\nTOOL_EVENT_DEBUG - Processing event:\n{json.dumps(event, indent=2, default=str)}\n\n")
+
+            grabbed_run_id = event.get("run_id", None)
+            print(f"Grabbed run_id from tool completion: {grabbed_run_id}") 
+
             for message in messages:
+                logger.info(f"TOOL_EVENT_DEBUG - Processing message of instance ({type(message)}): {message}")
                 if isinstance(message, ToolMessage):
                     tool_call_id = message.tool_call_id
+                    logger.info(f"TOOL_EVENT_DEBUG - Found ToolMessage with tool_call_id: {tool_call_id}")
+                    logger.info(f"TOOL_EVENT_DEBUG - Current pending_tool_calls: {self.pending_tool_calls.keys()}")
                     if tool_call_id in self.pending_tool_calls:
                         try:
                             tool_info = self.pending_tool_calls[tool_call_id]
+
+                            # Log the message for debugging
+                            logger.debug(f"Processing tool message: tool_call_id={tool_call_id}")
+                            logger.debug(f"Message content: {str(message.content)[:500]}...")
+                            logger.debug(f"Message type: {type(message.content)}")
+                            logger.debug(f"Has status attr: {hasattr(message, 'status')}")
+                            if hasattr(message, 'status'):
+                                logger.debug(f"Status value: {message.status}")
 
                             # Determine status from message
                             status = "success"
                             if hasattr(message, 'status') and message.status == "error":
                                 status = "error"
+                                logger.error(f"TOOL_ERROR_DEBUG - Status set to error from message.status")
+                            # elif isinstance(message.content, str):
+                            #     content_lower = message.content.lower()
+                            #     # Enhanced error detection patterns
+                            #     # TODO: Change this it is absolutely horrible
+                            #     error_patterns = [
+                            #         'error:', 'exception(', 'failed', 'obp-', 'http 4', 'http 5',
+                            #         'value too long', 'unauthorized', 'forbidden', 'bad request',
+                            #         'internal server error', 'not found', 'conflict', 'unprocessable',
+                            #         'obp api error', 'status: 4', 'status: 5'
+                            #     ]
+                            #     matched_patterns = [pattern for pattern in error_patterns if pattern in content_lower]
+                            #     if matched_patterns:
+                            #         status = "error"
+                            #         logger.error(f"TOOL_ERROR_DEBUG - Status set to error from content patterns: {matched_patterns}")
+                            #     else:
+                            #         logger.error(f"TOOL_ERROR_DEBUG - No error patterns matched in content")
+
+                            logger.error(f"TOOL_ERROR_DEBUG - Final status determination: {status}")
 
                             # Try to parse tool output
                             try:
@@ -220,21 +284,51 @@ class ToolEventProcessor(BaseEventProcessor):
 
                             # Log tool completion for monitoring
                             if status == "error":
-                                logger.warning(f"Tool execution failed", extra={
+                                logger.error(f"Tool execution failed: {tool_output}", extra={
                                     "event_type": "tool_execution_failed",
                                     "tool_call_id": tool_call_id,
                                     "tool_name": tool_info["name"],
                                     "tool_output": tool_output
                                 })
 
-                            yield StreamEventFactory.tool_end(
+                                # TODO: this also needs to be changed, create a converter function for langgraph to frontend errors
+                                # Format error message for user display
+                                if isinstance(tool_output, str) and "OBP API error" in tool_output:
+                                    # Extract the actual error message from the exception string
+                                    if "): " in tool_output:
+                                        actual_error = tool_output.split("): ", 1)[1]
+                                    else:
+                                        actual_error = tool_output
+                                    user_error_msg = f"API Error: {actual_error}"
+                                else:
+                                    user_error_msg = f"Tool '{tool_info['name']}' failed: {tool_output}"
+
+                                logger.error(f"TOOL_ERROR_STREAM - Emitting error event for tool_call_id={tool_call_id}")
+                                # Emit error event for immediate visibility
+                                error_event = StreamEventFactory.error(
+                                    error_message=user_error_msg,
+                                    error_code="tool_execution_error",
+                                    for_message_id=getattr(message, 'id', None),
+                                    details={"tool_call_id": tool_call_id, "tool_name": tool_info["name"], "tool_output": tool_output}
+                                )
+                                logger.error(f"TOOL_ERROR_STREAM - About to yield error event: {error_event.model_dump_json()}")
+                                yield error_event
+                                logger.error(f"TOOL_ERROR_STREAM - Successfully yielded error event")
+
+                            logger.error(f"TOOL_END_STREAM - About to emit tool_end event for tool_call_id={tool_call_id} with status={status}")
+                            logger.info(f"TOOL_END_STREAM - About to emit tool_end event for tool_call_id={tool_call_id} with status={status}")
+                            tool_end_event = StreamEventFactory.tool_end(
                                 tool_name=tool_info["name"],
                                 tool_call_id=tool_call_id,
                                 tool_output=tool_output,
                                 status=status
                             )
+                            logger.error(f"TOOL_END_STREAM - Yielding tool_end event: {tool_end_event.model_dump_json()}")
+                            yield tool_end_event
+                            logger.error(f"TOOL_END_STREAM - Successfully yielded tool_end event")
 
                             # Remove from pending
+                            logger.info(f"TOOL_EVENT_DEBUG - Removing tool_call_id {tool_call_id} from pending_tool_calls")
                             del self.pending_tool_calls[tool_call_id]
                         except Exception as e:
                             error_msg = f"Error processing tool completion: {str(e)}"
@@ -250,6 +344,10 @@ class ToolEventProcessor(BaseEventProcessor):
                                 for_message_id=getattr(message, 'id', None),
                                 details={"tool_call_id": tool_call_id, "original_event": event}
                             )
+
+    def reset_for_new_message(self):
+        """Reset tool processor state for a new message"""
+        self.pending_tool_calls = {}
 
 
 class ApprovalEventProcessor(BaseEventProcessor):
@@ -370,3 +468,25 @@ class StreamEventOrchestrator:
         for processor in self.processors:
             if hasattr(processor, 'reset_for_new_message'):
                 processor.reset_for_new_message()
+
+    def reset_for_new_request(self):
+        """
+        Reset processors for a new user message request.
+        
+        This ensures that message IDs and run IDs from previous requests
+        (especially cancelled ones) don't leak into the new request.
+        Called when reusing an orchestrator for a new user message
+        (not an approval response).
+        """
+        # Reset assistant processor to clear message_id and run_id
+        assistant_processor = self.get_assistant_processor()
+        assistant_processor.reset_for_new_message()
+        
+        # Reset tool processor if it has the method
+        try:
+            tool_processor = self.get_tool_processor()
+            if hasattr(tool_processor, 'reset_for_new_message'):
+                tool_processor.reset_for_new_message()
+        except RuntimeError:
+            # Tool processor not found, that's okay
+            pass

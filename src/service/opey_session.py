@@ -1,4 +1,3 @@
-from auth.auth import BaseAuth
 from typing import Annotated
 
 from auth.session import session_verifier, SessionData, session_cookie
@@ -7,18 +6,24 @@ from auth.usage_tracker import usage_tracker
 from fastapi import Depends, Request
 from uuid import UUID
 
-from agent import compile_opey_graph_with_tools, compile_opey_graph_with_tools_no_HIL
+from agent.graph_builder import OpeyAgentGraphBuilder, create_basic_opey_graph, create_supervised_opey_graph
 from agent.components.tools import endpoint_retrieval_tool, glossary_retrieval_tool
+from agent.components.tools import get_tool_registry, create_approval_manager
+from agent.components.tools.approval_models import (
+    ToolApprovalMetadata, ApprovalPattern, ApprovalAction,
+    RiskLevel, ApprovalLevel
+)
 
 from agent.utils.obp import OBPRequestsModule
 from service.checkpointer import get_global_checkpointer
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from service.redis_client import get_redis_client
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_core.runnables.graph import MermaidDrawMethod
 
 
 import os
 import logging
+import json
 
 # Configure logging
 logging.basicConfig(
@@ -36,7 +41,7 @@ class OpeySession:
         # Store session data and check usage limits for anonymous sessions
         self.session_data = session_data
         self.session_id = session_id
-        usage_tracker.check_anonymous_limits(session_data)
+        # Note: Usage limits will be checked when methods are called
 
         # Store session data in request state for middleware to update
         request.state.session_data = session_data
@@ -45,7 +50,19 @@ class OpeySession:
         # Get consent_jwt from the session data (None for anonymous sessions)
         self.consent_jwt = session_data.consent_jwt
         self.is_anonymous = session_data.is_anonymous
-
+        
+        # Set up the model used
+        self._setup_model()
+        
+        # Initialize approval system
+        self.tool_registry = get_tool_registry()
+        redis_client = get_redis_client() if os.getenv("REDIS_URL") else None
+        workspace_config = self._load_workspace_approval_config()
+        self.approval_manager = create_approval_manager(
+            redis_client=redis_client,
+            workspace_config=workspace_config
+        )
+        
         # Initialize auth object only if not anonymous
         if not self.is_anonymous:
             self.auth = OBPConsentAuth(consent_jwt=self.consent_jwt)
@@ -61,44 +78,234 @@ class OpeySession:
             # Initialize the OBPRequestsModule with the auth object (only for authenticated sessions)
             self.obp_requests = OBPRequestsModule(self.auth)
 
-        # Base tools that all modes should have:
-        base_tools = [endpoint_retrieval_tool, glossary_retrieval_tool]
+        # Register base tools with approval metadata
+        self._register_base_tools()
+        
+        # Register OBP tools if needed
+        if obp_api_mode != "NONE" and not self.is_anonymous:
+            self._register_obp_tools(obp_api_mode)
+        
+        # Get tools from registry
+        base_tools = self.tool_registry.get_langchain_tools()
         # Initialize the graph with the appropriate tools based on the OBP API mode
         match obp_api_mode:
             case "NONE":
                 logger.info("OBP API mode set to NONE: Calls to the OBP-API will not be available")
-                tools = base_tools
-                self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+                self.graph = (OpeyAgentGraphBuilder()
+                              .with_tools(base_tools)
+                              .with_model(self._model_name, temperature=0.5)
+                              .with_checkpointer(checkpointer)
+                              .enable_human_review(False)
+                              .build())
 
             case "SAFE":
                 if self.is_anonymous:
                     logger.info("Anonymous session using SAFE mode: Only GET requests to OBP-API will be available")
-                    tools = base_tools  # Anonymous sessions don't get OBP tools for now
-                    self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+                    prompt_addition = "Note: This is an anonymous session with limited capabilities. User can only make GET requests to the OBP-API. Ensure all responses adhere to this restriction."
+                    self.graph = (OpeyAgentGraphBuilder()
+                                 .with_tools(base_tools)
+                                 .with_model(self._model_name, temperature=0.5)
+                                 .add_to_system_prompt(prompt_addition)
+                                 .with_checkpointer(checkpointer)
+                                 .enable_human_review(False)
+                                 .build())
                 else:
                     logger.info("OBP API mode set to SAFE: GET requests to the OBP-API will be available")
-                    tools = base_tools + [self.obp_requests.get_langchain_tool('safe')]
-                    logger.info("Compiling graph with request tool: %s", tools[-1])
-                    self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+                    self.graph = (OpeyAgentGraphBuilder()
+                                 .with_tools(base_tools)
+                                 .with_model(self._model_name, temperature=0.5)
+                                 .with_checkpointer(checkpointer)
+                                 .enable_human_review(False)
+                                 .build())
 
             case "DANGEROUS":
                 logger.info("OBP API mode set to DANGEROUS: All requests to the OBP-API will be available subject to user approval.")
-                tools = base_tools + [self.obp_requests.get_langchain_tool('dangerous')]
-                self.graph = compile_opey_graph_with_tools(tools)
+                self.graph = (OpeyAgentGraphBuilder()
+                             .with_tools(base_tools)
+                             .with_model(self._model_name, temperature=0.5)
+                             .with_checkpointer(checkpointer)
+                             .enable_human_review(True)
+                             .build())
 
             case "TEST":
-                logger.info("OBP API mode set to TEST: All requests to the OBP-API will be available AND WILL BE APPROVED BY DEFAULT. DO NOT USE IN PRODUCTION.")
-                tools = base_tools + [self.obp_requests.get_langchain_tool('test')]
-                self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+                logger.info("OBP API mode set to TEST: All requests to the OBP-API will be available AND WILL BE APPROVED BY DEFAULT.")
+                test_prompt = "You are in TEST mode. Operations will be auto-approved. DO NOT USE IN PRODUCTION."
+                self.graph = (OpeyAgentGraphBuilder()
+                             .with_tools(base_tools)
+                             .add_to_system_prompt(test_prompt)
+                             .with_model(self._model_name, temperature=0.5)
+                             .with_checkpointer(checkpointer)
+                             .enable_human_review(False)
+                             .build())
 
             case _:
                 logger.error(f"OBP API mode set to {obp_api_mode}: Unknown OBP API mode. Defaulting to NONE.")
-                tools = base_tools
-                self.graph = compile_opey_graph_with_tools_no_HIL(tools)
+                self.graph = create_basic_opey_graph(base_tools)
+                self.graph.checkpointer = checkpointer
 
 
         self.graph.checkpointer = checkpointer
-
+        
+    def _setup_model(self):
+        """
+        Set up the model for the session.
+        """
+        from agent.utils.model_factory import LLMProviders, get_available_models
+        model_provider = os.getenv("MODEL_PROVIDER")
+        if not model_provider:
+            raise ValueError("MODEL_PROVIDER environment variable must be set")
+        
+        if not (model_provider := model_provider.lower()) in [provider.value for provider in LLMProviders]:
+            raise ValueError(f"Unsupported MODEL_PROVIDER: {model_provider}. Supported providers: {[provider.value for provider in LLMProviders]}")
+        
+        try:
+            
+            available_models = get_available_models(LLMProviders(model_provider))
+        except RuntimeError as e:
+            logger.error(f"Error checking available models: {e}")
+            raise
+        
+        logger.info(f"Using model provider: {model_provider}")
+        logger.info(f"Available models for provider {model_provider}: {available_models}")
+        
+        model_name = os.getenv("MODEL_NAME")
+        if not model_name:
+            raise ValueError("MODEL_NAME environment variable must be set")
+        
+        if model_name not in available_models:
+            raise ValueError(f"MODEL_NAME {model_name} is not available for provider {model_provider}. Available models: {available_models}")
+        
+        logger.info(f"Using model: {model_name}")
+        self._model_name = model_name
+    
+    def _load_workspace_approval_config(self) -> dict:
+        """
+        Load workspace-level approval configuration.
+        Could be from environment, config file, or database.
+        """
+        # Try to load from environment variable first
+        config_str = os.getenv("WORKSPACE_APPROVAL_CONFIG", "{}")
+        try:
+            config = json.loads(config_str)
+            if config:
+                logger.info(f"Loaded workspace approval config from environment")
+            return config
+        except json.JSONDecodeError:
+            logger.warning("Invalid WORKSPACE_APPROVAL_CONFIG JSON, using empty config")
+            return {}
+    
+    def _register_base_tools(self):
+        """Register base tools (endpoint_retrieval, glossary_retrieval) with approval metadata"""
+        self.tool_registry.register_tool(
+            tool=endpoint_retrieval_tool,
+            approval_metadata=ToolApprovalMetadata(
+                tool_name="endpoint_retrieval_tool",
+                description="Retrieve OBP API endpoint documentation",
+                requires_auth=False,
+                default_risk_level=RiskLevel.SAFE,
+                patterns=[
+                    ApprovalPattern(
+                        method="*",
+                        path="*",
+                        action=ApprovalAction.AUTO_APPROVE,
+                        reason="Read-only operation"
+                    )
+                ],
+                can_be_pre_approved=True,
+                available_approval_levels=[ApprovalLevel.ONCE, ApprovalLevel.SESSION]
+            )
+        )
+        
+        self.tool_registry.register_tool(
+            tool=glossary_retrieval_tool,
+            approval_metadata=ToolApprovalMetadata(
+                tool_name="glossary_retrieval_tool",
+                description="Retrieve glossary definitions",
+                requires_auth=False,
+                default_risk_level=RiskLevel.SAFE,
+                patterns=[
+                    ApprovalPattern(
+                        method="*",
+                        path="*",
+                        action=ApprovalAction.AUTO_APPROVE,
+                        reason="Read-only operation"
+                    )
+                ],
+                can_be_pre_approved=True,
+                available_approval_levels=[ApprovalLevel.ONCE, ApprovalLevel.SESSION]
+            )
+        )
+        logger.info("Registered base tools with approval metadata")
+    
+    def _register_obp_tools(self, obp_api_mode: str):
+        """Register OBP tools with approval metadata based on mode"""
+        if obp_api_mode == "SAFE":
+            # Only GET requests, auto-approve
+            patterns = [
+                ApprovalPattern(
+                    method="GET",
+                    path="*",
+                    action=ApprovalAction.AUTO_APPROVE,
+                    reason="SAFE mode: read-only operations"
+                )
+            ]
+        elif obp_api_mode == "DANGEROUS":
+            # GET auto-approved, others require approval
+            patterns = [
+                ApprovalPattern(
+                    method="GET",
+                    path="*",
+                    action=ApprovalAction.AUTO_APPROVE,
+                    reason="Read-only operation"
+                ),
+                ApprovalPattern(
+                    method="POST",
+                    path="/obp/*/accounts/*/views",
+                    action=ApprovalAction.AUTO_APPROVE,
+                    reason="View creation is low risk"
+                ),
+                ApprovalPattern(
+                    method="DELETE",
+                    path="/obp/*/banks/*",
+                    action=ApprovalAction.ALWAYS_DENY,
+                    reason="Cannot delete banks"
+                ),
+                ApprovalPattern(
+                    method="*",
+                    path="*",
+                    action=ApprovalAction.REQUIRE_APPROVAL,
+                    reason="Default: require approval for modifications"
+                )
+            ]
+        else:  # TEST mode
+            patterns = [
+                ApprovalPattern(
+                    method="*",
+                    path="*",
+                    action=ApprovalAction.AUTO_APPROVE,
+                    reason="TEST mode: auto-approve everything"
+                )
+            ]
+        
+        obp_tool = self.obp_requests.get_langchain_tool(obp_api_mode.lower())
+        
+        self.tool_registry.register_tool(
+            tool=obp_tool,
+            approval_metadata=ToolApprovalMetadata(
+                tool_name="obp_requests",
+                description="Make HTTP requests to OBP API",
+                requires_auth=True,
+                default_risk_level=RiskLevel.DANGEROUS,
+                patterns=patterns,
+                can_be_pre_approved=True,
+                available_approval_levels=[
+                    ApprovalLevel.ONCE,
+                    ApprovalLevel.SESSION,
+                    ApprovalLevel.USER
+                ]
+            )
+        )
+        logger.info(f"Registered OBP tools for {obp_api_mode} mode with approval metadata")
 
     def update_token_usage(self, token_count: int) -> None:
         """
