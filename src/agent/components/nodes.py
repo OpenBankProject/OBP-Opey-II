@@ -562,4 +562,62 @@ async def human_review_node(state: OpeyGraphState, config: RunnableConfig):
         "session_approvals": updated_session_approvals,
         "approval_timestamps": updated_approval_timestamps
     }
+    
+async def sanitize_tool_responses(state: OpeyGraphState, config: RunnableConfig):
+    """
+    Sanitize tool responses in case they contain too much data. I.e. too many tokens.
+    
+    Args:
+        state: Graph state containing messages
+        config: RunnableConfig (not used here)
+    """
+    
+    from agent.utils.token_counter import count_tokens, count_tokens_from_messages
+    from agent.utils.model_factory import get_max_input_tokens
+    
+    messages = state["messages"]
+    if not messages:
+        return {}
+    
+    if not isinstance(messages[-1], ToolMessage):
+        logger.warning("Last message is not a ToolMessage")
+        return {}
+    
+    # Extract model configuration from RunnableConfig
+    configurable = config.get("configurable", {}) if config else {}
+    model_name = configurable.get("model_name")
+    model_kwargs = configurable.get("model_kwargs", {})
+    
+    if not model_name:
+        logger.error("No model_name in config for token counting")
+        return {}
+    
+    # Check if total messages exceed token limit
+    total_tokens = count_tokens_from_messages(
+        messages=messages,
+        model_name=model_name,
+        model_kwargs=model_kwargs
+    )
+    
+    max_input_tokens = get_max_input_tokens(model_name)
+    
+    logger.info(f"Total tokens in messages: {total_tokens}, Max input tokens for model '{model_name}': {max_input_tokens}")
+    if total_tokens <= max_input_tokens:
+        logger.info("No sanitization needed, token count within limits")
+        return {}
+    
+    # Sanitize the last ToolMessage's content
+    tool_message: ToolMessage = messages[-1]
+    original_content = tool_message.content
+    sanitized_content = original_content[:1000] + "\n\n[TRUNCATED TOOL RESPONSE DUE TO EXCESSIVE LENGTH]"
+    
+    tool_message.content = sanitized_content
+    logger.info("Sanitized ToolMessage content due to excessive token count")
+    return {"messages": [tool_message]}
+    
+    
+    
+    
+    
+    
 

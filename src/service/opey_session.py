@@ -142,8 +142,7 @@ class OpeySession:
                 logger.error(f"OBP API mode set to {obp_api_mode}: Unknown OBP API mode. Defaulting to NONE.")
                 self.graph = create_basic_opey_graph(base_tools)
                 self.graph.checkpointer = checkpointer
-
-
+        
         self.graph.checkpointer = checkpointer
         
     def _setup_model(self):
@@ -306,6 +305,42 @@ class OpeySession:
             )
         )
         logger.info(f"Registered OBP tools for {obp_api_mode} mode with approval metadata")
+
+    def build_config(self, base_config: dict | None = None) -> dict:
+        """
+        Build a complete RunnableConfig by merging base session config with runtime config.
+        This ensures model context is available to all nodes without clashing with
+        service-level config like thread_id.
+        
+        Args:
+            base_config: Optional config dict from service endpoints (e.g., with thread_id)
+        
+        Returns:
+            Merged config dict with all necessary context
+        
+        Example:
+            # In service.py:
+            config = opey_session.build_config({'configurable': {'thread_id': thread_id}})
+        """
+        base_config = base_config or {}
+        
+        # Session-level configuration (model context, approval manager)
+        session_configurable = {
+            "model_name": self._model_name,
+            "model_kwargs": {},  # Add model_kwargs if needed in future
+            "approval_manager": self.approval_manager,
+        }
+        
+        # Merge: base config takes precedence for runtime values like thread_id
+        merged_configurable = {
+            **session_configurable,
+            **base_config.get("configurable", {})
+        }
+        
+        return {
+            **base_config,
+            "configurable": merged_configurable
+        }
 
     def update_token_usage(self, token_count: int) -> None:
         """

@@ -473,12 +473,13 @@ async def stream_agent(
 
     # Get the actual thread_id that will be used
     thread_id = user_input.thread_id or str(stream_manager.opey_session.session_id)
-    config = {
+    
+    # Build config with model context merged in
+    config = stream_manager.opey_session.build_config({
         'configurable': {
             'thread_id': thread_id,
-            'approval_manager': stream_manager.opey_session.approval_manager
         }
-    }
+    })
 
     async def stream_generator():
         from utils.cancellation_manager import cancellation_manager
@@ -552,12 +553,12 @@ async def user_approval(
         tool_call_approval=user_approval_response,
     )
 
-    config = {
+    # Build config with model context merged in (approval_manager already included)
+    config = stream_manager.opey_session.build_config({
         'configurable': {
             'thread_id': thread_id,
-            'approval_manager': stream_manager.opey_session.approval_manager
         }
-    }
+    })
 
     async def stream_generator():
         async for stream_event in stream_manager.stream_response(
