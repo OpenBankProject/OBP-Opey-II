@@ -209,10 +209,18 @@ async def _categorize_tool_calls(
             denied.append(tool_call)
             continue
         
-        # Check if tool requires approval
-        if not tool_registry.should_require_approval(tool_name, tool_args):
-            logger.info(f"Tool {tool_name} auto-approved by pattern ({tool_call_id})")
-            auto_approved.append(tool_call)
+        # Check if tool requires approval or is denied by pattern
+        try:
+            if not tool_registry.should_require_approval(tool_name, tool_args):
+                logger.info(f"Tool {tool_name} auto-approved by pattern ({tool_call_id})")
+                auto_approved.append(tool_call)
+                continue
+        except ValueError as e:
+            # Tool call is denied by ALWAYS_DENY pattern
+            logger.warning(f"Tool call denied by pattern: {tool_name} ({tool_call_id}): {e}")
+            # Store the denial reason in the tool_call for error message generation
+            tool_call["_denial_reason"] = str(e)
+            denied.append(tool_call)
             continue
         
         # Needs user approval
@@ -497,9 +505,12 @@ async def human_review_node(state: OpeyGraphState, config: RunnableConfig):
     # Step 2: Handle denied tools - create error messages
     tool_messages = []
     for tool_call in denied:
+        # Use stored denial reason if available, otherwise use generic message
+        denial_reason = tool_call.get("_denial_reason", "denied by approval policy")
         tool_messages.append(ToolMessage(
-            content=f"Tool call denied by approval policy",
-            tool_call_id=tool_call["id"]
+            content=f"Tool call denied: {denial_reason}",
+            tool_call_id=tool_call["id"],
+            status="error"
         ))
     
     # Step 3: If no tools need approval, we're done
