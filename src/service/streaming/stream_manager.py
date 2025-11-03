@@ -123,12 +123,23 @@ class StreamManager:
                 # This can happen when cancellation occurs during tool execution
                 await self._fix_orphaned_tool_calls(config)
                 
-                graph_input = {"messages": [input_message.to_langchain()]}
+                langchain_message = input_message.to_langchain()
+                graph_input = {"messages": [langchain_message]}
+                
                 logger.debug("Processing user message", extra={
                     "event_type": "user_message_processing",
                     "thread_id": thread_id,
                     "message_type": input_message.type
                 })
+                
+                # Emit user_message_confirmed event with backend-assigned ID
+                # This allows frontend to sync its message ID with the backend
+                user_message_id = getattr(langchain_message, 'id', None)
+                if user_message_id:
+                    yield StreamEventFactory.user_message_confirmed(
+                        message_id=user_message_id,
+                        content=stream_input.message
+                    )
 
             # Stream events from the graph
             kwargs = {

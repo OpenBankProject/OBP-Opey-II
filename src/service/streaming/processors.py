@@ -56,7 +56,7 @@ class AssistantEventProcessor(BaseEventProcessor):
                         content = convert_message_content_to_string(message.content)
                         tool_calls = getattr(message, 'tool_calls', [])
 
-                        # Extract message ID, fallback to generating one if not available
+                        # Extract message ID - LangChain always assigns one
                         message_id = getattr(message, 'id', None) or str(uuid.uuid4())
                         run_id = self.run_id or event.get("run_id", None)
 
