@@ -994,6 +994,23 @@ protobuf = ">=3.20.2,<4.21.1 || >4.21.1,<4.21.2 || >4.21.2,<4.21.3 || >4.21.3,<4
 grpc = ["grpcio (>=1.44.0,<2.0.0.dev0)"]
 
 [[package]]
+name = "graphviz"
+version = "0.21"
+description = "Simple Python interface for Graphviz"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "graphviz-0.21-py3-none-any.whl", hash = "sha256:54f33de9f4f911d7e84e4191749cac8cc5653f815b06738c54db9a15ab8b1e42"},
+    {file = "graphviz-0.21.tar.gz", hash = "sha256:20743e7183be82aaaa8ad6c93f8893c923bd6658a04c32ee115edb3c8a835f78"},
+]
+
+[package.extras]
+dev = ["Flake8-pyproject", "build", "flake8", "pep8-naming", "tox (>=3)", "twine", "wheel"]
+docs = ["sphinx (>=5,<7)", "sphinx-autodoc-typehints", "sphinx-rtd-theme (>=0.2.5)"]
+test = ["coverage", "pytest (>=7,<8.1)", "pytest-cov", "pytest-mock (>=3)"]
+
+[[package]]
 name = "greenlet"
 version = "3.1.1"
 description = "Lightweight in-process concurrent programming"
@@ -1969,6 +1986,21 @@ files = [
     {file = "mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8"},
     {file = "mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba"},
 ]
+
+[[package]]
+name = "mermaid-py"
+version = "0.8.0"
+description = "Python Interface for the Popular mermaid-js Library, Simplified for Diagram Creation."
+optional = false
+python-versions = "<4.0,>=3.9"
+groups = ["main"]
+files = [
+    {file = "mermaid_py-0.8.0-py3-none-any.whl", hash = "sha256:dab0463ffe67fb3f13f0058cf5c0c2fa2685136cdc7e4ae3067d8b9d9c9e378a"},
+    {file = "mermaid_py-0.8.0.tar.gz", hash = "sha256:8ba7853f88c09ebf9c2d355c0ebd1e272e877c9568c10612ae9d0f57245608ef"},
+]
+
+[package.dependencies]
+requests = ">=2.31.0,<3.0.0"
 
 [[package]]
 name = "mmh3"
@@ -4954,4 +4986,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "3.12.7"
-content-hash = "b08e2f7e00f9c73ef5a212b51508c8e74f9bd7e54dbbb05bf744c3ce216c933b"
+content-hash = "8e72fff53bb64fd84e0f80a4ad2185510b73adcb2a26b3275e446376441c8105"

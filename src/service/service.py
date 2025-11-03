@@ -7,7 +7,7 @@ import uuid
 import logging
 
 from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.exception_handlers import http_exception_handler
@@ -39,6 +39,8 @@ from schema import (
     UsageInfoResponse,
     SessionUpgradeResponse,
 )
+
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -384,6 +386,26 @@ async def get_status() -> dict[str, Any]:
     }
 
     return status_info
+
+@app.get("/mermaid_diagram", dependencies=[Depends(session_cookie)])
+async def get_mermaid_diagram(opey_session: Annotated[OpeySession, Depends()]) -> FileResponse:
+    svg_path = Path("../resources/mermaid_diagram.svg")
+    
+    try:
+        if not svg_path.parent.exists():
+            svg_path.parent.mkdir(parents=True, exist_ok=True)
+            
+        import mermaid
+        mermaid_graph = opey_session.graph.get_graph().draw_mermaid()
+        
+        mermaid_svg = mermaid.Mermaid(mermaid_graph).to_svg(svg_path)
+        logger.info(f"Generated mermaid diagram at {svg_path}")
+        
+    except Exception as e:
+        logger.error(f"Error generating mermaid diagram: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to generate mermaid diagram")
+
+    return FileResponse(svg_path, media_type="image/svg+xml")
 
 @app.post("/invoke", dependencies=[Depends(session_cookie)])
 async def invoke(user_input: UserInput, request: Request, opey_session: Annotated[OpeySession, Depends()]) -> ChatMessage:
