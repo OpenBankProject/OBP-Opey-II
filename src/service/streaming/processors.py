@@ -3,7 +3,7 @@ import uuid
 import logging
 from typing import AsyncGenerator, Optional, Dict, Any
 from langchain_core.runnables.schema import StreamEvent as LangGraphStreamEvent
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage, HumanMessage
 
 from .events import StreamEvent, StreamEventFactory
 from schema import StreamInput, convert_message_content_to_string
@@ -23,6 +23,52 @@ class BaseEventProcessor:
         yield StreamEventFactory.error(
             error_message="BaseEventProcessor cannot process events directly",
         )
+
+
+class UserMessageEventProcessor(BaseEventProcessor):
+    """Processes events related to user messages"""
+
+    def __init__(self, stream_input: StreamInput):
+        super().__init__(stream_input)
+        self.user_message_confirmed = False
+
+    async def process(self, event: LangGraphStreamEvent) -> AsyncGenerator[StreamEvent, None]:
+        """
+        Process user message events - specifically looking for when the user's
+        message has been added to the graph and assigned an ID.
+        """
+        
+        # Only emit once per stream session
+        if self.user_message_confirmed:
+            return
+        
+        # Look for the user message in the graph state updates
+        # This happens on "on_chain_start" when the graph begins processing
+        if (
+            event["event"] == "on_chain_start"
+            and event.get("name") == "LangGraph"
+            and "input" in event.get("data", {})
+        ):
+            input_data = event["data"]["input"]
+            messages = input_data.get("messages", [])
+            
+            if not isinstance(messages, list):
+                messages = [messages]
+            
+            # Find the user message (HumanMessage)
+            for message in messages:
+                if isinstance(message, HumanMessage):
+                    message_id = getattr(message, 'id', None)
+                    content = convert_message_content_to_string(message.content)
+                    
+                    if message_id and content:
+                        logger.debug(f"Found user message with backend ID: {message_id}")
+                        self.user_message_confirmed = True
+                        yield StreamEventFactory.user_message_confirmed(
+                            message_id=message_id,
+                            content=content
+                        )
+                        return
 
 
 class AssistantEventProcessor(BaseEventProcessor):
@@ -417,6 +463,7 @@ class StreamEventOrchestrator:
 
         # Initialize processors
         self.processors = [
+            UserMessageEventProcessor(stream_input),
             AssistantEventProcessor(stream_input),
             ToolEventProcessor(stream_input),
             ApprovalEventProcessor(stream_input),
