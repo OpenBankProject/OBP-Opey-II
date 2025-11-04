@@ -46,9 +46,10 @@ class UserMessageEventProcessor(BaseEventProcessor):
         # This happens on "on_chain_start" when the graph begins processing
         if (
             event["event"] == "on_chain_start"
-            and event.get("name") == "LangGraph"
+            and event["name"] == "opey"
             and "input" in event.get("data", {})
         ):
+            
             input_data = event["data"]["input"]
             messages = input_data.get("messages", [])
             
