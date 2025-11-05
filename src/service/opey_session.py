@@ -47,8 +47,8 @@ class OpeySession:
         request.state.session_data = session_data
         request.state.session_id = session_id
 
-        # Get consent_jwt from the session data (None for anonymous sessions)
-        self.consent_jwt = session_data.consent_jwt
+        # Get consent_id from the session data (None for anonymous sessions)
+        self.consent_id = session_data.consent_id
         self.is_anonymous = session_data.is_anonymous
         
         # Set up the model used
@@ -65,7 +65,7 @@ class OpeySession:
         
         # Initialize auth object only if not anonymous
         if not self.is_anonymous:
-            self.auth = OBPConsentAuth(consent_jwt=self.consent_jwt)
+            self.auth = OBPConsentAuth(consent_id=self.consent_id)
 
         obp_api_mode = os.getenv("OBP_API_MODE")
 

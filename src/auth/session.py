@@ -11,7 +11,7 @@ from typing import Optional
 
 # Set up sessions to use consents
 class SessionData(BaseModel):
-    consent_jwt: Optional[str] = None
+    consent_id: Optional[str] = None
     is_anonymous: bool = False
     token_usage: int = 0
     request_count: int = 0

@@ -29,72 +29,9 @@ class OBPRequestsModule:
         if not self.obp_base_url:
             raise ValueError("OBP_BASE_URL environment variable is not set.")
 
-    def _extract_username_from_jwt(self, consent_jwt: str) -> str:
-        """
-        Extract comprehensive user information from JWT token for logging purposes.
-
-        Args:
-            consent_jwt (str): The consent JWT token
-
-        Returns:
-            str: The primary user identifier for backwards compatibility
-        """
-        try:
-            # Decode JWT without verification (for logging purposes only)
-            # Note: This is safe since we're only using it for logging and the JWT
-            # is already validated by the OBPConsentAuth.acheck_auth() method
-            decoded_token = jwt.decode(consent_jwt, options={"verify_signature": False})
-
-            # Collect all available user information
-            user_info = []
-
-            # Human-readable identifiers first
-            if decoded_token.get('email'):
-                user_info.append(f"email:{decoded_token['email']}")
-            if decoded_token.get('name'):
-                user_info.append(f"name:{decoded_token['name']}")
-            if decoded_token.get('preferred_username'):
-                user_info.append(f"preferred_username:{decoded_token['preferred_username']}")
-            if decoded_token.get('username'):
-                user_info.append(f"username:{decoded_token['username']}")
-            if decoded_token.get('user_name'):
-                user_info.append(f"user_name:{decoded_token['user_name']}")
-            if decoded_token.get('login'):
-                user_info.append(f"login:{decoded_token['login']}")
-
-            # System identifiers
-            if decoded_token.get('sub'):
-                user_info.append(f"sub:{decoded_token['sub']}")
-            if decoded_token.get('user_id'):
-                user_info.append(f"user_id:{decoded_token['user_id']}")
-
-            # Additional context
-            if decoded_token.get('iss'):
-                user_info.append(f"iss:{decoded_token['iss']}")
-            if decoded_token.get('aud'):
-                aud_value = decoded_token['aud']
-                if isinstance(aud_value, list):
-                    user_info.append(f"aud:{','.join(aud_value)}")
-                else:
-                    user_info.append(f"aud:{aud_value}")
-
-            user_info_string = ' | '.join(user_info) if user_info else 'unknown'
-
-            logger.info(f"_extract_username_from_jwt says: User consent info - {user_info_string}")
-
-            # Return first (most human) identifier for backwards compatibility
-            if user_info:
-                return user_info[0].split(':')[1]
-            else:
-                return 'unknown'
-
-        except jwt.DecodeError as e:
-            logger.warning(f"_extract_username_from_jwt says: JWT decode error when extracting user info: {e}")
-            return 'unknown'
-        except Exception as e:
-            logger.warning(f"_extract_username_from_jwt says: Unexpected error extracting user info from JWT: {e}")
-            return 'unknown'
-
+    def _extract_username_from_jwt(self, consent_id: str) -> str:
+        # need to create a function that extracts the username from the consent ID
+        pass
 
 
 
@@ -105,10 +42,9 @@ class OBPRequestsModule:
                 headers = self.auth.construct_headers()
 
                 # Log the user information from consent JWT
-                consent_jwt = headers.get('Consent-JWT')
-                if consent_jwt:
-                    userIdentifier = self._extract_username_from_jwt(consent_jwt)
-                    logger.info(f"_async_request says: Making OBP API request - Primary user: {userIdentifier}, Method: {method}, URL: {url}")
+                consent_id = headers.get('Consent-Id')
+                if consent_id:
+                    logger.info(f"_async_request says: Making OBP API request - Primary user consentID: {consent_id}, Method: {method}, URL: {url}")
                 else:
                     logger.info(f"_async_request says: Making OBP API request - No consent JWT found (anonymous user), Method: {method}, URL: {url}")
 

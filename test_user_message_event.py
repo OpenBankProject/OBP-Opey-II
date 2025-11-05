@@ -11,7 +11,7 @@ url = "http://localhost:5000/stream"
 # Create a session first
 session_response = requests.post(
     "http://localhost:5000/create-session",
-    headers={"Consent-JWT": "test"},
+    headers={"Consent-Id": "test"},
     cookies={}
 )
 print(f"Session created: {session_response.status_code}")
