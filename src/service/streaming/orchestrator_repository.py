@@ -27,12 +27,21 @@ class OrchestratorRepository:
         else:
             logger.info(f"Reusing existing StreamEventOrchestrator for thread_id {thread_id}")
             
+            # Update stream_input to reflect the new message
+            # This is critical for processors that check message content
+            orchestrator = self._orchestrators[thread_id]
+            orchestrator.stream_input = stream_input
+            
+            # Also update stream_input in all processors
+            for processor in orchestrator.processors:
+                processor.stream_input = stream_input
+            
             # Reset orchestrator state for new user messages (not approval responses)
             # This prevents message_id and run_id from previous requests (especially cancelled ones)
             # from bleeding into the new request
             if not stream_input.tool_call_approval:
                 logger.info(f"Resetting orchestrator state for new user message on thread_id {thread_id}")
-                self._orchestrators[thread_id].reset_for_new_request()
+                orchestrator.reset_for_new_request()
         
         # Update last access time
         self._last_access[thread_id] = time.time()

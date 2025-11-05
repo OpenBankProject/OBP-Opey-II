@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, ToolMessage, HumanMessage
 from .events import StreamEvent, StreamEventFactory
 from schema import StreamInput, convert_message_content_to_string
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,38 +39,43 @@ class UserMessageEventProcessor(BaseEventProcessor):
         message has been added to the graph and assigned an ID.
         """
         
-        # Only emit once per stream session
+        # Only emit once per stream session (per message)
         if self.user_message_confirmed:
             return
         
-        # Look for the user message in the graph state updates
-        # This happens on "on_chain_start" when the graph begins processing
+        # Look for the user message when the "opey" node starts processing
+        # At this point, the user message has been added to state with an ID
         if (
             event["event"] == "on_chain_start"
-            and event["name"] == "opey"
+            and event.get("name") == "opey"
             and "input" in event.get("data", {})
         ):
-            
             input_data = event["data"]["input"]
             messages = input_data.get("messages", [])
             
             if not isinstance(messages, list):
                 messages = [messages]
             
-            # Find the user message (HumanMessage)
-            for message in messages:
+            # Find the user message that matches the current input
+            # Iterate in reverse to get the most recent messages first
+            for message in reversed(messages):
                 if isinstance(message, HumanMessage):
                     message_id = getattr(message, 'id', None)
                     content = convert_message_content_to_string(message.content)
                     
-                    if message_id and content:
-                        logger.debug(f"Found user message with backend ID: {message_id}")
+                    # Only emit if this matches the current user's message
+                    # (Compare content to ensure we're syncing the right message)
+                    if message_id and content and content == self.stream_input.message:
                         self.user_message_confirmed = True
                         yield StreamEventFactory.user_message_confirmed(
                             message_id=message_id,
                             content=content
                         )
                         return
+    
+    def reset_for_new_message(self):
+        """Reset state for a new user message"""
+        self.user_message_confirmed = False
 
 
 class AssistantEventProcessor(BaseEventProcessor):
@@ -526,15 +532,7 @@ class StreamEventOrchestrator:
         Called when reusing an orchestrator for a new user message
         (not an approval response).
         """
-        # Reset assistant processor to clear message_id and run_id
-        assistant_processor = self.get_assistant_processor()
-        assistant_processor.reset_for_new_message()
-        
-        # Reset tool processor if it has the method
-        try:
-            tool_processor = self.get_tool_processor()
-            if hasattr(tool_processor, 'reset_for_new_message'):
-                tool_processor.reset_for_new_message()
-        except RuntimeError:
-            # Tool processor not found, that's okay
-            pass
+        # Reset all processors that have the reset_for_new_message method
+        for processor in self.processors:
+            if hasattr(processor, 'reset_for_new_message'):
+                processor.reset_for_new_message()
