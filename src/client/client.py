@@ -23,7 +23,7 @@ class AgentClient:
         """
         self.base_url = base_url
         self.auth_secret = os.getenv("AUTH_SECRET")
-        self.consent_jwt = os.getenv("CONSENT_JWT")
+        self.consent_id = os.getenv("CONSENT_ID")
         self.timeout = timeout
         # Create clients for session management
         self._client = httpx.Client(timeout=timeout)
@@ -37,8 +37,8 @@ class AgentClient:
         headers = {}
         if self.auth_secret:
             headers["Authorization"] = f"Bearer {self.auth_secret}"
-        if self.consent_jwt:
-            headers["Consent-JWT"] = self.consent_jwt
+        if self.consent_id:
+            headers["Consent-Id"] = self.consent_id
         return headers
 
     def _ensure_session(self) -> None:

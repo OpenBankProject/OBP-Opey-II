@@ -48,7 +48,7 @@ class AuthConfig:
 
 
     def __init__(self):
-        self.auth_strategies = {}
+        self.auth_strategies: Dict['str', BaseAuth] = {}
 
     def register_auth_strategy(self, name: str, auth_strategy: BaseAuth):
         """
@@ -62,10 +62,9 @@ class AuthConfig:
             raise TypeError(f"{name} must be an instance of BaseAuth")
         self.auth_strategies[name] = auth_strategy
 
-# Define differnt auth types here
+    
 class OBPConsentAuth(BaseAuth):
-
-    def __init__(self, consent_jwt: str | None = None, *args, **kwargs):
+    def __init__(self, consent_id: str | None = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         # Load the base URI and consumer key from the environment variables
@@ -73,8 +72,8 @@ class OBPConsentAuth(BaseAuth):
         if not self.base_uri:
             raise ValueError('OBP_BASE_URL not set in environment variables')
 
-        if consent_jwt:
-            self.token = consent_jwt
+        if consent_id:
+            self.token = consent_id
         # Get the consumer key from the environment variables
         self.opey_consumer_key = os.getenv('OBP_CONSUMER_KEY')
         if not self.opey_consumer_key:
@@ -84,16 +83,15 @@ class OBPConsentAuth(BaseAuth):
         if not version:
             raise ValueError('OBP_API_VERSION not set in environment variables')
         
-        self.current_user_url = self.base_uri + f'/obp/{version}/users/current' # type: ignore
- 
-    # Asynchronous method to check if the token is valid
+        self.current_user_url = self.base_uri + f'/obp/{version}/users/current'
+
     async def acheck_auth(self, token: str | None = None) -> bool:
         """
         Asynchronously verifies the authentication of a user by checking the validity of a consent JWT against the OBP API.
         This function makes a GET request to the current user endpoint with the consent JWT and consumer key in the headers.
         Args:
-            obp_consent_jwt (str): The consent JSON Web Token received from the Open Banking Project API.
-            It should be in the 'ACCEPTED' state.
+            token (str): The consentID received from the Open Banking Project API.
+            Consent should be in the 'ACCEPTED' state.
         Returns:
             bool: True if the authentication check was successful (200 status code), False otherwise.
         Raises:
@@ -101,7 +99,7 @@ class OBPConsentAuth(BaseAuth):
             library may occur during the API call.
         """
         if not token and not self.token:
-            raise ValueError('Token is required')
+            raise ValueError('Consent ID is required')
         
         if not token:
             token = self.token
@@ -110,8 +108,9 @@ class OBPConsentAuth(BaseAuth):
 
         # DEBUG: Log consent validation attempt
         masked_token = f"{token[:20]}...{token[-10:]}" if len(token) > 30 else token[:10] + "..." if len(token) > 10 else token
+        masked_consumer_key = f"{self.opey_consumer_key[:5]}...{self.opey_consumer_key[-5:]}" if self.opey_consumer_key and len(self.opey_consumer_key) > 10 else self.opey_consumer_key
         logger.debug(f"OBP consent validation - URL: {self.current_user_url}")
-        logger.debug(f"OBP consent validation - Headers (JWT masked): {{'Consent-JWT': '{masked_token}', 'Consumer-Key': '{headers.get('Consumer-Key')}'}}")
+        logger.debug(f"OBP consent validation - Headers (masked): {{'Consent-Id': '{masked_token}', 'Consumer-Key': '{masked_consumer_key}'}}")
 
         client = await self.get_client()
         async with client.get(self.current_user_url, headers=headers) as response:
@@ -123,16 +122,14 @@ class OBPConsentAuth(BaseAuth):
                 return True
             else:
                 error_text = await response.read()
-                logger.error(f'Error checking OBP consent: {error_text}')
+                logger.error(f'Error checking OBP consent by consent ID: {error_text}')
                 logger.debug(f"OBP consent validation failed - Status: {response.status}")
                 logger.debug(f"OBP consent validation failed - Response headers: {dict(response.headers)}")
                 logger.debug(f"OBP consent validation failed - Error details: {error_text}")
                 return False
-            
+    
     def construct_headers(self, token: str | None = None) -> Dict[str, str]:
-        """
-        Constructs the necessary HTTP auth headers for a given auth method
-        """
+        
         if not token and not self.token:
             raise ValueError('Token is required')
         
@@ -140,17 +137,17 @@ class OBPConsentAuth(BaseAuth):
             token = self.token
 
         headers = {
-            'Consent-JWT': token,
+            'Consent-Id': token,
             'Consumer-Key': os.getenv('OBP_CONSUMER_KEY'),
         }
 
         # DEBUG: Log header construction
         masked_token = f"{token[:20]}...{token[-10:]}" if len(token) > 30 else token[:10] + "..." if len(token) > 10 else token
-        logger.debug(f"OBPConsentAuth headers constructed - Consumer-Key: {headers.get('Consumer-Key')}")
-        logger.debug(f"OBPConsentAuth headers constructed - JWT length: {len(token)} chars, masked: {masked_token}")
+        masked_consumer_key = f"{self.opey_consumer_key[:5]}...{self.opey_consumer_key[-5:]}" if self.opey_consumer_key and len(self.opey_consumer_key) > 10 else self.opey_consumer_key
+        logger.debug(f"OBPConsentAuth headers constructed - Consumer-Key: {masked_consumer_key}")
+        logger.debug(f"OBPConsentAuth headers constructed - Token length: {len(token)} chars, masked: {masked_token}")
 
         return headers
-
 
 class OBPDirectLoginAuth(BaseAuth):
 

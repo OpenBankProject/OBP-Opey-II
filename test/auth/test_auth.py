@@ -48,7 +48,7 @@ class TestOBPConsentAuth:
     def test_construct_headers(self):
         auth = OBPConsentAuth()
         headers = auth.construct_headers("test-token")
-        assert headers['Consent-JWT'] == "test-token"
+        assert headers['Consent-Id'] == "test-token"
         assert headers['Consumer-Key'] == "test-key"
 
 
@@ -93,7 +93,7 @@ class TestUsageTracker:
 class TestSessionData:
     def test_defaults(self):
         session = SessionData()
-        assert session.consent_jwt is None
+        assert session.consent_id is None
         assert session.is_anonymous is False
         assert session.token_usage == 0
         assert session.request_count == 0
