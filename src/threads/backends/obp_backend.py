@@ -1,36 +1,11 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict
 from uuid import UUID
-from .model import Thread
+from ..model import Thread
+from .backend import ThreadBackend
 from client.obp_client import OBPClient
 
-class IThreadBackend(ABC):
-    @abstractmethod
-    async def create(self, thread: Thread) -> None:
-        """Create a new thread with the given ID and data."""
-        pass
-
-    @abstractmethod
-    async def read(self, thread_id: UUID) -> Thread:
-        """Read the thread data for the given ID."""
-        pass
-
-    @abstractmethod
-    async def read_all(self) -> List[Thread]:
-        """Read all threads."""
-        pass
-
-    @abstractmethod
-    async def update(self, thread: Thread) -> None:
-        """Update the thread data for the given ID."""
-        pass
-
-    @abstractmethod
-    async def delete(self, thread_id: UUID) -> None:
-        """Delete the thread with the given ID."""
-        pass
-
-class OBPThreadBackend(IThreadBackend):
+class OBPThreadBackend(ThreadBackend):
     def __init__(self, obp_client: OBPClient):
         self.obp_client = obp_client
 
@@ -83,30 +58,3 @@ class OBPThreadBackend(IThreadBackend):
             path=f"/obp/v5.1.0/management/ai-threads/{thread_id}",
             body=""
         )
-
-class ThreadManager:
-    def __init__(self, backend: IThreadBackend):
-        """Initialize the ThreadManager with a backend implementation."""
-        self.backend = backend
-        self.current_thread_id: UUID | None = None
-
-    async def get_threads_for_user(self, user_id: str) -> List[Thread]:
-        """Filter threads by user_id from metadata."""
-        all_threads = await self.backend.read_all()
-        return [t for t in all_threads if t.metadata and t.metadata.get('user_id') == user_id]
-    
-    def switch_to_thread(self, thread_id: UUID) -> None:
-        """Set the current active thread."""
-        self.current_thread_id = thread_id
-    
-    async def create_new_thread(self, thread: Thread) -> UUID:
-        """Persist a new thread and return its ID."""
-        await self.backend.create(thread)
-        return thread.id
-    
-    async def delete_thread(self, thread_id: UUID) -> None:
-        """Remove a thread from persistence."""
-        await self.backend.delete(thread_id)
-        if self.current_thread_id == thread_id:
-            self.current_thread_id = None
-        raise NotImplementedError("This method is not implemented yet")

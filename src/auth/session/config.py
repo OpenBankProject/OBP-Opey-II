@@ -1,21 +1,19 @@
 import os
+import logging
 
 from fastapi_sessions.frontends.implementations import SessionCookie, CookieParameters
 from fastapi_sessions.frontends.implementations.cookie import SameSiteEnum
 from uuid import UUID
 from fastapi_sessions.backends.implementations import InMemoryBackend
+from .backends.redis_backend import RedisBackend
 from fastapi_sessions.session_verifier import SessionVerifier
 from fastapi import HTTPException
+from service.redis_client import get_redis_client
 from pydantic import BaseModel
 from typing import Optional
+from .models import SessionData
 
-# Set up sessions to use consents
-class SessionData(BaseModel):
-    consent_id: Optional[str] = None
-    is_anonymous: bool = False
-    token_usage: int = 0
-    request_count: int = 0
-
+logger = logging.getLogger('opey.session.config')
 # For development, allow insecure cookies over HTTP
 secure_cookies = os.getenv("SECURE_COOKIES", "true").lower() == "true"
 
@@ -39,7 +37,12 @@ session_cookie = SessionCookie(
     cookie_params=cookie_params,
 )
 
-backend = InMemoryBackend[UUID, SessionData]()
+redis_client = get_redis_client()
+if not redis_client:
+    logger.warning("Could not get Redis client, falling back to InMemoryBackend for sessions")
+    backend = InMemoryBackend[UUID, SessionData]()
+else:
+    backend = RedisBackend[UUID, SessionData](redis_client=redis_client, session_model=SessionData)
 
 
 class BasicVerifier(SessionVerifier[UUID, SessionData]):
@@ -48,7 +51,7 @@ class BasicVerifier(SessionVerifier[UUID, SessionData]):
         *,
         identifier: str,
         auto_error: bool,
-        backend: InMemoryBackend[UUID, SessionData],
+        backend: InMemoryBackend[UUID, SessionData] | RedisBackend[UUID, SessionData],
         auth_http_exception: HTTPException,
     ):
         self._identifier = identifier
