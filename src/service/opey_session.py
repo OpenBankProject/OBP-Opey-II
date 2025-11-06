@@ -14,7 +14,7 @@ from agent.components.tools.approval_models import (
     RiskLevel, ApprovalLevel
 )
 
-from agent.utils.obp import OBPRequestsModule
+from client.obp_client import OBPClient
 from service.checkpointer import get_global_checkpointer
 from service.redis_client import get_redis_client
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -75,8 +75,8 @@ class OpeySession:
             obp_api_mode = "SAFE"
 
         if obp_api_mode != "NONE" and not self.is_anonymous:
-            # Initialize the OBPRequestsModule with the auth object (only for authenticated sessions)
-            self.obp_requests = OBPRequestsModule(self.auth)
+            # Initialize the OBPClient with the auth object (only for authenticated sessions)
+            self.obp_requests = OBPClient(self.auth)
 
         # Register base tools with approval metadata
         self._register_base_tools()
@@ -286,7 +286,12 @@ class OpeySession:
                 )
             ]
         
-        obp_tool = self.obp_requests.get_langchain_tool(obp_api_mode.lower())
+        # Cast to proper literal type for get_langchain_tool
+        mode = obp_api_mode.lower()
+        if mode not in ("safe", "dangerous", "test"):
+            raise ValueError(f"Invalid OBP API mode: {obp_api_mode}")
+        
+        obp_tool = self.obp_requests.get_langchain_tool(mode)  # type: ignore
         
         self.tool_registry.register_tool(
             tool=obp_tool,

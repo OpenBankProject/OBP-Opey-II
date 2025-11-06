@@ -3,23 +3,20 @@ import aiohttp
 import asyncio
 import os
 import json
-import jwt
 import logging
 
 from typing import Any, Literal
 from langchain_core.tools import StructuredTool
 
-# Configure logging
 logger = logging.getLogger(__name__)
 
 
-class OBPRequestsModule:
-    """
-    This class is for managing requests to the Open Bank Project (OBP) API.
-    """
+class OBPClient:
+    """HTTP client for the Open Bank Project (OBP) API."""
+    
     def __init__(self, auth: BaseAuth):
         """
-        Initialize the OBPRequestsModule with an authentication object.
+        Initialize the OBPClient with an authentication object.
 
         Args:
             auth (BaseAuth): An instance of a class that inherits from BaseAuth for authentication.
@@ -33,12 +30,9 @@ class OBPRequestsModule:
         # need to create a function that extracts the username from the consent ID
         pass
 
-
-
     async def _async_request(self, method: str, url: str, body: Any | None):
         try:
             async with aiohttp.ClientSession() as session:
-                # construct the headers using the auth object
                 headers = self.auth.construct_headers()
 
                 # Log the user information from consent JWT
@@ -59,7 +53,6 @@ class OBPRequestsModule:
             logger.error(f"_async_request says: Error fetching data from {url}: {e}")
         except asyncio.TimeoutError:
             logger.error(f"_async_request says: Request to {url} timed out")
-
 
     async def async_obp_get_requests(self, path: str, operation_id: str | None = None):
         """
@@ -83,7 +76,6 @@ class OBPRequestsModule:
         except Exception as e:
             logger.error(f"async_obp_get_requests says: Error fetching data from {url}: {e}")
             return
-
 
         if response is None:
             logger.error("async_obp_get_requests says: OBP returned 'None' response")
@@ -115,8 +107,6 @@ class OBPRequestsModule:
                 error_msg = json_response
 
             raise Exception(f"OBP API error (status: {status}): {error_msg}")
-
-
 
     async def async_obp_requests(self, method: str, path: str, body: str, operation_id: str | None = None):
         """
@@ -178,7 +168,6 @@ class OBPRequestsModule:
                 error_msg = json_response
 
             raise Exception(f"OBP API error (status: {status}): {error_msg}")
-
 
     def get_langchain_tool(self, mode: Literal["safe", "dangerous", "test"]):
         """
