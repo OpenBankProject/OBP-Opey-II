@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from .model import Thread
 
 class IThreadBackend(ABC):
     @abstractmethod
