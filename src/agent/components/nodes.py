@@ -209,10 +209,18 @@ async def _categorize_tool_calls(
             denied.append(tool_call)
             continue
         
-        # Check if tool requires approval
-        if not tool_registry.should_require_approval(tool_name, tool_args):
-            logger.info(f"Tool {tool_name} auto-approved by pattern ({tool_call_id})")
-            auto_approved.append(tool_call)
+        # Check if tool requires approval or is denied by pattern
+        try:
+            if not tool_registry.should_require_approval(tool_name, tool_args):
+                logger.info(f"Tool {tool_name} auto-approved by pattern ({tool_call_id})")
+                auto_approved.append(tool_call)
+                continue
+        except ValueError as e:
+            # Tool call is denied by ALWAYS_DENY pattern
+            logger.warning(f"Tool call denied by pattern: {tool_name} ({tool_call_id}): {e}")
+            # Store the denial reason in the tool_call for error message generation
+            tool_call["_denial_reason"] = str(e)
+            denied.append(tool_call)
             continue
         
         # Needs user approval
@@ -497,9 +505,12 @@ async def human_review_node(state: OpeyGraphState, config: RunnableConfig):
     # Step 2: Handle denied tools - create error messages
     tool_messages = []
     for tool_call in denied:
+        # Use stored denial reason if available, otherwise use generic message
+        denial_reason = tool_call.get("_denial_reason", "denied by approval policy")
         tool_messages.append(ToolMessage(
-            content=f"Tool call denied by approval policy",
-            tool_call_id=tool_call["id"]
+            content=f"Tool call denied: {denial_reason}",
+            tool_call_id=tool_call["id"],
+            status="error"
         ))
     
     # Step 3: If no tools need approval, we're done
@@ -562,4 +573,62 @@ async def human_review_node(state: OpeyGraphState, config: RunnableConfig):
         "session_approvals": updated_session_approvals,
         "approval_timestamps": updated_approval_timestamps
     }
+    
+async def sanitize_tool_responses(state: OpeyGraphState, config: RunnableConfig):
+    """
+    Sanitize tool responses in case they contain too much data. I.e. too many tokens.
+    
+    Args:
+        state: Graph state containing messages
+        config: RunnableConfig (not used here)
+    """
+    
+    from agent.utils.token_counter import count_tokens, count_tokens_from_messages
+    from agent.utils.model_factory import get_max_input_tokens
+    
+    messages = state["messages"]
+    if not messages:
+        return {}
+    
+    if not isinstance(messages[-1], ToolMessage):
+        logger.warning("Last message is not a ToolMessage")
+        return {}
+    
+    # Extract model configuration from RunnableConfig
+    configurable = config.get("configurable", {}) if config else {}
+    model_name = configurable.get("model_name")
+    model_kwargs = configurable.get("model_kwargs", {})
+    
+    if not model_name:
+        logger.error("No model_name in config for token counting")
+        return {}
+    
+    # Check if total messages exceed token limit
+    total_tokens = count_tokens_from_messages(
+        messages=messages,
+        model_name=model_name,
+        model_kwargs=model_kwargs
+    )
+    
+    max_input_tokens = get_max_input_tokens(model_name)
+    
+    logger.info(f"Total tokens in messages: {total_tokens}, Max input tokens for model '{model_name}': {max_input_tokens}")
+    if total_tokens <= max_input_tokens:
+        logger.info("No sanitization needed, token count within limits")
+        return {}
+    
+    # Sanitize the last ToolMessage's content
+    tool_message: ToolMessage = messages[-1]
+    original_content = tool_message.content
+    sanitized_content = original_content[:1000] + "\n\n[TRUNCATED TOOL RESPONSE DUE TO EXCESSIVE LENGTH]"
+    
+    tool_message.content = sanitized_content
+    logger.info("Sanitized ToolMessage content due to excessive token count")
+    return {"messages": [tool_message]}
+    
+    
+    
+    
+    
+    
 

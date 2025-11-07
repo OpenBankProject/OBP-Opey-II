@@ -129,6 +129,9 @@ class StreamManager:
                     "thread_id": thread_id,
                     "message_type": input_message.type
                 })
+                
+                # Note: user_message_confirmed event is emitted by UserMessageEventProcessor
+                # after the message is added to the graph and assigned an ID
 
             # Stream events from the graph
             kwargs = {
