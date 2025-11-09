@@ -41,7 +41,7 @@ def get_obp_config(endpoint_type="static"):
         "api_version": api_version,
         "chroma_dir": chroma_dir,
         "glossary_url": f"{base_url}/obp/{api_version}/api/glossary",
-        "swagger_url": f"{base_url}/obp/{api_version}/resource-docs/{api_version}/swagger" + (f"?content={endpoint_type}" if endpoint_type != "all" else "")
+        "swagger_url": f"{base_url}/obp/{api_version}/resource-docs/{api_version}/swagger?content={endpoint_type}"
     }
 
 def fetch_obp_data(url: str) -> Dict[str, Any]:
@@ -333,9 +333,9 @@ def main():
     parser = argparse.ArgumentParser(description="Populate vector databases with OBP glossary and endpoint documentation.")
     parser.add_argument(
         "--endpoints",
-        choices=["static", "all"],
+        choices=["static", "dynamic", "all"],
         default="static",
-        help="Type of endpoints to load: static (default) or all (static + dynamic)"
+        help="Type of endpoints to load: static (default), dynamic, or all (static + dynamic)"
     )
     args = parser.parse_args()
 
