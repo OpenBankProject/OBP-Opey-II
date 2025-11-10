@@ -20,7 +20,7 @@ Main script that fetches data from OBP endpoints and populates ChromaDB collecti
 from the root directory of the project, run:
 
 ```bash
-python src/database/populate_vector_db.py
+python src/database/populate_vector_db.py [--endpoints {static,dynamic,all}]
 ```
 
 ### Requirements:
@@ -30,5 +30,13 @@ python src/database/populate_vector_db.py
   - OBP_BASE_URL
   - OBP_API_VERSION
   - CHROMADB_DIRECTORY
+
+
+### Options:
+
+- `--endpoints {static,dynamic,all}`: Type of endpoints to load (default: static)
+  - `static`: Load only static endpoints
+  - `dynamic`: Load only dynamic endpoints (Note: OBP API may not support this - will fetch all and filter)
+  - `all`: Load all endpoints (static + dynamic)
 
 The script will clear existing collections and repopulate them with fresh data.
