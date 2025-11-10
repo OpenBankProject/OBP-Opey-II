@@ -6,6 +6,7 @@ Uses the vector store provider abstraction for database agnosticism.
 
 import os
 import sys
+import argparse
 import json
 import requests
 from typing import List, Dict, Any
@@ -26,7 +27,7 @@ from database.document_schemas import GlossaryDocumentSchema, EndpointDocumentSc
 # Load environment variables
 load_dotenv()
 
-def get_obp_config():
+def get_obp_config(endpoint_type="static"):
     """Get OBP configuration from environment variables."""
     base_url = os.getenv("OBP_BASE_URL")
     api_version = os.getenv("OBP_API_VERSION")
@@ -40,7 +41,7 @@ def get_obp_config():
         "api_version": api_version,
         "chroma_dir": chroma_dir,
         "glossary_url": f"{base_url}/obp/{api_version}/api/glossary",
-        "swagger_url": f"{base_url}/obp/{api_version}/resource-docs/{api_version}/swagger?content=static"
+        "swagger_url": f"{base_url}/obp/{api_version}/resource-docs/{api_version}/swagger?content={endpoint_type}"
     }
 
 def fetch_obp_data(url: str) -> Dict[str, Any]:
@@ -328,10 +329,19 @@ def populate_collection(documents: List[Document], collection_name: str, chroma_
 def main():
     """Main function to populate vector database collections."""
     print("Starting vector database population script...")
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Populate vector databases with OBP glossary and endpoint documentation.")
+    parser.add_argument(
+        "--endpoints",
+        choices=["static", "dynamic", "all"],
+        default="static",
+        help="Type of endpoints to load: static (default), dynamic, or all (static + dynamic)"
+    )
+    args = parser.parse_args()
 
     try:
         # Get configuration
-        config = get_obp_config()
+        config = get_obp_config(args.endpoints)
 
         # Fetch data from OBP endpoints
         print("\n" + "="*50)
