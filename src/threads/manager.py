@@ -37,3 +37,7 @@ class ThreadManager:
             self.current_thread_id = None
             
         await self.refresh_threads()
+        
+    async def init_thread_database(self) -> None:
+        """Initialize the thread database."""
+        await self.backend.initialize()

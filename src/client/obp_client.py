@@ -5,7 +5,7 @@ import os
 import json
 import logging
 
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 from langchain_core.tools import StructuredTool
 
 logger = logging.getLogger(__name__)
@@ -199,3 +199,27 @@ class OBPClient:
                 )
             case _:
                 raise ValueError(f"Invalid mode: {mode}. Must be 'safe', 'dangerous', or 'test'.")
+
+    def sync_obp_requests(self, method: str, path: str, body: str, as_json: bool = False):
+        """
+        Synchronous wrapper for async_obp_requests.
+        Mainly for use in admin scripts and non-async contexts.
+        I.e. don't use this with the langchain tools or agent.
+        
+        Args:
+            method (str): The HTTP method to use for the request (e.g., 'GET', 'POST').
+            path (str): The API endpoint path to send the request to.
+            body (str): The JSON body to include in the request. If empty, no body is sent.
+        """
+        try:
+            response = asyncio.run(self.async_obp_requests(method, path, body))
+            
+        except Exception as e:
+            logger.error(f"Error fetching data from {path}: {e}")
+            raise
+        
+        if as_json and response is not None:
+            return json.loads(response)
+        
+        
+        return response
