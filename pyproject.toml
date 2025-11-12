@@ -33,6 +33,7 @@ asgi-lifespan = "^2.1.0"
 redis = "^6.2.0"
 graphviz = "^0.21"
 mermaid-py = "^0.8.0"
+slowapi = "^0.1.9"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.5"

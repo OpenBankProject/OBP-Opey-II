@@ -18,6 +18,9 @@ from langsmith import Client as LangsmithClient
 
 from auth.auth import OBPConsentAuth, AuthConfig
 from auth.session import session_cookie, backend, SessionData
+from auth.rate_limiting import limiter, _rate_limit_exceeded_handler
+
+from slowapi.errors import RateLimitExceeded
 
 from service.opey_session import OpeySession
 from service.checkpointer import checkpointers
@@ -211,6 +214,9 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     # For other HTTP exceptions, use default handler but log the details
     logger.error(f"OTHER_HTTP_EXCEPTION: {exc.status_code} - {exc.detail}")
     return await http_exception_handler(request, exc)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Add session update middleware
 app.add_middleware(SessionUpdateMiddleware)
@@ -410,6 +416,7 @@ async def get_mermaid_diagram(opey_session: Annotated[OpeySession, Depends()]) -
     return FileResponse(svg_path, media_type="image/svg+xml")
 
 @app.post("/invoke", dependencies=[Depends(session_cookie)])
+@limiter.limit("5/minute")
 async def invoke(user_input: UserInput, request: Request, opey_session: Annotated[OpeySession, Depends()]) -> ChatMessage:
     """
     Invoke the agent with user input to retrieve a final response.
@@ -460,6 +467,7 @@ def get_stream_manager(opey_session: OpeySession = Depends()) -> StreamManager:
     return StreamManager(opey_session)
 
 @app.post("/stream", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
+@limiter.limit("5/minute")
 async def stream_agent(
     user_input: StreamInput, 
     request: Request, 
@@ -542,6 +550,7 @@ async def stop_stream(thread_id: str) -> dict:
 
 
 @app.post("/stream/{thread_id}/regenerate", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
+@limiter.limit("5/minute")
 async def regenerate_from_message(
     thread_id: str,
     request: Request,
