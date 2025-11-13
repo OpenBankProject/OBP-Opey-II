@@ -401,7 +401,7 @@ async def get_status() -> dict[str, Any]:
     return status_info
 
 @app.get("/mermaid_diagram", dependencies=[Depends(session_cookie)])
-@limiter.limit("10/minute")
+@limiter.exempt
 async def get_mermaid_diagram(opey_session: Annotated[OpeySession, Depends()]) -> FileResponse:
     svg_path = Path("../resources/mermaid_diagram.svg")
     
@@ -530,7 +530,7 @@ async def stream_agent(
     return StreamingResponse(stream_generator(), media_type="text/event-stream", headers=headers)
 
 @app.post("/stream/{thread_id}/stop", dependencies=[Depends(session_cookie)])
-@limiter.limit("20/minute")
+@limiter.exempt
 async def stop_stream(thread_id: str) -> dict:
     """
     Request cancellation of an active stream.
@@ -743,7 +743,7 @@ async def user_approval(
 
 
 @app.post("/feedback", dependencies=[Depends(session_cookie)])
-@limiter.limit("30/minute")
+@limiter.exempt
 async def feedback(feedback: Feedback) -> FeedbackResponse:
     """
     Record feedback for a run to LangSmith.
