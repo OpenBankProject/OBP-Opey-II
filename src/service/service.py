@@ -21,6 +21,7 @@ from auth.session import session_cookie, backend, SessionData
 from auth.rate_limiting import limiter, _rate_limit_exceeded_handler
 
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from service.opey_session import OpeySession
 from service.checkpointer import checkpointers
@@ -217,6 +218,7 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # Add session update middleware
 app.add_middleware(SessionUpdateMiddleware)
@@ -291,6 +293,7 @@ auth_config.register_auth_strategy("obp_consent_id", OBPConsentAuth())
 obp_base_url = os.getenv('OBP_BASE_URL')
 
 @app.post("/create-session")
+@limiter.exempt
 async def create_session(request: Request, response: Response):
     """
     Create a session for the user using the OBP consent JWT or create an anonymous session.
@@ -377,6 +380,7 @@ async def create_session(request: Request, response: Response):
 
 
 @app.post("/delete-session")
+@limiter.exempt
 async def delete_session(response: Response, session_id: uuid.UUID = Depends(session_cookie)):
     await backend.delete(session_id)
     session_cookie.delete_from_response(response)
@@ -386,6 +390,7 @@ async def delete_session(response: Response, session_id: uuid.UUID = Depends(ses
 
 
 @app.get("/status")
+@limiter.exempt
 async def get_status() -> dict[str, Any]:
     """Health check endpoint with usage information."""
 
@@ -396,6 +401,7 @@ async def get_status() -> dict[str, Any]:
     return status_info
 
 @app.get("/mermaid_diagram", dependencies=[Depends(session_cookie)])
+@limiter.limit("10/minute")
 async def get_mermaid_diagram(opey_session: Annotated[OpeySession, Depends()]) -> FileResponse:
     svg_path = Path("../resources/mermaid_diagram.svg")
     
@@ -416,7 +422,6 @@ async def get_mermaid_diagram(opey_session: Annotated[OpeySession, Depends()]) -
     return FileResponse(svg_path, media_type="image/svg+xml")
 
 @app.post("/invoke", dependencies=[Depends(session_cookie)])
-@limiter.limit("5/minute")
 async def invoke(user_input: UserInput, request: Request, opey_session: Annotated[OpeySession, Depends()]) -> ChatMessage:
     """
     Invoke the agent with user input to retrieve a final response.
@@ -467,7 +472,6 @@ def get_stream_manager(opey_session: OpeySession = Depends()) -> StreamManager:
     return StreamManager(opey_session)
 
 @app.post("/stream", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
-@limiter.limit("5/minute")
 async def stream_agent(
     user_input: StreamInput, 
     request: Request, 
@@ -526,6 +530,7 @@ async def stream_agent(
     return StreamingResponse(stream_generator(), media_type="text/event-stream", headers=headers)
 
 @app.post("/stream/{thread_id}/stop", dependencies=[Depends(session_cookie)])
+@limiter.limit("20/minute")
 async def stop_stream(thread_id: str) -> dict:
     """
     Request cancellation of an active stream.
@@ -550,7 +555,6 @@ async def stop_stream(thread_id: str) -> dict:
 
 
 @app.post("/stream/{thread_id}/regenerate", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
-@limiter.limit("5/minute")
 async def regenerate_from_message(
     thread_id: str,
     request: Request,
@@ -739,6 +743,7 @@ async def user_approval(
 
 
 @app.post("/feedback", dependencies=[Depends(session_cookie)])
+@limiter.limit("30/minute")
 async def feedback(feedback: Feedback) -> FeedbackResponse:
     """
     Record feedback for a run to LangSmith.
@@ -810,39 +815,3 @@ async def upgrade_session(request: Request, response: Response, session_id: uuid
             "requests_made": session_data.request_count
         }
     )
-
-# @app.post("/auth")
-# async def auth(consent_auth_body: ConsentAuthBody, response: Response):
-#     """
-#     Authorize Opey using an OBP consent
-#     """
-#     logger.debug("Authorizing Opey using an OBP consent")
-#     version = os.getenv("OBP_API_VERSION")
-#     consent_challenge_answer_path = f"/obp/{version}/banks/gh.29.uk/consents/{consent_auth_body.consent_id}/challenge"
-
-#     # Check consent challenge answer
-#     try:
-#         obp_response = await obp_requests("POST", consent_challenge_answer_path, json.dumps({"answer": consent_auth_body.consent_challenge_answer}))
-#     except Exception as e:
-#         logger.error(f"Error in /auth endpoint: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
-
-#     if obp_response and not (200 <= obp_response.status < 300):
-#         logger.debug("Welp, we got an error from OBP")
-#         message = await obp_response.text()
-#         raise HTTPException(status_code=obp_response.status, detail=message)
-
-#     try:
-#         payload = {
-#             "consent_id": consent_auth_body.consent_id,
-#         }
-#         opey_jwt = sign_jwt(payload)
-#     except Exception as e:
-#         logger.debug("Looks like signing the JWT failed OMG")
-#         logger.error(f"Error in /auth endpoint: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
-
-#     print("got consent jwt")
-#     # Set the JWT cookie
-#     response.set_cookie(key="jwt", value=opey_jwt, httponly=False, samesite='lax', secure=False)
-#     return AuthResponse(success=True)
