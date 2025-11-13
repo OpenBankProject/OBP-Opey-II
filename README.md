@@ -182,3 +182,9 @@ All log messages now include the function name that generated the log for easier
 - `_async_request says:` - HTTP request execution logs  
 - `async_obp_get_requests says:` - GET request specific logs
 - `async_obp_requests says:` - General request method logs
+
+## Service Configuration
+### Rate Limiting
+Default rate limiting on the stream and invoke endpoints can be set with the environment variable `GLOBAL_RATE_LIMIT`
+
+Visit https://limits.readthedocs.io/en/stable/quickstart.html#rate-limit-string-notation for information on what this value can be.
