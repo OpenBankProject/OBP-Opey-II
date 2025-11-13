@@ -123,6 +123,24 @@ i.e.
 OBP_BASE_URL="http://192.168.0.112:8080"
 ```
 
+### Admin Client Configuration
+
+Opey II includes an admin OBP client singleton for system-level operations. This is initialized automatically at startup if the required environment variables are present:
+
+```env
+OBP_ADMIN_USERNAME=admin@example.com
+OBP_ADMIN_PASSWORD=secure_password
+OBP_CONSUMER_KEY=your_consumer_key
+OBP_BASE_URL=https://api.openbankproject.com
+```
+
+The admin client:
+- Initializes once at app startup
+- Provides a singleton instance accessible throughout the application
+- Automatically verifies admin entitlements
+- Handles authentication and token refresh centrally
+
+
 ## Logging Configuration
 
 ### Username Logging for OBP API Requests

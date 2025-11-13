@@ -17,6 +17,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client as LangsmithClient
 
 from auth.auth import OBPConsentAuth, AuthConfig
+from auth import initialize_admin_client, close_admin_client
 from auth.session import session_cookie, backend, SessionData
 from auth.rate_limiting import limiter, _rate_limit_exceeded_handler
 
@@ -134,6 +135,14 @@ class SessionUpdateMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize redis client
     redis_client = await get_redis_client()
+    
+    # Initialize admin OBP client
+    try:
+        await initialize_admin_client(verify_entitlements=True)
+    except Exception as e:
+        logger.error(f'Failed to initialize admin client: {e}')
+        # Continue startup even if admin client fails - it may not be required for all operations
+        logger.warning('⚠️  Admin client initialization failed - admin operations will be unavailable')
 
     cleanup_task = asyncio.create_task(periodic_orchestrator_cleanup())
     cancellation_cleanup_task = asyncio.create_task(periodic_cancellation_cleanup())
@@ -144,6 +153,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         checkpointers['aiosql'] = sql_checkpointer
         yield
 
+    # Cleanup during shutdown
+    await close_admin_client()
+    
     # Cancel cleanup tasks during shutdown
     cleanup_task.cancel()
     cancellation_cleanup_task.cancel()
