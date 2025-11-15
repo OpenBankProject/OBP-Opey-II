@@ -9,7 +9,7 @@ accessed via get_admin_client().
 import logging
 from typing import Optional
 
-from src.client.obp_client import OBPClient
+from client.obp_client import OBPClient
 from .auth import create_admin_direct_login_auth, OBPDirectLoginAuth
 
 logger = logging.getLogger('__main__.' + __name__)

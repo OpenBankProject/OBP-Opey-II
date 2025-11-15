@@ -128,8 +128,8 @@ OBP_BASE_URL="http://192.168.0.112:8080"
 Opey II includes an admin OBP client singleton for system-level operations. This is initialized automatically at startup if the required environment variables are present:
 
 ```env
-OBP_ADMIN_USERNAME=admin@example.com
-OBP_ADMIN_PASSWORD=secure_password
+OBP_USERNAME=admin@example.com
+OBP_PASSWORD=secure_password
 OBP_CONSUMER_KEY=your_consumer_key
 OBP_BASE_URL=https://api.openbankproject.com
 ```

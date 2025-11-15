@@ -1,3 +1,3 @@
-from client.client import AgentClient
+from client.agent_client import AgentClient
 
 __all__ = ["AgentClient"]

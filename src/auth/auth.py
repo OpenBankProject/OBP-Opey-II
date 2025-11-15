@@ -343,16 +343,16 @@ async def create_admin_direct_login_auth(
         ValueError: If required environment variables are missing or entitlements are insufficient
     """
     # Validate environment variables
-    admin_username = os.getenv('OBP_ADMIN_USERNAME')
-    admin_password = os.getenv('OBP_ADMIN_PASSWORD')
+    admin_username = os.getenv('OBP_USERNAME')
+    admin_password = os.getenv('OBP_PASSWORD')
     consumer_key = os.getenv('OBP_CONSUMER_KEY')
     base_uri = os.getenv('OBP_BASE_URL')
     
     if not all([admin_username, admin_password, consumer_key, base_uri]):
         missing = [
             var for var, val in [
-                ('OBP_ADMIN_USERNAME', admin_username),
-                ('OBP_ADMIN_PASSWORD', admin_password),
+                ('OBP_USERNAME', admin_username),
+                ('OBP_PASSWORD', admin_password),
                 ('OBP_CONSUMER_KEY', consumer_key),
                 ('OBP_BASE_URL', base_uri)
             ] if not val
@@ -380,7 +380,7 @@ async def create_admin_direct_login_auth(
     
     # Verify entitlements if requested
     if verify_entitlements:
-        from src.client.obp_client import OBPClient
+        from client.obp_client import OBPClient
         
         obp_client = OBPClient(auth=admin_auth)
         version = os.getenv('OBP_API_VERSION', 'v6.0.0')

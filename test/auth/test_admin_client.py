@@ -36,8 +36,8 @@ def reset_singleton():
 @pytest.fixture
 def mock_env_vars(monkeypatch):
     """Mock required environment variables."""
-    monkeypatch.setenv('OBP_ADMIN_USERNAME', 'test_admin')
-    monkeypatch.setenv('OBP_ADMIN_PASSWORD', 'test_password')
+    monkeypatch.setenv('OBP_USERNAME', 'test_admin')
+    monkeypatch.setenv('OBP_PASSWORD', 'test_password')
     monkeypatch.setenv('OBP_CONSUMER_KEY', 'test_consumer_key')
     monkeypatch.setenv('OBP_BASE_URL', 'https://test.openbankproject.com')
     monkeypatch.setenv('OBP_API_VERSION', 'v6.0.0')
@@ -154,7 +154,7 @@ async def test_missing_env_vars(reset_singleton, monkeypatch):
     """Test that missing environment variables are caught."""
     
     # Clear all admin env vars
-    for var in ['OBP_ADMIN_USERNAME', 'OBP_ADMIN_PASSWORD', 'OBP_CONSUMER_KEY', 'OBP_BASE_URL']:
+    for var in ['OBP_USERNAME', 'OBP_PASSWORD', 'OBP_CONSUMER_KEY', 'OBP_BASE_URL']:
         monkeypatch.delenv(var, raising=False)
     
     with pytest.raises(ValueError, match="Admin client initialization failed"):
