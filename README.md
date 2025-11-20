@@ -27,9 +27,9 @@ Check the README.md in the `src/scripts` directory for more information on how t
 
 Run the vector database population script to create the vector database collections:
 ```bash
-python src/scripts/populate_vector_db.py
+python src/database/populate_vector_db.py
 ```
-### 3. Setting up the environemnet 
+### 3. Setting up the environment 
 First you will need to rename the `.env.example` file to `.env` and change several parameters. You have options on which LLM provider you decide to use for the backend agent system. 
 ### Using different AI models
 To use change the model used by opey set the environment variables:
