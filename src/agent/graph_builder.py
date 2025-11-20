@@ -12,10 +12,11 @@ from langchain_core.runnables import RunnableConfig
 
 from agent.components.states import OpeyGraphState
 from agent.components.chains import opey_system_prompt_template
-from agent.components.nodes import human_review_node, run_summary_chain
+from agent.components.nodes import human_review_node, run_summary_chain, sanitize_tool_responses
 from agent.components.edges import should_summarize, needs_human_review
 from agent.utils.model_factory import get_model
 from agent.utils.decorators import cancellable
+from agent.utils.token_counter import count_tokens_from_messages
 
 from typing import List, Optional, Dict, Any, Literal
 import os
@@ -158,15 +159,9 @@ class OpeyAgentGraphBuilder:
             total_tokens = state.get("total_tokens", 0)
             # Use the same LLM for token counting, but without tools binding
             # Use the same model for token counting, but without tools binding
-            counting_llm = get_model(self._model_name, **self._model_kwargs)
-            
-            try:
-                total_tokens += counting_llm.get_num_tokens_from_messages(messages)
-            except NotImplementedError as e:
-                print(f"Could not count tokens for model provider {os.getenv('MODEL_PROVIDER')}:\n{e}\n\nDefaulting to OpenAI GPT-4o counting...")
-                from langchain_openai import ChatOpenAI
-                total_tokens += ChatOpenAI(model='gpt-4o').get_num_tokens_from_messages(messages)
+            token_count = count_tokens_from_messages(messages, self._model_name, self._model_kwargs)
 
+            total_tokens += token_count
             return {"messages": response, "total_tokens": total_tokens}
         
         return run_opey
@@ -183,6 +178,9 @@ class OpeyAgentGraphBuilder:
         if self._tools:
             all_tools = ToolNode(self._tools)
             opey_workflow.add_node("tools", all_tools)
+            opey_workflow.add_node("sanitize_tool_responses", sanitize_tool_responses)
+            opey_workflow.add_edge("tools", "sanitize_tool_responses")
+            opey_workflow.add_edge("sanitize_tool_responses", "opey")
         
         if self._enable_human_review:
             opey_workflow.add_node("human_review", human_review_node)
@@ -218,8 +216,7 @@ class OpeyAgentGraphBuilder:
                 }
             )
         
-        if self._tools:
-            opey_workflow.add_edge("tools", "opey")
+        # Note: tools → opey edge is already added via sanitize_tool_responses above (line 183)
         
         if self._enable_summarization:
             opey_workflow.add_conditional_edges(
@@ -231,6 +228,7 @@ class OpeyAgentGraphBuilder:
                 }
             )
             opey_workflow.add_edge("summarize_conversation", END)
+        
         
         # Compile with appropriate settings
         compile_kwargs = {}

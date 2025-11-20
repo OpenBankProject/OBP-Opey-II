@@ -7,7 +7,7 @@ import uuid
 import logging
 
 from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.exception_handlers import http_exception_handler
@@ -18,6 +18,10 @@ from langsmith import Client as LangsmithClient
 
 from auth.auth import OBPConsentAuth, AuthConfig
 from auth.session import session_cookie, backend, SessionData
+from auth.rate_limiting import limiter, _rate_limit_exceeded_handler
+
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from service.opey_session import OpeySession
 from service.checkpointer import checkpointers
@@ -39,6 +43,8 @@ from schema import (
     UsageInfoResponse,
     SessionUpgradeResponse,
 )
+
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -210,6 +216,10 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     logger.error(f"OTHER_HTTP_EXCEPTION: {exc.status_code} - {exc.detail}")
     return await http_exception_handler(request, exc)
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 # Add session update middleware
 app.add_middleware(SessionUpdateMiddleware)
 
@@ -233,7 +243,7 @@ if not cors_allowed_origins:
 cors_allowed_methods = os.getenv("CORS_ALLOWED_METHODS", "GET,POST,PUT,DELETE,OPTIONS").split(",")
 cors_allowed_methods = [method.strip() for method in cors_allowed_methods if method.strip()]
 
-cors_allowed_headers = os.getenv("CORS_ALLOWED_HEADERS", "Content-Type,Authorization,Consent-JWT").split(",")
+cors_allowed_headers = os.getenv("CORS_ALLOWED_HEADERS", "Content-Type,Authorization,Consent-JWT,Consent-Id").split(",")
 cors_allowed_headers = [header.strip() for header in cors_allowed_headers if header.strip()]
 
 app.add_middleware(
@@ -276,39 +286,44 @@ if os.getenv("DEBUG_CORS", "false").lower() == "true":
 
 # Define Allowed Authentication methods,
 # Currently only OBP consent is allowed
+from auth.auth import OBPConsentAuth
 auth_config = AuthConfig()
-auth_config.register_auth_strategy("obp_consent", OBPConsentAuth())
+auth_config.register_auth_strategy("obp_consent_id", OBPConsentAuth())
 
 obp_base_url = os.getenv('OBP_BASE_URL')
 
 @app.post("/create-session")
+@limiter.exempt
 async def create_session(request: Request, response: Response):
     """
     Create a session for the user using the OBP consent JWT or create an anonymous session.
     """
     # Get the consent JWT from the request
     logger.info("Hello from create_session")
-    consent_jwt = request.headers.get("Consent-JWT")
-    logger.info(f"Consent JWT: {consent_jwt}")
+    consent_id = request.headers.get("Consent-Id")
+    
+    # Create masked versions for logging
+    masked_consent_id = f"{consent_id[:20]}...{consent_id[-10:]}" if consent_id and len(consent_id) > 30 else consent_id[:10] + "..." if consent_id and len(consent_id) > 10 else consent_id    
+    logger.info(f"Consent ID: {consent_id}\n")
+    
     allow_anonymous = os.getenv("ALLOW_ANONYMOUS_SESSIONS", "false").lower() == "true"
 
-    logger.info(f"CREATE SESSION REQUEST - JWT present: {bool(consent_jwt)}, Anonymous allowed: {allow_anonymous}")
+    logger.info(f"CREATE SESSION REQUEST - Consent ID present: {bool(masked_consent_id)}, Anonymous allowed: {allow_anonymous}")
 
     # DEBUG: Log detailed request information
     logger.debug(f"create_session - Request headers: {dict(request.headers)}")
-    if consent_jwt:
-        masked_jwt = f"{consent_jwt[:20]}...{consent_jwt[-10:]}" if len(consent_jwt) > 30 else consent_jwt[:10] + "..." if len(consent_jwt) > 10 else consent_jwt
-        logger.debug(f"create_session - Consent JWT length: {len(consent_jwt)} chars, masked: {masked_jwt}")
+    if consent_id:
+        logger.debug(f"create_session - Consent ID length: {len(consent_id)} chars, masked: {masked_consent_id}")
     logger.debug(f"create_session - Environment ALLOW_ANONYMOUS_SESSIONS: {os.getenv('ALLOW_ANONYMOUS_SESSIONS', 'not set')}")
 
-    if not consent_jwt:
-        logger.info("create_session sayz: No Consent-JWT provided")
-        logger.debug("create_session - No Consent-JWT header found in request")
+    if not consent_id:
+        logger.info("create_session says: No Consent-Id provided")
+        logger.debug("create_session - No Consent-Id header found in request")
         if not allow_anonymous:
             logger.debug("create_session - Anonymous sessions not allowed, returning 401")
             raise HTTPException(
                 status_code=401,
-                detail="Missing Authorization headers, Must be one of ['Consent-JWT']"
+                detail="Missing Authorization headers, Must be one of ['Consent-Id']"
             )
 
         # Create anonymous session
@@ -316,7 +331,7 @@ async def create_session(request: Request, response: Response):
         logger.debug("create_session - Proceeding to create anonymous session")
         session_id = uuid.uuid4()
         session_data = SessionData(
-            consent_jwt=None,
+            consent_id=None,
             is_anonymous=True,
             token_usage=0,
             request_count=0
@@ -334,20 +349,18 @@ async def create_session(request: Request, response: Response):
             }
         )
     else:
-        logger.info("create_session sayz: Consent-JWT provided")
-        logger.debug("create_session - Processing authenticated session with Consent-JWT")
-    # Check if the consent JWT is valid
-    # if not await auth_config.obp_consent.acheck_auth(consent_jwt):
-    #     raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
-    logger.info("Create session sayz: creating session_id")
-    if not await auth_config.auth_strategies["obp_consent"].acheck_auth(consent_jwt):
-        raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
+        logger.info("create_session says: Consent-Id provided")
+        logger.debug("create_session - Processing authenticated session with Consent-Id")
+    
+    logger.info("Create session says: creating session_id")
+    if not await auth_config.auth_strategies["obp_consent_id"].acheck_auth(consent_id):
+        raise HTTPException(status_code=401, detail="Invalid Consent-Id")
 
     session_id = uuid.uuid4()
 
     # Create a session using the OBP consent JWT
     session_data = SessionData(
-        consent_jwt=consent_jwt,
+        consent_id=consent_id,
         is_anonymous=False,
         token_usage=0,
         request_count=0
@@ -367,6 +380,7 @@ async def create_session(request: Request, response: Response):
 
 
 @app.post("/delete-session")
+@limiter.exempt
 async def delete_session(response: Response, session_id: uuid.UUID = Depends(session_cookie)):
     await backend.delete(session_id)
     session_cookie.delete_from_response(response)
@@ -376,6 +390,7 @@ async def delete_session(response: Response, session_id: uuid.UUID = Depends(ses
 
 
 @app.get("/status")
+@limiter.exempt
 async def get_status() -> dict[str, Any]:
     """Health check endpoint with usage information."""
 
@@ -384,6 +399,27 @@ async def get_status() -> dict[str, Any]:
     }
 
     return status_info
+
+@app.get("/mermaid_diagram", dependencies=[Depends(session_cookie)])
+@limiter.exempt
+async def get_mermaid_diagram(opey_session: Annotated[OpeySession, Depends()]) -> FileResponse:
+    svg_path = Path("../resources/mermaid_diagram.svg")
+    
+    try:
+        if not svg_path.parent.exists():
+            svg_path.parent.mkdir(parents=True, exist_ok=True)
+            
+        import mermaid
+        mermaid_graph = opey_session.graph.get_graph().draw_mermaid()
+        
+        mermaid_svg = mermaid.Mermaid(mermaid_graph).to_svg(svg_path)
+        logger.info(f"Generated mermaid diagram at {svg_path}")
+        
+    except Exception as e:
+        logger.error(f"Error generating mermaid diagram: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to generate mermaid diagram")
+
+    return FileResponse(svg_path, media_type="image/svg+xml")
 
 @app.post("/invoke", dependencies=[Depends(session_cookie)])
 async def invoke(user_input: UserInput, request: Request, opey_session: Annotated[OpeySession, Depends()]) -> ChatMessage:
@@ -451,12 +487,13 @@ async def stream_agent(
 
     # Get the actual thread_id that will be used
     thread_id = user_input.thread_id or str(stream_manager.opey_session.session_id)
-    config = {
+    
+    # Build config with model context merged in
+    config = stream_manager.opey_session.build_config({
         'configurable': {
             'thread_id': thread_id,
-            'approval_manager': stream_manager.opey_session.approval_manager
         }
-    }
+    })
 
     async def stream_generator():
         from utils.cancellation_manager import cancellation_manager
@@ -493,6 +530,7 @@ async def stream_agent(
     return StreamingResponse(stream_generator(), media_type="text/event-stream", headers=headers)
 
 @app.post("/stream/{thread_id}/stop", dependencies=[Depends(session_cookie)])
+@limiter.exempt
 async def stop_stream(thread_id: str) -> dict:
     """
     Request cancellation of an active stream.
@@ -515,6 +553,163 @@ async def stop_stream(thread_id: str) -> dict:
         "message": "Stream cancellation requested. The stream will stop at the next checkpoint."
     }
 
+
+@app.post("/stream/{thread_id}/regenerate", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
+async def regenerate_from_message(
+    thread_id: str,
+    request: Request,
+    message_id: str,
+    stream_manager: StreamManager = Depends(get_stream_manager)
+) -> StreamingResponse:
+    """
+    Regenerate the response starting from a specific message ID.
+    
+    This endpoint:
+    1. Gets the current state for the thread
+    2. Finds the target message by ID
+    3. Removes all messages after that message using RemoveMessage
+    4. Streams a new response from that point
+    
+    This is superior to checkpoint-based regeneration because:
+    - Works correctly even when there are tool calls/messages between user messages
+    - Allows regeneration from any specific message, not just the last user message
+    - More explicit and predictable behavior
+    
+    Args:
+        thread_id: The conversation thread
+        message_id: The ID of the message to regenerate from (everything after this is removed)
+        request: FastAPI request object
+        stream_manager: Injected stream manager dependency
+    
+    Returns:
+        StreamingResponse with SSE events
+    """
+    logger.info(f"Regenerate requested for thread: {thread_id}, from message: {message_id}")
+    
+    # Get the graph from the session
+    agent = stream_manager.opey_session.graph
+    
+    # Build config for the thread
+    config = stream_manager.opey_session.build_config({
+        'configurable': {
+            'thread_id': thread_id,
+        }
+    })
+    
+    try:
+        # Get current state
+        current_state = await agent.aget_state(config)
+        
+        if not current_state or not current_state.values:
+            raise HTTPException(
+                status_code=404,
+                detail="No conversation history found for this thread"
+            )
+        
+        # Get messages from state
+        messages = current_state.values.get('messages', [])
+        
+        if not messages:
+            
+            raise HTTPException(
+                status_code=400,
+                detail="No messages found in conversation"
+            )
+        
+        # Find the index of the target message
+        target_index = None
+        for i, msg in enumerate(messages):
+            if getattr(msg, 'id', None) == message_id:
+                target_index = i
+                break
+        
+        if target_index is None:
+            
+            logger.error(f"Message ID {message_id} not found in messages: {[getattr(m, 'id', None) for m in messages]}")
+            for msg in messages:
+                logger.info(f"Message details: {msg.pretty_print()}")
+            
+            raise HTTPException(
+                status_code=404,
+                detail=f"Message with ID {message_id} not found in conversation"
+            )
+        
+        # Determine which messages to remove (everything after the target message)
+        messages_to_remove = messages[target_index + 1:]
+        
+        if not messages_to_remove:
+            raise HTTPException(
+                status_code=400,
+                detail="No messages to regenerate - target message is already the last message"
+            )
+        
+        logger.info(f"Removing {len(messages_to_remove)} messages after message {message_id}")
+        
+        # Use RemoveMessage to delete the messages
+        # This works with the add_messages reducer in MessagesState
+        from langchain_core.messages import RemoveMessage
+        
+        # Update state to remove messages after the target
+        await agent.aupdate_state(
+            config,
+            {"messages": [RemoveMessage(id=msg.id) for msg in messages_to_remove]}
+        )
+        
+        # Create a StreamInput with no message (we're continuing from the updated state)
+        regenerate_input = StreamInput(
+            message="",  # Empty - the state already has the context
+            thread_id=thread_id,
+        )
+        
+        # Update request count for usage tracking
+        stream_manager.opey_session.update_request_count()
+        
+        async def stream_generator():
+            from utils.cancellation_manager import cancellation_manager
+            
+            # Clear any stale cancellation flags
+            await cancellation_manager.clear_cancellation(thread_id)
+            
+            try:
+                # Stream from the updated state (with messages removed)
+                async for stream_event in stream_manager.stream_response(
+                    regenerate_input,
+                    config  # Use the same config - state has been updated
+                ):
+                    # Check if client disconnected
+                    if await request.is_disconnected():
+                        logger.info(f"Client disconnected for thread {thread_id} during regeneration")
+                        await cancellation_manager.request_cancellation(thread_id)
+                        break
+                    
+                    # Check if cancellation was requested via API
+                    if await cancellation_manager.is_cancelled(thread_id):
+                        logger.info(f"Cancellation requested for thread {thread_id} during regeneration")
+                        break
+                    
+                    yield stream_manager.to_sse_format(stream_event)
+            except GeneratorExit:
+                logger.info(f"Regenerate stream generator closed for thread {thread_id}")
+                raise
+            finally:
+                await cancellation_manager.clear_cancellation(thread_id)
+        
+        headers = {
+            "X-Thread-ID": thread_id,
+            "X-Regenerated": "true",
+            "X-Regenerated-From": message_id
+        }
+        return StreamingResponse(stream_generator(), media_type="text/event-stream", headers=headers)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during regenerate for thread {thread_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to regenerate response: {str(e)}"
+        )
+
 @app.post("/approval/{thread_id}", response_class=StreamingResponse, responses=_sse_response_example(), dependencies=[Depends(session_cookie)])
 async def user_approval(
     user_approval_response: ToolCallApproval,
@@ -530,12 +725,12 @@ async def user_approval(
         tool_call_approval=user_approval_response,
     )
 
-    config = {
+    # Build config with model context merged in (approval_manager already included)
+    config = stream_manager.opey_session.build_config({
         'configurable': {
             'thread_id': thread_id,
-            'approval_manager': stream_manager.opey_session.approval_manager
         }
-    }
+    })
 
     async def stream_generator():
         async for stream_event in stream_manager.stream_response(
@@ -548,6 +743,7 @@ async def user_approval(
 
 
 @app.post("/feedback", dependencies=[Depends(session_cookie)])
+@limiter.exempt
 async def feedback(feedback: Feedback) -> FeedbackResponse:
     """
     Record feedback for a run to LangSmith.
@@ -582,15 +778,13 @@ async def upgrade_session(request: Request, response: Response, session_id: uuid
     Upgrade an anonymous session to an authenticated session using OBP consent JWT.
     """
     # Get the consent JWT from the request
-    consent_jwt = request.headers.get("Consent-JWT")
-    if not consent_jwt:
-        raise HTTPException(status_code=400, detail="Missing Consent-JWT header")
+    consent_id = request.headers.get("Consent-Id")
+    if not consent_id:
+        raise HTTPException(status_code=400, detail="Missing Consent-Id header")
 
-    # Check if the consent JWT is valid
-    # if not await auth_config.obp_consent.acheck_auth(consent_jwt):
-    #     raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
-    if not await auth_config.auth_strategies["obp_consent"].acheck_auth(consent_jwt):
-        raise HTTPException(status_code=401, detail="Invalid Consent-JWT")
+   
+    if not await auth_config.auth_strategies["obp_consent_id"].acheck_auth(consent_id):
+        raise HTTPException(status_code=401, detail="Invalid Consent-Id")
 
     # Get current session data
     session_data = await backend.read(session_id)
@@ -603,7 +797,7 @@ async def upgrade_session(request: Request, response: Response, session_id: uuid
 
     # Update session data to authenticated
     updated_session_data = SessionData(
-        consent_jwt=consent_jwt,
+        consent_id=consent_id,
         is_anonymous=False,
         token_usage=session_data.token_usage,  # Preserve usage stats
         request_count=session_data.request_count
@@ -621,39 +815,3 @@ async def upgrade_session(request: Request, response: Response, session_id: uuid
             "requests_made": session_data.request_count
         }
     )
-
-# @app.post("/auth")
-# async def auth(consent_auth_body: ConsentAuthBody, response: Response):
-#     """
-#     Authorize Opey using an OBP consent
-#     """
-#     logger.debug("Authorizing Opey using an OBP consent")
-#     version = os.getenv("OBP_API_VERSION")
-#     consent_challenge_answer_path = f"/obp/{version}/banks/gh.29.uk/consents/{consent_auth_body.consent_id}/challenge"
-
-#     # Check consent challenge answer
-#     try:
-#         obp_response = await obp_requests("POST", consent_challenge_answer_path, json.dumps({"answer": consent_auth_body.consent_challenge_answer}))
-#     except Exception as e:
-#         logger.error(f"Error in /auth endpoint: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
-
-#     if obp_response and not (200 <= obp_response.status < 300):
-#         logger.debug("Welp, we got an error from OBP")
-#         message = await obp_response.text()
-#         raise HTTPException(status_code=obp_response.status, detail=message)
-
-#     try:
-#         payload = {
-#             "consent_id": consent_auth_body.consent_id,
-#         }
-#         opey_jwt = sign_jwt(payload)
-#     except Exception as e:
-#         logger.debug("Looks like signing the JWT failed OMG")
-#         logger.error(f"Error in /auth endpoint: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
-
-#     print("got consent jwt")
-#     # Set the JWT cookie
-#     response.set_cookie(key="jwt", value=opey_jwt, httponly=False, samesite='lax', secure=False)
-#     return AuthResponse(success=True)

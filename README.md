@@ -44,7 +44,6 @@ Just note that the provider must match the MODEL_NAME i.e. you cannot use MODEL_
 Not all LLMs are supported by default, they need to be manually added in the config.
 If you want to add a new model, edit `MODEL_CONFIGS` in `./src/agent/utils/model_factory.py`
 
-```
 ### Ollama (Run models locally)
 This is only reccomended if you can run models on a decent size GPU. Trying to run on CPU will take ages, not run properly or even crash your computer.
 
@@ -183,3 +182,9 @@ All log messages now include the function name that generated the log for easier
 - `_async_request says:` - HTTP request execution logs  
 - `async_obp_get_requests says:` - GET request specific logs
 - `async_obp_requests says:` - General request method logs
+
+## Service Configuration
+### Rate Limiting
+Default rate limiting on the stream and invoke endpoints can be set with the environment variable `GLOBAL_RATE_LIMIT`
+
+Visit https://limits.readthedocs.io/en/stable/quickstart.html#rate-limit-string-notation for information on what this value can be.

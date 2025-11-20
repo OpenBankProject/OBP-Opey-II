@@ -30,22 +30,64 @@ class ModelConfig:
     api_key_env: Optional[str] = None
     base_url_env: Optional[str] = None
     default_max_tokens: int = 4096
+    context_window: int = 4096  # Total context window in tokens
     supports_tools: bool = True
 
 # Define available models with their configurations
 MODEL_CONFIGS = {
     # OpenAI models
-    "gpt-4o": ModelConfig("gpt-4o", LLMProviders.OPENAI, "OPENAI_API_KEY"),
-    "gpt-4o-mini": ModelConfig("gpt-4o-mini", LLMProviders.OPENAI, "OPENAI_API_KEY"),
-    "gpt-4-turbo": ModelConfig("gpt-4-turbo", LLMProviders.OPENAI, "OPENAI_API_KEY"),
-    "gpt-3.5-turbo": ModelConfig("gpt-3.5-turbo", LLMProviders.OPENAI, "OPENAI_API_KEY"),
+    "gpt-4o": ModelConfig(
+        "gpt-4o", 
+        LLMProviders.OPENAI, 
+        "OPENAI_API_KEY", 
+        context_window=128000,
+        default_max_tokens=16384
+    ),
+    "gpt-4o-mini": ModelConfig(
+        "gpt-4o-mini", 
+        LLMProviders.OPENAI, 
+        "OPENAI_API_KEY",
+        context_window=128000,
+        default_max_tokens=16384
+    ),
+    "gpt-4-turbo": ModelConfig(
+        "gpt-4-turbo", 
+        LLMProviders.OPENAI, 
+        "OPENAI_API_KEY",
+        context_window=128000,
+        default_max_tokens=4096
+    ),
+    "gpt-3.5-turbo": ModelConfig(
+        "gpt-3.5-turbo", 
+        LLMProviders.OPENAI, 
+        "OPENAI_API_KEY",
+        context_window=16385,
+        default_max_tokens=4096
+    ),
     
     # Anthropic models
-    "claude-sonnet-4": ModelConfig("claude-sonnet-4-20250514", LLMProviders.ANTHROPIC, "ANTHROPIC_API_KEY"),
-    "claude-sonnet-4.5": ModelConfig("claude-sonnet-4-5-20250929", LLMProviders.ANTHROPIC, "ANTHROPIC_API_KEY"),
+    "claude-sonnet-4": ModelConfig(
+        "claude-sonnet-4-20250514", 
+        LLMProviders.ANTHROPIC, 
+        "ANTHROPIC_API_KEY",
+        context_window=200000,
+        default_max_tokens=8192
+    ),
+    "claude-sonnet-4.5": ModelConfig(
+        "claude-sonnet-4-5-20250929", 
+        LLMProviders.ANTHROPIC, 
+        "ANTHROPIC_API_KEY",
+        context_window=200000,
+        default_max_tokens=8192
+    ),
     
     # Ollama models (no API key required)
-    "llama3.1": ModelConfig("llama3.1", LLMProviders.OLLAMA),
+    "llama3.1": ModelConfig(
+        "llama3.1", 
+        LLMProviders.OLLAMA,
+        context_window=128000,
+        default_max_tokens=4096
+    ),
 }
 
 # Add embedding model configs
@@ -297,6 +339,67 @@ def get_model(model_name: str, **kwargs) -> BaseChatModel:
         >>> model = get_model("claude-3-5-sonnet-20241022")
     """
     return model_factory.get_model(model_name, **kwargs)
+
+
+def get_max_tokens(model_name: str) -> int:
+    """
+    Get the maximum output token limit for a given model
+    
+    Args:
+        model_name: Name of the model
+        
+    Returns:
+        Maximum output token limit for the model
+    """
+    if model_name not in MODEL_CONFIGS:
+        raise ValueError(f"Unknown model: {model_name}")
+    
+    return MODEL_CONFIGS[model_name].default_max_tokens
+
+
+def get_context_window(model_name: str) -> int:
+    """
+    Get the total context window size (input + output) for a given model
+    
+    Args:
+        model_name: Name of the model or size category
+        
+    Returns:
+        Total context window size in tokens
+        
+    Examples:
+        >>> get_context_window("gpt-4o")
+        128000
+        >>> get_context_window("claude-sonnet-4")
+        200000
+    """
+    # If it's a size category, get the first available model
+    if model_name in MODEL_SIZE_FALLBACKS:
+        available_models = model_factory.get_available_models()
+        for candidate in MODEL_SIZE_FALLBACKS[model_name]:
+            if candidate in available_models and candidate in MODEL_CONFIGS:
+                return MODEL_CONFIGS[candidate].context_window
+        raise ValueError(f"No available models found for size category: {model_name}")
+    
+    if model_name not in MODEL_CONFIGS:
+        raise ValueError(f"Unknown model: {model_name}")
+    
+    return MODEL_CONFIGS[model_name].context_window
+
+def get_max_input_tokens(model_name: str) -> int:
+    """
+    Get the maximum input token limit for a given model
+    Args:
+        model_name: Name of the model
+    Returns:
+        Maximum input token limit for the model
+    """
+    if model_name not in MODEL_CONFIGS:
+        raise ValueError(f"Unknown model: {model_name}")
+    
+    config = MODEL_CONFIGS[model_name]
+    return config.context_window - config.default_max_tokens 
+        
 
 def get_embedding_model(model_name: str = "text-embedding-3-large") -> Embeddings:
     """

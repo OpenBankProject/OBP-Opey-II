@@ -37,7 +37,11 @@ def needs_human_review(state:OpeyGraphState) -> Literal["human_review", END]:
     If the tool called is obp_requests, we need to route to the human_review node to wait for human approval of tool
     """
     messages = state["messages"]
-    tool_calls = messages[-1].tool_calls
+    last_message = messages[-1]
+    
+    # Check if the last message has tool_calls attribute (only AIMessage has this)
+    # This prevents errors when last message is HumanMessage (e.g., after regeneration)
+    tool_calls = getattr(last_message, 'tool_calls', None)
     
     if tool_calls:
         return "human_review"

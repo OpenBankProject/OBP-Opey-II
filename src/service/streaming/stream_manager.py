@@ -118,12 +118,20 @@ class StreamManager:
             else:
                 # Regular user message
                 input_message = ChatMessage(type="human", content=stream_input.message)
+                
+                # CRITICAL: Check for orphaned tool calls before adding new message
+                # This can happen when cancellation occurs during tool execution
+                await self._fix_orphaned_tool_calls(config)
+                
                 graph_input = {"messages": [input_message.to_langchain()]}
                 logger.debug("Processing user message", extra={
                     "event_type": "user_message_processing",
                     "thread_id": thread_id,
                     "message_type": input_message.type
                 })
+                
+                # Note: user_message_confirmed event is emitted by UserMessageEventProcessor
+                # after the message is added to the graph and assigned an ID
 
             # Stream events from the graph
             kwargs = {
@@ -336,6 +344,87 @@ class StreamManager:
                 error_code="approval_check_error",
                 details={"thread_id": thread_id, "error_type": type(e).__name__}
             )
+
+    async def _fix_orphaned_tool_calls(self, config: RunnableConfig) -> None:
+        """
+        Fix orphaned tool calls in the graph state.
+        
+        This can happen when cancellation occurs during tool execution:
+        - AIMessage with tool_calls is in state
+        - Tool was executing when user cancelled
+        - ToolMessages may be missing or incomplete
+        
+        This method checks for such cases and adds dummy ToolMessages
+        to satisfy LLM API requirements.
+        """
+        from langchain_core.messages import AIMessage, ToolMessage
+        
+        thread_id = config.get("configurable", {}).get("thread_id")
+        
+        try:
+            # Get current graph state
+            current_state = await self.graph.aget_state(config)
+            if not current_state or not current_state.values:
+                return
+            
+            messages = current_state.values.get("messages", [])
+            if not messages:
+                return
+            
+            # Find the last AIMessage with tool_calls
+            last_ai_with_tools = None
+            last_ai_index = -1
+            
+            for i in range(len(messages) - 1, -1, -1):
+                msg = messages[i]
+                if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    last_ai_with_tools = msg
+                    last_ai_index = i
+                    break
+            
+            if not last_ai_with_tools:
+                return  # No tool calls to worry about
+            
+            # Find which tool calls already have ToolMessage results
+            existing_tool_call_ids = set()
+            for msg in messages[last_ai_index + 1:]:
+                if isinstance(msg, ToolMessage):
+                    existing_tool_call_ids.add(msg.tool_call_id)
+            
+            # Check for orphaned tool calls
+            orphaned_tool_calls = []
+            for tool_call in last_ai_with_tools.tool_calls:
+                tool_call_id = tool_call.get("id")
+                if tool_call_id and tool_call_id not in existing_tool_call_ids:
+                    orphaned_tool_calls.append(tool_call)
+            
+            if not orphaned_tool_calls:
+                return  # All tool calls have results
+            
+            # Create dummy ToolMessages for orphaned calls
+            logger.warning(f"Found {len(orphaned_tool_calls)} orphaned tool calls in state for thread {thread_id}, adding dummy ToolMessages")
+            
+            dummy_messages = []
+            for tool_call in orphaned_tool_calls:
+                tool_call_id = tool_call.get("id")
+                dummy_message = ToolMessage(
+                    content="[Cancelled - tool execution was interrupted]",
+                    tool_call_id=tool_call_id,
+                    status="error"
+                )
+                dummy_messages.append(dummy_message)
+                logger.info(f"Added dummy ToolMessage for orphaned tool_call_id: {tool_call_id}")
+            
+            # Update the graph state with dummy messages
+            await self.graph.aupdate_state(config, {"messages": dummy_messages})
+            logger.info(f"Successfully fixed {len(orphaned_tool_calls)} orphaned tool calls")
+            
+        except Exception as e:
+            # Don't fail the request if this cleanup fails
+            logger.error(f"Error fixing orphaned tool calls: {e}", exc_info=True, extra={
+                "event_type": "orphaned_tool_call_fix_error",
+                "thread_id": thread_id
+            })
 
     def _requires_approval(self, tool_call: dict) -> bool:
         """Determine if a tool call requires human approval"""

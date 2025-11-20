@@ -12,8 +12,8 @@ async def create_session(client: AsyncClient, get_obp_consent):
     """
     Used for creating a session in the subsequent tests. NOT for testing the session creation endpoint itself.
     """
-    consent_jwt = get_obp_consent
-    response = await client.post("/create-session", headers={'Consent-JWT': consent_jwt})
+    consent_id = get_obp_consent
+    response = await client.post("/create-session", headers={'Consent-JWT': consent_id})
 
     return response.cookies.get("session")
 
@@ -28,8 +28,8 @@ async def test_create_session_incorrect_format(client: AsyncClient):
 @pytest.mark.asyncio(loop_scope="session")
 @pytest.mark.skip("Requires valid OBP JWT token - run with real credentials to test")
 async def test_create_session(client: AsyncClient, get_obp_consent):
-    consent_jwt = get_obp_consent
-    response = await client.post("/create-session", headers={'Consent-JWT': consent_jwt})
+    consent_id = get_obp_consent
+    response = await client.post("/create-session", headers={'Consent-JWT': consent_id})
     print("Cookies:", response.cookies)
     assert response.status_code == 200
     assert "session" in response.cookies

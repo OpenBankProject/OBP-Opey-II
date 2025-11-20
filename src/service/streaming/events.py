@@ -138,6 +138,16 @@ class BatchApprovalRequestEvent(BaseStreamEvent):
         return f"data: {self.model_dump_json()}\n\n"
 
 
+class UserMessageConfirmEvent(BaseStreamEvent):
+    """Event fired when a user message is confirmed with its backend ID"""
+    type: Literal["user_message_confirmed"] = "user_message_confirmed"
+    message_id: str = Field(description="Backend-assigned message ID")
+    content: str = Field(description="The user's message content")
+
+    def to_sse_data(self) -> str:
+        return f"data: {self.model_dump_json()}\n\n"
+
+
 class StreamEndEvent(BaseStreamEvent):
     """Event fired when the stream ends"""
     type: Literal["stream_end"] = "stream_end"
@@ -158,6 +168,7 @@ StreamEvent = Union[
     KeepAliveEvent,
     ApprovalRequestEvent,
     BatchApprovalRequestEvent,
+    UserMessageConfirmEvent,
     StreamEndEvent
 ]
 
@@ -394,6 +405,20 @@ class StreamEventFactory:
                 "options": options or ["approve_all", "deny_all", "approve_selected"]
             },
             {"Batch approval message": f"Approval required for {len(tool_calls)} operations"}
+        )
+        return event
+
+    @staticmethod
+    def user_message_confirmed(message_id: str, content: str) -> UserMessageConfirmEvent:
+        """
+        Create a user message confirmation event.
+        This is sent after the backend accepts a user message and assigns it an ID.
+        """
+        event = UserMessageConfirmEvent(message_id=message_id, content=content)
+        StreamEventFactory._log_event(
+            event,
+            "USER_MESSAGE_CONFIRMED",
+            {"message_id": message_id, "content_length": len(content)}
         )
         return event
 

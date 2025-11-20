@@ -43,6 +43,9 @@ def cancellable(
             if thread_id and await cancellation_manager.is_cancelled(thread_id):
                 logger.info(f"Node '{node_func.__name__}' cancelled for thread {thread_id}")
                 
+                # Return simple cancellation message
+                # Note: Orphaned tool calls are handled proactively by StreamManager._fix_orphaned_tool_calls()
+                # before the next user message is processed, so we don't need to handle them here.
                 result = {"messages": [AIMessage(content=message)]}
                 
                 if include_metadata:
