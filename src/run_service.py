@@ -31,8 +31,18 @@ if log_level == 'DEBUG':
 
 if __name__ == "__main__":
     if os.getenv("MODE") == "dev":
+        port = int(os.getenv("PORT", 5000))
         logging.info("🛠️  Running in development mode with auto-reload")
-        uvicorn.run("service:app", reload=True, reload_excludes=["checkpoints.db*"], log_level="info", port=int(os.getenv("PORT", 5000)))
+        
+        logging.info(
+            f"Tip: check service health via `curl http://127.0.0.1:{port}/status` "
+            "(create a session first if authentication is required)."
+        )
+        logging.info(
+            f"Tip: view OpenAPI docs at http://127.0.0.1:{port}/docs "
+            "(establish a session or include auth headers if you see 403)."
+        )
+        uvicorn.run("service:app", reload=True, reload_excludes=["checkpoints.db*"], log_level="info", port=port)
     else:
         logging.info("🏭 Running in production mode")
         from service import app
