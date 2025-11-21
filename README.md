@@ -97,6 +97,10 @@ skip_consent_sca_for_consumer_id_pairs=[{ \
     "grantor_consumer_id": "<api explorer consumer id>",\
     "grantee_consumer_id": "<opey consumer id>" \
 }]
+
+# Make sure Opey has sufficient permissions to operate:
+consumer_validation_method_for_consent=CONSUMER_KEY_VALUE
+experimental_become_user_that_created_consent=true
 ```
 Consumer IDs will be shown on consumer registration or via the "Get Consumers" endpoint.
 
