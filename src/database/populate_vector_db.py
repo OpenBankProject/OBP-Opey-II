@@ -36,7 +36,7 @@ from database.document_schemas import GlossaryDocumentSchema, EndpointDocumentSc
 # Load environment variables
 load_dotenv()
 
-def get_obp_config(endpoint_type="static"):
+def get_obp_config(endpoint_type=""):
     """Get OBP configuration from environment variables."""
     base_url = os.getenv("OBP_BASE_URL")
     api_version = os.getenv("OBP_API_VERSION")
@@ -357,7 +357,7 @@ def main():
     parser.add_argument(
         "--endpoints",
         choices=["static", "dynamic", "all"],
-        default="static",
+        default="",
         help="Type of endpoints to load: static (default), dynamic, or all (static + dynamic)"
     )
     args = parser.parse_args()
