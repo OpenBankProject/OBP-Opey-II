@@ -12,6 +12,15 @@ import requests
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
+# Verify we're running from the src folder
+current_dir = os.getcwd()
+if os.path.basename(current_dir) == "src":
+    print("ERROR: This script must NOT be run from the 'src' folder.")
+    print(f"Current directory: {current_dir}")
+    print("Please run this script from the project root directory.")
+    print("Example: python src/database/populate_vector_db.py --endpoints all")
+    sys.exit(1)
+
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
