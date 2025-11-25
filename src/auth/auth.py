@@ -33,14 +33,26 @@ class BaseAuth():
             self.async_requests_client = aiohttp.ClientSession()
         return self.async_requests_client
     
-    def construct_headers(self, token: Optional[str] = None):
+    def construct_headers(self, token: Optional[str] = None) -> Dict[str, str]:
         """
         Constructs the nessecary HTTP auth headers for a given auth method
         """
         raise NotImplementedError
     
     # Asynchronous method to check if the token is valid
-    async def acheck_auth(self, token: str) -> bool:
+    async def acheck_auth(self, token: Optional[str] = None) -> bool:
+        raise NotImplementedError
+    
+    async def get_current_user_id(self, token: Optional[str] = None) -> Optional[str]:
+        """
+        Retrieve the user ID associated with the provided authentication token.
+        
+        Args:
+            token: Authentication token. If None, uses the instance's stored token.
+        
+        Returns:
+            User ID if retrieval is successful, None otherwise.
+        """
         raise NotImplementedError
     
 
@@ -157,6 +169,52 @@ class OBPConsentAuth(BaseAuth):
         logger.debug(f"OBPConsentAuth headers constructed - Token length: {len(token)} chars, masked: {masked_token}")
 
         return headers
+    
+    async def _get_current_user(self, token: str | None = None) -> Optional[str]:
+        """
+        Asynchronously retrieves the current user ID associated with the provided consent token.
+        
+        Args:
+            token (str): The consent ID token used for authentication.
+        
+        Returns:
+            Optional[str]: The user ID if retrieval is successful, None otherwise.
+        """
+        if not token and not self.token:
+            raise ValueError('Consent ID is required')
+        
+        if not token:
+            token = self.token
+        
+        assert token is not None  # Type narrowing for type checker
+
+        headers = self.construct_headers(token)
+
+        client = await self.get_client()
+        async with client.get(self.current_user_url, headers=headers) as response:
+            if response.status == 200:
+                response_data = await response.json()
+                logger.info(f'Current user ID retrieved successfully: {response_data}')
+                return response_data
+            else:
+                error_text = await response.read()
+                logger.error(f'Error retrieving current user ID: {error_text}')
+                return None
+            
+    async def get_current_user_id(self, token: str | None = None) -> Optional[str]:
+        """
+        Asynchronously retrieves the current user ID associated with the provided consent token.
+        
+        Args:
+            token (str): The consent ID token used for authentication.
+        
+        Returns:
+            Optional[str]: The user ID if retrieval is successful, None otherwise.
+        """
+        user_data = await self._get_current_user(token)
+        if user_data and 'user_id' in user_data:
+            return user_data['user_id']
+        return None
 
 class OBPDirectLoginAuth(BaseAuth):
 
@@ -282,7 +340,56 @@ class OBPDirectLoginAuth(BaseAuth):
                 logger.debug(f"DirectLogin validation failed - Status: {response.status}")
                 logger.debug(f"DirectLogin validation failed - Error details: {error_text}")
                 return False
+
+    async def _get_current_user(self, token: Optional[str] = None) -> Optional[dict]:
+        """
+        Retrieve the current user data associated with the provided DirectLogin token.
+        
+        Args:
+            token: The DirectLogin token used for authentication.
+        
+        Returns:
+            User data dict if retrieval is successful, None otherwise.
+        """
+        if not token:
+            token = self.token
             
+        if not token:
+            raise ValueError('Token is required')
+        
+        if not self.base_uri:
+            raise ValueError('Base URI is required')
+        
+        version = os.getenv('OBP_API_VERSION', 'v6.0.0')
+        current_user_url = f"{self.base_uri}/obp/{version}/users/current"
+        
+        headers = self.construct_headers(token)
+        
+        client = await self.get_client()
+        async with client.get(current_user_url, headers=headers) as response:
+            if response.status == 200:
+                response_data = await response.json()
+                logger.info(f'Current user data retrieved successfully: {response_data}')
+                return response_data
+            else:
+                error_text = await response.text()
+                logger.error(f'Error retrieving current user data: {error_text}')
+                return None
+
+    async def get_current_user_id(self, token: Optional[str] = None) -> Optional[str]:
+        """
+        Retrieve the user ID associated with the provided DirectLogin token.
+        
+        Args:
+            token: The DirectLogin token used for authentication.
+        
+        Returns:
+            User ID if retrieval is successful, None otherwise.
+        """
+        user_data = await self._get_current_user(token)
+        if user_data and 'user_id' in user_data:
+            return user_data['user_id']
+        return None
 
     def construct_headers(self, token: Optional[str] = None) -> Dict[str, str]:
         """
@@ -421,4 +528,3 @@ async def create_admin_direct_login_auth(
             # Don't raise - auth still works, just couldn't verify entitlements
     
     return admin_auth
-    

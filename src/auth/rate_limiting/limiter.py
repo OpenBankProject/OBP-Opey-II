@@ -1,6 +1,7 @@
 import logging
 import os
 
+from typing import Callable
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
@@ -33,33 +34,42 @@ def _rate_limit_exceeded_handler(request: Request, exc: Exception) -> JSONRespon
     )
 
 
-# Get Redis URL from environment, with fallback to memory storage
-redis_url = os.getenv("REDIS_URL")
 
-try:
-    if redis_url:
-        logger.info(f"Rate limiter using Redis storage: {redis_url}")
-        limiter = Limiter(
-            key_func=get_remote_address,
-            storage_uri=redis_url,
+    
+def create_limiter(key_func: Callable) -> Limiter:
+    """
+    Create and configure a rate limiter using Redis as the backend storage.
+    Args:
+        key_func (Callable): Function to extract the key for rate limiting (e.g., IP address or User ID).
+    Returns:
+    """
+    # Get Redis URL from environment, with fallback to memory storage
+    redis_url = os.getenv("REDIS_URL")
+
+    try:
+        if redis_url:
+            logger.info(f"Rate limiter using Redis storage: {redis_url}")
+            return Limiter(
+                key_func=key_func,
+                storage_uri=redis_url,
+                default_limits=[os.getenv("GLOBAL_RATE_LIMIT", "10/minute")],
+            )
+        else:
+            logger.warning(
+                "REDIS_URL not set - rate limiter using in-memory storage (not suitable for production)"
+            )
+            # Use memory storage when Redis is not available
+            return Limiter(
+                key_func=key_func,
+                default_limits=[os.getenv("GLOBAL_RATE_LIMIT", "10/minute")],
+            )
+    except (ValueError, Exception) as e:
+        logger.error(
+            f"Error initializing rate limiter with Redis: {type(e).__name__}: {str(e)}"
+        )
+        logger.warning("Falling back to in-memory rate limiting")
+        # Fallback to memory storage if Redis initialization fails
+        return Limiter(
+            key_func=key_func,
             default_limits=[os.getenv("GLOBAL_RATE_LIMIT", "10/minute")],
         )
-    else:
-        logger.warning(
-            "REDIS_URL not set - rate limiter using in-memory storage (not suitable for production)"
-        )
-        # Use memory storage when Redis is not available
-        limiter = Limiter(
-            key_func=get_remote_address,
-            default_limits=[os.getenv("GLOBAL_RATE_LIMIT", "10/minute")],
-        )
-except (ValueError, Exception) as e:
-    logger.error(
-        f"Error initializing rate limiter with Redis: {type(e).__name__}: {str(e)}"
-    )
-    logger.warning("Falling back to in-memory rate limiting")
-    # Fallback to memory storage if Redis initialization fails
-    limiter = Limiter(
-        key_func=get_remote_address,
-        default_limits=[os.getenv("GLOBAL_RATE_LIMIT", "10/minute")],
-    )

@@ -19,7 +19,7 @@ from langsmith import Client as LangsmithClient
 from auth.auth import OBPConsentAuth, AuthConfig
 from auth import initialize_admin_client, close_admin_client
 from auth.session import session_cookie, backend, SessionData
-from auth.rate_limiting import limiter, _rate_limit_exceeded_handler
+from auth.rate_limiting import create_limiter, _rate_limit_exceeded_handler
 
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -228,12 +228,6 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     logger.error(f"OTHER_HTTP_EXCEPTION: {exc.status_code} - {exc.detail}")
     return await http_exception_handler(request, exc)
 
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-# Register ValueError handler for rate limiting issues (fallback for internal slowapi/limits errors)
-app.add_exception_handler(ValueError, _rate_limit_exceeded_handler)
-app.add_middleware(SlowAPIMiddleware)
-
 # Add session update middleware
 app.add_middleware(SessionUpdateMiddleware)
 
@@ -303,6 +297,14 @@ if os.getenv("DEBUG_CORS", "false").lower() == "true":
 from auth.auth import OBPConsentAuth
 auth_config = AuthConfig()
 auth_config.register_auth_strategy("obp_consent_id", OBPConsentAuth())
+
+# Create rate limiter and register
+limiter = create_limiter(key_func=auth_config.auth_strategies.get("obp_consent_id").get_current_user_id)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# Register ValueError handler for rate limiting issues (fallback for internal slowapi/limits errors)
+app.add_exception_handler(ValueError, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 obp_base_url = os.getenv('OBP_BASE_URL')
 
