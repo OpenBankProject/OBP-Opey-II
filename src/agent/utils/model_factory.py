@@ -80,6 +80,13 @@ MODEL_CONFIGS = {
         context_window=200000,
         default_max_tokens=8192
     ),
+    "claude-haiku-4.5": ModelConfig(
+        "claude-haiku-4-5-20251001",
+        LLMProviders.ANTHROPIC,
+        "ANTHROPIC_API_KEY",
+        context_window=200000,
+        default_max_tokens=8192
+    ),
     
     # Ollama models (no API key required)
     "llama3.1": ModelConfig(
@@ -106,8 +113,8 @@ EMBEDDING_MODELS = {
 # Define size categories with fallback chains
 MODEL_SIZE_FALLBACKS = {
     "small": [
-        "gpt-4o-mini",
-        "claude-3-5-haiku-20241022", 
+        "claude-haiku-4.5",
+        "gpt-4o-mini", 
         "gpt-3.5-turbo",
         "llama3.1:8b",
         "qwen2.5"
@@ -183,7 +190,7 @@ class ModelFactory:
         config = EMBEDDING_MODELS[model_name]
         
         if not self._check_embedding_model_availability(model_name):
-            raise ValueError(f"Embedding model {model_name} is not available. Check API keys.")
+            raise ValueError(f"Embedding model {model_name} is not available. Is the {config.get('api_key_env')} set?")
         
         if config["provider"] == "openai":
             return OpenAIEmbeddings(model=model_name)

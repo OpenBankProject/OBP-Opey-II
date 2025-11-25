@@ -369,7 +369,7 @@ class ChromaVectorStoreProvider(VectorStoreProvider):
                     
                 # Validate based on collection type
                 if collection_name == "obp_glossary":
-                    from src.database.document_schemas import GlossaryDocumentSchema
+                    from database.document_schemas import GlossaryDocumentSchema
                     for i, doc in enumerate(sample["documents"]):
                         metadata = {k: sample["metadatas"][i][k] for k in sample["metadatas"][i]}
                         try:
@@ -379,7 +379,7 @@ class ChromaVectorStoreProvider(VectorStoreProvider):
                             return False
                 
                 elif collection_name == "obp_endpoints":
-                    from src.database.document_schemas import EndpointDocumentSchema
+                    from database.document_schemas import EndpointDocumentSchema
                     for i, doc in enumerate(sample["documents"]):
                         metadata = {k: sample["metadatas"][i][k] for k in sample["metadatas"][i]}
                         try:

@@ -230,6 +230,8 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# Register ValueError handler for rate limiting issues (fallback for internal slowapi/limits errors)
+app.add_exception_handler(ValueError, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 # Add session update middleware
