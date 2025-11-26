@@ -43,15 +43,9 @@ class BaseAuth():
     async def acheck_auth(self, token: Optional[str] = None) -> bool:
         raise NotImplementedError
     
-    async def get_current_user_id(self, token: Optional[str] = None) -> Optional[str]:
+    async def get_current_user(self, token: Optional[str] = None) -> Optional[dict]:
         """
-        Retrieve the user ID associated with the provided authentication token.
-        
-        Args:
-            token: Authentication token. If None, uses the instance's stored token.
-        
-        Returns:
-            User ID if retrieval is successful, None otherwise.
+        Retrieve the current user ID associated with the provided token.
         """
         raise NotImplementedError
     
@@ -97,6 +91,8 @@ class OBPConsentAuth(BaseAuth):
             raise ValueError('OBP_API_VERSION not set in environment variables')
         
         self.current_user_url = self.base_uri + f'/obp/{version}/users/current'
+        
+        self.current_user_id = None
 
     async def acheck_auth(self, token: str | None = None) -> bool:
         """
@@ -170,7 +166,7 @@ class OBPConsentAuth(BaseAuth):
 
         return headers
     
-    async def _get_current_user(self, token: str | None = None) -> Optional[str]:
+    async def get_current_user(self, token: str | None = None) -> Optional[dict]:
         """
         Asynchronously retrieves the current user ID associated with the provided consent token.
         
@@ -194,27 +190,12 @@ class OBPConsentAuth(BaseAuth):
         async with client.get(self.current_user_url, headers=headers) as response:
             if response.status == 200:
                 response_data = await response.json()
-                logger.info(f'Current user ID retrieved successfully: {response_data}')
+                logger.info(f'Current user retrieved successfully: {response_data}')
                 return response_data
             else:
                 error_text = await response.read()
                 logger.error(f'Error retrieving current user ID: {error_text}')
                 return None
-            
-    async def get_current_user_id(self, token: str | None = None) -> Optional[str]:
-        """
-        Asynchronously retrieves the current user ID associated with the provided consent token.
-        
-        Args:
-            token (str): The consent ID token used for authentication.
-        
-        Returns:
-            Optional[str]: The user ID if retrieval is successful, None otherwise.
-        """
-        user_data = await self._get_current_user(token)
-        if user_data and 'user_id' in user_data:
-            return user_data['user_id']
-        return None
 
 class OBPDirectLoginAuth(BaseAuth):
 
@@ -341,7 +322,7 @@ class OBPDirectLoginAuth(BaseAuth):
                 logger.debug(f"DirectLogin validation failed - Error details: {error_text}")
                 return False
 
-    async def _get_current_user(self, token: Optional[str] = None) -> Optional[dict]:
+    async def get_current_user(self, token: Optional[str] = None) -> Optional[dict]:
         """
         Retrieve the current user data associated with the provided DirectLogin token.
         
@@ -375,21 +356,6 @@ class OBPDirectLoginAuth(BaseAuth):
                 error_text = await response.text()
                 logger.error(f'Error retrieving current user data: {error_text}')
                 return None
-
-    async def get_current_user_id(self, token: Optional[str] = None) -> Optional[str]:
-        """
-        Retrieve the user ID associated with the provided DirectLogin token.
-        
-        Args:
-            token: The DirectLogin token used for authentication.
-        
-        Returns:
-            User ID if retrieval is successful, None otherwise.
-        """
-        user_data = await self._get_current_user(token)
-        if user_data and 'user_id' in user_data:
-            return user_data['user_id']
-        return None
 
     def construct_headers(self, token: Optional[str] = None) -> Dict[str, str]:
         """

@@ -7,3 +7,4 @@ class SessionData(BaseModel):
     is_anonymous: bool = False
     token_usage: int = 0
     request_count: int = 0
+    user_id: Optional[str] = None

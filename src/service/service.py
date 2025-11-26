@@ -19,7 +19,7 @@ from langsmith import Client as LangsmithClient
 from auth.auth import OBPConsentAuth, AuthConfig
 from auth import initialize_admin_client, close_admin_client
 from auth.session import session_cookie, backend, SessionData
-from auth.rate_limiting import create_limiter, _rate_limit_exceeded_handler
+from auth.rate_limiting import create_limiter, _rate_limit_exceeded_handler, get_user_id_from_request
 
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -90,6 +90,38 @@ class RequestResponseLoggingMiddleware(BaseHTTPMiddleware):
             logger.error(f"UNEXPECTED_EXCEPTION_DEBUG: {type(exc)}: {str(exc)}")
             raise
 
+class RateLimitKeyMiddleware(BaseHTTPMiddleware):
+    """Pre-load session data for rate limiting key generation"""
+    
+    async def dispatch(self, request: Request, call_next):
+        try:
+            from auth.session import backend, session_cookie
+            
+            # Use session_cookie to extract and verify the session ID
+            # This handles the signed cookie properly (session_cookie is a dependency, not async)
+            try:
+                session_id = session_cookie(request)
+                session_data = await backend.read(session_id)
+                
+                if session_data:
+                    # Attach to request.state so slowapi key_func can access it
+                    request.state.session_data = session_data
+                    logger.debug(f"Rate limit session loaded for user_id={session_data.user_id}")
+            except HTTPException:
+                # session_cookie raises HTTPException when cookie is missing or invalid
+                # This is expected for exempt endpoints like /create-session
+                pass
+            except Exception as e:
+                logger.warning(f"Error loading session for rate limiting: {e}")
+                
+        except Exception as e:
+            logger.error(f"Unexpected error in rate limit middleware: {e}", exc_info=True)
+            
+        return await call_next(request)
+        # except Exception as e:
+        #     logger.debug(f"RATE_LIMIT_DEBUG: Error loading session data {e}")
+            
+        # return await call_next(request)
 
 class ErrorHandlingMiddleware(BaseHTTPMiddleware):
     """Middleware to properly format error responses for Portal consumption"""
@@ -299,12 +331,13 @@ auth_config = AuthConfig()
 auth_config.register_auth_strategy("obp_consent_id", OBPConsentAuth())
 
 # Create rate limiter and register
-limiter = create_limiter(key_func=auth_config.auth_strategies.get("obp_consent_id").get_current_user_id)
+limiter = create_limiter(key_func=get_user_id_from_request)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Register ValueError handler for rate limiting issues (fallback for internal slowapi/limits errors)
 app.add_exception_handler(ValueError, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(RateLimitKeyMiddleware)
 
 obp_base_url = os.getenv('OBP_BASE_URL')
 
@@ -315,7 +348,6 @@ async def create_session(request: Request, response: Response):
     Create a session for the user using the OBP consent JWT or create an anonymous session.
     """
     # Get the consent JWT from the request
-    logger.info("Hello from create_session")
     consent_id = request.headers.get("Consent-Id")
     
     # Create masked versions for logging
@@ -372,6 +404,14 @@ async def create_session(request: Request, response: Response):
     if not await auth_config.auth_strategies["obp_consent_id"].acheck_auth(consent_id):
         raise HTTPException(status_code=401, detail="Invalid Consent-Id")
 
+    # Fetch user_id of consenter
+    auth = auth_config.auth_strategies["obp_consent_id"]
+    user_data = await auth.get_current_user(consent_id)
+    user_id = user_data.get("user_id") if user_data else None
+    
+    if not user_id:
+        raise HTTPException(status_code=403, detail="Could not retrieve user information from Consent-Id")
+
     session_id = uuid.uuid4()
 
     # Create a session using the OBP consent JWT
@@ -379,7 +419,8 @@ async def create_session(request: Request, response: Response):
         consent_id=consent_id,
         is_anonymous=False,
         token_usage=0,
-        request_count=0
+        request_count=0,
+        user_id=user_id
     )
 
     await backend.create(session_id, session_data)
