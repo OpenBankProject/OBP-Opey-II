@@ -1,9 +1,7 @@
-import json
 import os
-import asyncio
-from typing import Any, Annotated, AsyncGenerator
 import uuid
 import logging
+from typing import Any, Annotated
 
 from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
@@ -11,11 +9,7 @@ from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client as LangsmithClient
 
-from auth.auth import OBPConsentAuth, AuthConfig
 from auth.session import session_cookie, backend, SessionData
-from auth.rate_limiting import create_limiter, _rate_limit_exceeded_handler, get_user_id_from_request
-
-from slowapi.errors import RateLimitExceeded
 
 from service.opey_session import OpeySession
 
@@ -45,46 +39,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger('opey.service')
 
+# Initialize FastAPI app
 app = FastAPI(lifespan=lifespan)
 
-# Setup CORS configuration
-cors_allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
-cors_allowed_origins = [origin.strip() for origin in cors_allowed_origins if origin.strip()]
+# Setup configuration
+from .config import get_cors_config, setup_auth, setup_rate_limiting, get_obp_base_url
+from .middleware import setup_middleware
 
-# Development fallback
-if not cors_allowed_origins:
-    logger.warning("CORS_ALLOWED_ORIGINS not set, using development defaults")
-    cors_allowed_origins = ["http://localhost:5174", "http://localhost:3000", "http://127.0.0.1:5174", "http://127.0.0.1:3000"]
-
-# Configure specific headers and methods for security
-cors_allowed_methods = os.getenv("CORS_ALLOWED_METHODS", "GET,POST,PUT,DELETE,OPTIONS").split(",")
-cors_allowed_methods = [method.strip() for method in cors_allowed_methods if method.strip()]
-
-cors_allowed_headers = os.getenv("CORS_ALLOWED_HEADERS", "Content-Type,Authorization,Consent-JWT,Consent-Id").split(",")
-cors_allowed_headers = [header.strip() for header in cors_allowed_headers if header.strip()]
+cors_allowed_origins, cors_allowed_methods, cors_allowed_headers = get_cors_config()
 
 # Setup all middleware (includes CORS, rate limiting, error handling, logging, etc.)
-from .middleware import setup_middleware
 setup_middleware(
     app=app,
     cors_allowed_origins=cors_allowed_origins,
     cors_allowed_methods=cors_allowed_methods,
     cors_allowed_headers=cors_allowed_headers
 )
-# Define Allowed Authentication methods
-# Currently only OBP consent is allowed
-from auth.auth import OBPConsentAuth
-auth_config = AuthConfig()
-auth_config.register_auth_strategy("obp_consent_id", OBPConsentAuth())
 
-# Create rate limiter and register
-limiter = create_limiter(key_func=get_user_id_from_request)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-# Register ValueError handler for rate limiting issues (fallback for internal slowapi/limits errors)
-app.add_exception_handler(ValueError, _rate_limit_exceeded_handler)
+# Setup authentication
+auth_config = setup_auth()
 
-obp_base_url = os.getenv('OBP_BASE_URL')
+# Setup rate limiting
+setup_rate_limiting(app)
+
+# Get OBP base URL for endpoints
+obp_base_url = get_obp_base_url()
+
+# Rate limiter instance for endpoint decorators
+limiter = app.state.limiter
 
 @app.post("/create-session")
 @limiter.exempt
