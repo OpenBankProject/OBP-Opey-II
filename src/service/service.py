@@ -8,9 +8,6 @@ import logging
 
 from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi.exception_handlers import http_exception_handler
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph.state import CompiledStateGraph
@@ -53,114 +50,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger('opey.service')
-
-
-class RequestResponseLoggingMiddleware(BaseHTTPMiddleware):
-    """Middleware to log all requests and responses for debugging authentication issues"""
-
-    async def dispatch(self, request: Request, call_next):
-        # Log incoming request details
-        logger.debug(f"REQUEST_DEBUG: {request.method} {request.url}")
-        logger.debug(f"REQUEST_DEBUG: Headers: {dict(request.headers)}")
-
-        # Check for session cookie specifically
-        session_cookie_value = request.cookies.get("session")
-        logger.debug(f"REQUEST_DEBUG: Session cookie present: {bool(session_cookie_value)}")
-        if session_cookie_value:
-            logger.debug(f"REQUEST_DEBUG: Session cookie length: {len(session_cookie_value)}")
-
-        try:
-            response = await call_next(request)
-
-            # Log response details
-            logger.debug(f"RESPONSE_DEBUG: Status {response.status_code}")
-            logger.debug(f"RESPONSE_DEBUG: Headers: {dict(response.headers)}")
-
-            # For error responses, try to log the body
-            if response.status_code >= 400:
-                logger.error(f"ERROR_RESPONSE_DEBUG: Status {response.status_code} for {request.url}")
-
-            return response
-
-        except HTTPException as exc:
-            logger.error(f"HTTP_EXCEPTION_DEBUG: Status {exc.status_code}, Detail: {exc.detail}")
-            logger.error(f"HTTP_EXCEPTION_DEBUG: Exception type: {type(exc)}")
-            raise
-        except Exception as exc:
-            logger.error(f"UNEXPECTED_EXCEPTION_DEBUG: {type(exc)}: {str(exc)}")
-            raise
-
-class RateLimitKeyMiddleware(BaseHTTPMiddleware):
-    """Pre-load session data for rate limiting key generation"""
-    
-    async def dispatch(self, request: Request, call_next):
-        try:
-            from auth.session import backend, session_cookie
-            
-            # Use session_cookie to extract and verify the session ID
-            # This handles the signed cookie properly (session_cookie is a dependency, not async)
-            try:
-                session_id = session_cookie(request)
-                session_data = await backend.read(session_id)
-                
-                if session_data:
-                    # Attach to request.state so slowapi key_func can access it
-                    request.state.session_data = session_data
-                    logger.debug(f"Rate limit session loaded for user_id={session_data.user_id}")
-            except HTTPException:
-                # session_cookie raises HTTPException when cookie is missing or invalid
-                # This is expected for exempt endpoints like /create-session
-                pass
-            except Exception as e:
-                logger.warning(f"Error loading session for rate limiting: {e}")
-                
-        except Exception as e:
-            logger.error(f"Unexpected error in rate limit middleware: {e}", exc_info=True)
-            
-        return await call_next(request)
-        # except Exception as e:
-        #     logger.debug(f"RATE_LIMIT_DEBUG: Error loading session data {e}")
-            
-        # return await call_next(request)
-
-class ErrorHandlingMiddleware(BaseHTTPMiddleware):
-    """Middleware to properly format error responses for Portal consumption"""
-
-    async def dispatch(self, request: Request, call_next):
-        try:
-            response = await call_next(request)
-            return response
-        except HTTPException as exc:
-            # Http Exceptions should be handled by fastapi's default handler or the custom one we set up
-            raise
-        except Exception as exc:
-            # Handle unexpected errors
-            logger.error(f"Unexpected error for {request.url}: {str(exc)}", exc_info=True)
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "error": "Internal server error occurred",
-                    "error_code": "internal_error",
-                    "message": "An unexpected error occurred. Please try again later.",
-                    "action_required": "Please refresh the page and try again"
-                }
-            )
-
-
-class SessionUpdateMiddleware(BaseHTTPMiddleware):
-    """Middleware to update session data in backend after request processing"""
-
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-
-        # Update session data if it exists in the request state
-        if hasattr(request.state, 'session_data') and hasattr(request.state, 'session_id'):
-            try:
-                await backend.update(request.state.session_id, request.state.session_data)
-            except Exception as e:
-                logger.error(f"Failed to update session data: {e}")
-
-        return response
 
 
 @asynccontextmanager
@@ -231,46 +120,7 @@ async def periodic_cancellation_cleanup(interval_seconds: int = 300):
 
 app = FastAPI(lifespan=lifespan)
 
-# Add custom exception handler for HTTPExceptions
-@app.exception_handler(HTTPException)
-async def custom_http_exception_handler(request: Request, exc: HTTPException):
-    """Custom handler for HTTPExceptions to ensure proper error formatting for Portal"""
-    logger.error(f"CUSTOM_EXCEPTION_HANDLER: {exc.status_code} - {exc.detail}")
-
-    if exc.status_code == 403:
-        # Format authentication errors specifically for Portal
-        if isinstance(exc.detail, dict):
-            error_response = exc.detail
-        else:
-            error_response = {
-                "error": "Authentication required: Please log in to use Opey",
-                "error_code": "authentication_failed",
-                "message": str(exc.detail) if exc.detail else "Session invalid or expired",
-                "action_required": "Please authenticate with the OBP Portal to continue using Opey"
-            }
-
-        logger.error(f"AUTH_ERROR_RESPONSE: {error_response}")
-        return JSONResponse(
-            status_code=403,
-            content=error_response,
-            headers={"Content-Type": "application/json"}
-        )
-
-    # For other HTTP exceptions, use default handler but log the details
-    logger.error(f"OTHER_HTTP_EXCEPTION: {exc.status_code} - {exc.detail}")
-    return await http_exception_handler(request, exc)
-
-# Add session update middleware
-app.add_middleware(SessionUpdateMiddleware)
-
-# Add comprehensive request/response logging for debugging
-app.add_middleware(RequestResponseLoggingMiddleware)
-
-# Add error handling middleware to format authentication errors for Portal
-app.add_middleware(ErrorHandlingMiddleware)
-
-
-# Setup CORS policy
+# Setup CORS configuration
 cors_allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
 cors_allowed_origins = [origin.strip() for origin in cors_allowed_origins if origin.strip()]
 
@@ -286,45 +136,16 @@ cors_allowed_methods = [method.strip() for method in cors_allowed_methods if met
 cors_allowed_headers = os.getenv("CORS_ALLOWED_HEADERS", "Content-Type,Authorization,Consent-JWT,Consent-Id").split(",")
 cors_allowed_headers = [header.strip() for header in cors_allowed_headers if header.strip()]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_allowed_origins,
-    allow_credentials=True,
-    allow_methods=cors_allowed_methods,
-    allow_headers=cors_allowed_headers,
+# Setup all middleware (includes CORS, rate limiting, error handling, logging, etc.)
+from .middleware import setup_middleware
+setup_middleware(
+    app=app,
+    cors_allowed_origins=cors_allowed_origins,
+    cors_allowed_methods=cors_allowed_methods,
+    cors_allowed_headers=cors_allowed_headers
 )
 
-logger.info(f"CORS configured with origins: {cors_allowed_origins}")
-
-# Add CORS debugging middleware for development
-class CORSDebugMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        # Log CORS-related headers for debugging
-        origin = request.headers.get("origin")
-        if origin:
-            logger.debug(f"CORS request from origin: {origin}")
-            if origin not in cors_allowed_origins:
-                logger.warning(f"Request from non-allowed origin: {origin}")
-
-        response = await call_next(request)
-
-        # Log response CORS headers
-        if origin:
-            cors_headers = {
-                k: v for k, v in response.headers.items()
-                if k.lower().startswith('access-control-')
-            }
-            if cors_headers:
-                logger.debug(f"CORS response headers: {cors_headers}")
-
-        return response
-
-# Add debug middleware in development
-if os.getenv("DEBUG_CORS", "false").lower() == "true":
-    app.add_middleware(CORSDebugMiddleware)
-    logger.info("CORS debug middleware enabled")
-
-# Define Allowed Authentication methods,
+# Define Allowed Authentication methods
 # Currently only OBP consent is allowed
 from auth.auth import OBPConsentAuth
 auth_config = AuthConfig()
@@ -336,8 +157,6 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Register ValueError handler for rate limiting issues (fallback for internal slowapi/limits errors)
 app.add_exception_handler(ValueError, _rate_limit_exceeded_handler)
-app.add_middleware(SlowAPIMiddleware)
-app.add_middleware(RateLimitKeyMiddleware)
 
 obp_base_url = os.getenv('OBP_BASE_URL')
 
