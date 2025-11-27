@@ -29,6 +29,21 @@ Run the vector database population script to create the vector database collecti
 ```bash
 python src/database/populate_vector_db.py
 ```
+
+#### Automatic Database Updates
+Opey II can automatically check for OBP data changes on startup and update the vector database when changes are detected. To enable this feature, set in your `.env`:
+
+```env
+UPDATE_DATABASE_ON_STARTUP="true"
+UPDATE_DATABASE_ENDPOINT_TYPE="all"  # Options: "static", "dynamic", "all"
+```
+
+When enabled, the system will:
+- Fetch current OBP glossary and endpoint data on startup
+- Compare with previously imported data using SHA-256 hashes
+- Rebuild the database only if changes are detected
+- Store hashes for future comparisons
+
 ### 3. Setting up the environment 
 First you will need to rename the `.env.example` file to `.env` and change several parameters. You have options on which LLM provider you decide to use for the backend agent system. 
 ### Using different AI models

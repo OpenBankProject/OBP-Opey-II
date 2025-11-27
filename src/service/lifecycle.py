@@ -9,6 +9,7 @@ from auth import initialize_admin_client, close_admin_client
 from .streaming.orchestrator_repository import orchestrator_repository
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from .checkpointer import checkpointers
+from database.startup_updater import update_database_on_startup
 
 logger = logging.getLogger("service.lifecycle")
 
@@ -44,6 +45,18 @@ async def periodic_cancellation_cleanup(interval_seconds: int = 300):
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize redis client
     redis_client = await get_redis_client()
+    
+    # Check and update database if needed
+    try:
+        logger.info("Checking OBP data for updates...")
+        update_success = await update_database_on_startup()
+        if update_success:
+            logger.info("Database check/update completed successfully")
+        else:
+            logger.warning("Database update check failed - continuing with existing data")
+    except Exception as e:
+        logger.error(f"Error during database update check: {e}")
+        logger.warning("Continuing startup despite database update error")
     
     # Initialize admin OBP client
     try:
