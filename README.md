@@ -20,35 +20,46 @@ After installing poetry, install the poetry shell plugin with `poetry self add p
 
 ### 2. Creating the vector database
 Create the 'data' folder by running 
-```
-cd src
-mkdir data
+```bash
+mkdir src/data
 ``` 
-Obtain or set up the ChromaDB database within this folder. A script to process OBP swagger documentation for endpoints and glossary and add it to a vector database will be released later.
-### 3. Setting up the environemnet 
+Check the README.md in the `src/scripts` directory for more information on how to populate the vector database.
+
+Run the vector database population script to create the vector database collections:
+```bash
+python src/database/populate_vector_db.py
+```
+
+#### Automatic Database Updates
+Opey II can automatically check for OBP data changes on startup and update the vector database when changes are detected. To enable this feature, set in your `.env`:
+
+```env
+UPDATE_DATABASE_ON_STARTUP="true"
+UPDATE_DATABASE_ENDPOINT_TYPE="all"  # Options: "static", "dynamic", "all"
+```
+
+When enabled, the system will:
+- Fetch current OBP glossary and endpoint data on startup
+- Compare with previously imported data using SHA-256 hashes
+- Rebuild the database only if changes are detected
+- Store hashes for future comparisons
+
+### 3. Setting up the environment 
 First you will need to rename the `.env.example` file to `.env` and change several parameters. You have options on which LLM provider you decide to use for the backend agent system. 
-#### OpenAI
-Obtain an OpenAI API key and set `OPENAI_API_KEY="sk-proj-..."` 
+### Using different AI models
+To use change the model used by opey set the environment variables:
 
-Then set:
+```env
+MODEL_PROVIDER="anthropic"
+MODEL_NAME="claude-sonnet-4"
 ```
-MODEL_PROVIDER='openai'
+Just note that the provider must match the MODEL_NAME i.e. you cannot use MODEL_PROVDER="anthropic" and MODEL_NAME="gpt-4.1"
 
-OPENAI_SMALL_MODEL="gpt-4o-mini"
-OPENAI_MEDIUM_MODEL="gpt-4o"
-```
+### Adding a new LLM
+Not all LLMs are supported by default, they need to be manually added in the config.
+If you want to add a new model, edit `MODEL_CONFIGS` in `./src/agent/utils/model_factory.py`
 
-#### Anthropic
-Obtain an Anthropic API key and set `ANTHROPIC_API_KEY="sk-ant-..."`
-
-Then set:
-```
-MODEL_PROVIDER='anthropic'
-
-ANTHROPIC_SMALL_MODEL="claude-3-haiku-20240307"
-ANTHROPIC_MEDIUM_MODEL="claude-3-sonnet-20240229"
-```
-#### Ollama (Run models locally)
+### Ollama (Run models locally)
 This is only reccomended if you can run models on a decent size GPU. Trying to run on CPU will take ages, not run properly or even crash your computer.
 
 [Install](https://ollama.com/download) Ollama on your machine. I.e. for linux:
@@ -59,12 +70,10 @@ Pull a model that you want (and that supports [tool calling](https://ollama.com/
 
 Then set
 ```
-MODEL_PROVIDER='anthropic'
+MODEL_PROVIDER='ollama'
 
-OLLAMA_SMALL_MODEL="llama3.2"
-OLLAMA_MEDIUM_MODEL="llama3.2"
+MODEL_NAME="llama3.2"
 ```
-Note that the small and medium models are set as the same here, but you can pull a different model and set that.
 
 ### 4. Open Bank Project (OBP) credentials
 In order for the agent to communicate with the Open Bank Project API, we need to set credentials in the env. First sign up and get an API key on your specific instance of OBP i.e. https://apisandbox.openbankproject.com/ (this should match the `OBP_BASE_URL` in the env). Then set:
@@ -95,6 +104,21 @@ LANGCHAIN_PROJECT="langchain-opey" # or whatever name you want
 
 To run using docker simply run `docker compose up` (you'll need to have the [docker compose plugin](https://docs.docker.com/compose/install/linux/))
 
+### OBP API configuration
+
+The following props are required in OBP API:
+```
+skip_consent_sca_for_consumer_id_pairs=[{ \
+    "grantor_consumer_id": "<api explorer consumer id>",\
+    "grantee_consumer_id": "<opey consumer id>" \
+}]
+
+# Make sure Opey has sufficient permissions to operate:
+consumer_validation_method_for_consent=CONSUMER_KEY_VALUE
+experimental_become_user_that_created_consent=true
+```
+Consumer IDs will be shown on consumer registration or via the "Get Consumers" endpoint.
+
 ### Running with a local OBP-API
 In some instances (when developing mostly) you'll be trying to do this with a local instance of OBP i.e. running at `http://127.0.0.1:8080` on the host machine. 
 
@@ -117,3 +141,87 @@ i.e.
 ```
 OBP_BASE_URL="http://192.168.0.112:8080"
 ```
+
+### Admin Client Configuration
+
+Opey II includes an admin OBP client singleton for system-level operations. This is initialized automatically at startup if the required environment variables are present:
+
+```env
+OBP_USERNAME=admin@example.com
+OBP_PASSWORD=secure_password
+OBP_CONSUMER_KEY=your_consumer_key
+OBP_BASE_URL=https://api.openbankproject.com
+```
+
+The admin client:
+- Initializes once at app startup
+- Provides a singleton instance accessible throughout the application
+- Automatically verifies admin entitlements
+- Handles authentication and token refresh centrally
+
+
+## Logging Configuration
+
+### Username Logging for OBP API Requests
+
+Opey II automatically logs the username from consent JWTs when making requests to the OBP-API. This feature helps with monitoring and debugging by showing which user is making each API request.
+
+The logging includes:
+- Function name that created the log entry
+- Username extracted from the consent JWT token (with explicit field identification)
+- HTTP method (GET, POST, etc.)
+- Full request URL
+
+Example log output:
+```
+INFO - _extract_username_from_jwt says: User identifier extracted from JWT field 'email': john.doe@example.com
+INFO - _async_request says: Making OBP API request - User identifier is: john.doe@example.com, Method: GET, URL: https://test.openbankproject.com/obp/v4.0.0/users/current
+INFO - async_obp_get_requests says: OBP request successful (status: 200)
+```
+
+### Log Levels
+
+- **INFO**: Shows function name, user identifier extraction details, and request details for each OBP API call
+- **WARNING**: Shows available JWT fields when no user identifier can be found
+
+### JWT User Identification Fields
+
+The system attempts to extract user identifiers from these JWT fields in order (prioritizing human-readable identifiers):
+1. `email`
+2. `name`
+3. `preferred_username`
+4. `username`
+5. `user_name` 
+6. `login`
+7. `sub`
+8. `user_id`
+
+The system will log which field was used for user identification:
+```
+INFO - _extract_username_from_jwt says: User identifier extracted from JWT field 'email': john.doe@example.com
+INFO - _extract_username_from_jwt says: User identifier extracted from JWT field 'sub': 91be7e0b-bf6b-4476-8a89-75850a11313b
+```
+
+If none of these fields are found, the user identifier will be logged as 'unknown':
+```
+WARNING - _extract_username_from_jwt says: No user identifier found in JWT fields, using 'unknown'
+```
+
+### Debugging JWT Structure
+
+When no user identifier can be found in the JWT, the system will log all available JWT fields to help with debugging. The system prioritizes human-readable identifiers like email addresses and display names over system identifiers like UUIDs.
+
+### Function Name Prefixes
+
+All log messages now include the function name that generated the log for easier debugging:
+
+- `_extract_username_from_jwt says:` - JWT user identifier extraction logs
+- `_async_request says:` - HTTP request execution logs  
+- `async_obp_get_requests says:` - GET request specific logs
+- `async_obp_requests says:` - General request method logs
+
+## Service Configuration
+### Rate Limiting
+Default rate limiting on the stream and invoke endpoints can be set with the environment variable `GLOBAL_RATE_LIMIT`
+
+Visit https://limits.readthedocs.io/en/stable/quickstart.html#rate-limit-string-notation for information on what this value can be.

@@ -1,15 +1,16 @@
 .env
+ai_env
 .vscode/
 __pycache__/
-src/data/
 checkpoints.db
 checkpoints.db-shm
 checkpoints.db-wal
+src/data/
+.obp_data_hashes.json
 # Byte-compiled / optimized / DLL files
-__pycache__/
 *.py[cod]
 *$py.class
-
+.idea
 # C extensions
 *.so
 
@@ -63,7 +64,6 @@ cover/
 *.pot
 
 # Django stuff:
-*.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -169,3 +169,8 @@ agent_architecture.png
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Cursor
+/.specstory
+/.cursorindexingignore
+/.cursorrules

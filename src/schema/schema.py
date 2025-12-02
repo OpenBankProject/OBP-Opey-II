@@ -1,5 +1,5 @@
 from concurrent.futures import thread
-from typing import Any, Literal
+from typing import Any, Literal, Optional, Dict
 
 from langchain_core.messages import (
     AIMessage,
@@ -33,32 +33,6 @@ def convert_message_content_to_dict(content: str | list[str | dict]) -> dict[str
     except json.JSONDecodeError as e:
         print(f"Failed to parse content {e.doc}\n\n with error {e.msg}")
         return convert_message_content_to_string(content)
-
-class UserInput(BaseModel):
-    """Basic user input for the agent."""
-
-    message: str = Field(
-        description="User input to the agent.",
-        examples=["What is the weather in Tokyo?"],
-    )
-    thread_id: str | None = Field(
-        description="Thread ID to persist and continue a multi-turn conversation.",
-        default=None,
-        examples=["847c6285-8fc9-4560-a83f-4e6285809254"],
-    )
-    is_tool_call_approval: bool = Field(
-        description="Whether this input is a tool call approval.",
-        default=False,
-    )
-
-
-class StreamInput(UserInput):
-    """User input for streaming the agent's response."""
-
-    stream_tokens: bool = Field(
-        description="Whether to stream LLM tokens to the client.",
-        default=True,
-    )
 
 class AgentResponse(BaseModel):
     """Response from the agent when called via /invoke."""
@@ -163,6 +137,11 @@ class ChatMessage(BaseModel):
         match self.type:
             case "human":
                 return HumanMessage(content=self.content)
+            case "ai":
+                ai_msg = AIMessage(content=self.content)
+                if self.tool_calls:
+                    ai_msg.tool_calls = self.tool_calls
+                return ai_msg
             case _:
                 raise NotImplementedError(f"Unsupported message type: {self.type}")
 
@@ -197,13 +176,85 @@ class Feedback(BaseModel):
 class FeedbackResponse(BaseModel):
     status: Literal["success"] = "success"
 
-class ToolCallApproval(BaseModel):
-    approval: Literal["approve", "deny"] = Field(
-        description="Approval status for the tool call.",
+
+class SingleApprovalDecision(BaseModel):
+    """Single tool call approval decision"""
+    approved: bool = Field(description="Whether to approve or deny")
+    level: Literal["once", "session", "user"] = Field(
+        default="once",
+        description="Approval persistence level"
     )
-    tool_call_id: str = Field(
-        description="Tool call ID to approve or deny.",
+
+
+class ToolCallApproval(BaseModel):
+    """
+    Tool call approval - supports both single and batch approvals.
+    
+    For single approval (backward compatible):
+        approval: "approve" | "deny"
+        level: "once" | "session" | "user"  
+        tool_call_id: "call_xyz123"
+        
+    For batch approval:
+        batch_decisions: {
+            "call_xyz123": {"approved": true, "level": "once"},
+            "call_abc456": {"approved": false},
+            "call_def789": {"approved": true, "level": "session"}
+        }
+    """
+    # Single approval fields (optional for backward compat)
+    approval: Optional[Literal["approve", "deny"]] = Field(
+        default=None,
+        description="Single approval status (legacy format)",
+    )
+    level: Optional[Literal["once", "session", "user"]] = Field(
+        default=None,
+        description="Single approval level (legacy format)",
+    )
+    tool_call_id: Optional[str] = Field(
+        default=None,
+        description="Single tool call ID (legacy format)",
         examples=["call_Jja7J89XsjrOLA5r!MEOW!SL"],
+    )
+    
+    # Batch approval field
+    batch_decisions: Optional[Dict[str, SingleApprovalDecision]] = Field(
+        default=None,
+        description="Batch approval decisions keyed by tool_call_id"
+    )
+    
+    def is_batch(self) -> bool:
+        """Check if this is a batch approval"""
+        return self.batch_decisions is not None
+    
+    def is_single(self) -> bool:
+        """Check if this is a single approval"""
+        return self.tool_call_id is not None
+
+class UserInput(BaseModel):
+    """Basic user input for the agent."""
+
+    message: str = Field(
+        description="User input to the agent.",
+        examples=["What is the weather in Tokyo?"],
+    )
+    thread_id: str | None = Field(
+        description="Thread ID to persist and continue a multi-turn conversation.",
+        default=None,
+        examples=["847c6285-8fc9-4560-a83f-4e6285809254"],
+    )
+    tool_call_approval: ToolCallApproval = Field(
+        description="Whether this input is a tool call approval.",
+        default=False,
+    )
+
+
+class StreamInput(UserInput):
+    """User input for streaming the agent's response."""
+
+    stream_tokens: bool = Field(
+        description="Whether to stream LLM tokens to the client.",
+        default=True,
     )
 
 class ConsentAuthBody(BaseModel):
@@ -217,4 +268,68 @@ class ConsentAuthBody(BaseModel):
 class AuthResponse(BaseModel):
     success: bool = Field(
         description="Whether Auth was successful or not"
+    )
+
+class SessionCreateResponse(BaseModel):
+    message: str = Field(
+        description="Message about session creation"
+    )
+    session_type: Literal["authenticated", "anonymous"] = Field(
+        description="Type of session created"
+    )
+    usage_limits: dict[str, Any] = Field(
+        description="Usage limits for the session (for anonymous sessions)",
+        default={}
+    )
+
+class UsageInfoResponse(BaseModel):
+    session_type: Literal["authenticated", "anonymous"] = Field(
+        description="Type of session"
+    )
+    unlimited_usage: bool = Field(
+        description="Whether the session has unlimited usage",
+        default=False
+    )
+    tokens_used: int = Field(
+        description="Number of tokens used",
+        default=0
+    )
+    token_limit: int = Field(
+        description="Maximum tokens allowed",
+        default=0
+    )
+    tokens_remaining: int = Field(
+        description="Number of tokens remaining",
+        default=0
+    )
+    requests_made: int = Field(
+        description="Number of requests made",
+        default=0
+    )
+    request_limit: int = Field(
+        description="Maximum requests allowed",
+        default=0
+    )
+    requests_remaining: int = Field(
+        description="Number of requests remaining",
+        default=0
+    )
+    approaching_token_limit: bool = Field(
+        description="Whether approaching token limit (80%)",
+        default=False
+    )
+    approaching_request_limit: bool = Field(
+        description="Whether approaching request limit (80%)",
+        default=False
+    )
+
+class SessionUpgradeResponse(BaseModel):
+    message: str = Field(
+        description="Message about session upgrade"
+    )
+    session_type: Literal["authenticated"] = Field(
+        description="Type of session after upgrade"
+    )
+    previous_usage: dict[str, int] = Field(
+        description="Previous usage statistics before upgrade"
     )
