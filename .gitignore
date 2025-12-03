@@ -13,7 +13,7 @@ src/data/
 .idea
 # C extensions
 *.so
-
+src/evals/datasets/
 # Distribution / packaging
 .Python
 build/

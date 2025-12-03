@@ -13,6 +13,7 @@ import httpx
 import random
 from dataclasses import dataclass, field, asdict
 from typing import Optional
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
 # Add src to path for imports
@@ -21,6 +22,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 load_dotenv()
 
 from agent.utils.model_factory import get_model
+
+
+class EndpointQueries(BaseModel):
+    """Term queries for a single endpoint."""
+    operation_id: str
+    queries: list[str]
+
+
+class QueryBatchOutput(BaseModel):
+    """Structured output: list of endpoint query mappings."""
+    endpoints: list[EndpointQueries]
 
 
 @dataclass
@@ -149,17 +161,10 @@ Vary the queries - use synonyms, related concepts, and different phrasings."""
 
 {endpoints}
 
-Respond with a JSON object mapping operation_id to a list of term queries:
-{{
-  "operation_id_1": ["query1", "query2", "query3"],
-  "operation_id_2": ["query1", "query2"],
-  ...
-}}
-
-Only output valid JSON, no other text."""
+For each endpoint, provide the operation_id and a list of 2-3 term queries."""
 
     def __init__(self, batch_size: int = 50):
-        self.llm = get_model("small", temperature=0.7)
+        self.llm = get_model("medium", temperature=0.7).with_structured_output(QueryBatchOutput)
         self.batch_size = batch_size
     
     async def generate_queries_for_batch(
@@ -178,28 +183,17 @@ Only output valid JSON, no other text."""
         
         response = await self.llm.ainvoke(messages)
         
-        # Parse JSON from response
-        content = ""
+        # with_structured_output returns a Pydantic model directly
         try:
-            # Handle both AIMessage and string responses
-            if hasattr(response, 'content'):
-                content = response.content
+            if isinstance(response, QueryBatchOutput):
+                # Convert list of EndpointQueries to dict
+                return {ep.operation_id: ep.queries for ep in response.endpoints}
             else:
-                content = str(response)
-            
-            # Ensure content is a string
-            if not isinstance(content, str):
-                content = str(content)
-            
-            # Strip markdown code blocks if present
-            content = content.strip()
-            if content.startswith("```"):
-                content = content.split("\n", 1)[1]  # Remove first line
-                content = content.rsplit("```", 1)[0]  # Remove last ```
-            return json.loads(content)
-        except json.JSONDecodeError as e:
-            print(f"Failed to parse LLM response: {e}")
-            print(f"Response was: {content[:500]}...")
+                print(f"Unexpected response type: {type(response)}")
+                return {}
+        except Exception as e:
+            print(f"Failed to process LLM response: {e}")
+            print(f"Response was: {response}")
             return {}
     
     async def generate_all_queries(
@@ -288,7 +282,7 @@ def cli():
     )
     parser.add_argument(
         "-o", "--output",
-        default="src/evals/retrieval/eval_dataset.json",
+        default="src/evals/datasets/eval_dataset.json",
         help="Output path for the dataset JSON"
     )
     parser.add_argument(
