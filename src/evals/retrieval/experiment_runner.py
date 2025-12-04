@@ -36,6 +36,7 @@ class ExperimentConfig:
     batch_sizes: List[int] = None
     k_values: List[int] = None
     retry_thresholds: List[int] = None
+    max_retries: int = 2  # Maximum retries for retry threshold experiments
     
     # Plotting options
     generate_plots: bool = True
@@ -262,7 +263,7 @@ class ExperimentRunner:
             config = RunConfig(
                 batch_size=batch_size,
                 retry_threshold=threshold,
-                max_retries=2,
+                max_retries=self.config.max_retries,
             )
             runner = RetrievalEvalRunner(config)
             

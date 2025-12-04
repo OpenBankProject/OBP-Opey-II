@@ -15,6 +15,9 @@ from evals.retrieval.metrics import RetrievalResult, RetrievalMetrics, Aggregate
 if TYPE_CHECKING:
     from evals.retrieval.dataset_generator import EvalQuery
 
+# Maximum length for query terms in CSV (to keep files readable)
+MAX_QUERY_LENGTH = 100
+
 
 def export_individual_results_to_csv(
     results: list[tuple["EvalQuery", RetrievalResult, RetrievalMetrics]],
@@ -60,7 +63,7 @@ def export_individual_results_to_csv(
         # Data rows
         for query, result, metrics in results:
             row = [
-                query.query_terms[:100],  # Truncate long queries
+                query.query_terms[:MAX_QUERY_LENGTH],  # Truncate long queries
                 metrics.strict_precision,
                 metrics.strict_recall,
                 1 if metrics.strict_hit else 0,

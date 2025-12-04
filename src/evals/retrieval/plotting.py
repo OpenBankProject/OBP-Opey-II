@@ -194,12 +194,14 @@ def plot_parameter_comparison(
         print(f"Available columns: {list(df.columns)}")
         return
     
-    for metric in y_metrics:
-        if metric not in df.columns:
-            print(f"Warning: '{metric}' not found in CSV, skipping.")
-            y_metrics.remove(metric)
+    # Filter out invalid metrics
+    valid_metrics = [m for m in y_metrics if m in df.columns]
     
-    if not y_metrics:
+    if len(valid_metrics) < len(y_metrics):
+        invalid = set(y_metrics) - set(valid_metrics)
+        print(f"Warning: Metrics not found in CSV, skipping: {invalid}")
+    
+    if not valid_metrics:
         print("Error: No valid metrics to plot.")
         return
     
@@ -209,7 +211,7 @@ def plot_parameter_comparison(
     # Create plot
     fig, ax = plt.subplots(figsize=(10, 6))
     
-    for metric in y_metrics:
+    for metric in valid_metrics:
         ax.plot(df[x_param], df[metric], 
                marker='o', linewidth=2, markersize=8, label=metric)
     
