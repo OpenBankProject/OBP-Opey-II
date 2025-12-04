@@ -6,16 +6,18 @@ for analysis and visualization.
 """
 
 import csv
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from pathlib import Path
 from dataclasses import asdict
 
 from evals.retrieval.metrics import RetrievalResult, RetrievalMetrics, AggregateMetrics
-from evals.retrieval.dataset_generator import EvalQuery
+
+if TYPE_CHECKING:
+    from evals.retrieval.dataset_generator import EvalQuery
 
 
 def export_individual_results_to_csv(
-    results: list[tuple[EvalQuery, RetrievalResult, RetrievalMetrics]],
+    results: list[tuple["EvalQuery", RetrievalResult, RetrievalMetrics]],
     output_path: str,
     config_params: Optional[dict] = None,
 ) -> None:
