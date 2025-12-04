@@ -2,12 +2,8 @@
 Pytest fixtures for retrieval evaluation.
 
 LangSmith Integration:
-    When LANGCHAIN_TRACING_V2=true and LANGCHAIN_API_KEY is set, tests 
-    marked with @pytest.mark.langsmith will log to LangSmith using:
-        from langsmith import testing as t
-        t.log_inputs({...})
-        t.log_outputs({...})
-        t.log_feedback(key="...", score=...)
+    When running with --langsmith-output, tests marked with @pytest.mark.langsmith
+    will log feedback scores. Use get_dataset() to avoid logging the full dataset.
 """
 
 import os
@@ -32,31 +28,36 @@ def pytest_configure(config):
     )
 
 
-# Check if LangSmith is available
-LANGSMITH_AVAILABLE = bool(os.getenv("LANGCHAIN_API_KEY"))
+# Module-level cache for dataset (not a fixture, so not logged)
+_cached_dataset = None
+
+
+def _load_dataset():
+    """Load dataset without exposing it as a fixture parameter."""
+    global _cached_dataset
+    if _cached_dataset is None:
+        from evals.retrieval.dataset_generator import EvalDataset
+        dataset_path = os.getenv(
+            "EVAL_DATASET_PATH",
+            "src/evals/retrieval/eval_dataset.json"
+        )
+        if not os.path.exists(dataset_path):
+            pytest.skip(f"Dataset not found at {dataset_path}. Run dataset_generator.py first.")
+        _cached_dataset = EvalDataset.load(dataset_path)
+    return _cached_dataset
 
 
 @pytest.fixture(scope="session")
-def eval_dataset():
-    """Load the evaluation dataset."""
-    from evals.retrieval.dataset_generator import EvalDataset
-    
-    dataset_path = os.getenv(
-        "EVAL_DATASET_PATH",
-        "src/evals/retrieval/eval_dataset.json"
-    )
-    
-    if not os.path.exists(dataset_path):
-        pytest.skip(f"Dataset not found at {dataset_path}. Run dataset_generator.py first.")
-    
-    return EvalDataset.load(dataset_path)
+def get_dataset():
+    """Returns a callable that loads the dataset (avoids LangSmith logging the full dataset)."""
+    return _load_dataset
 
 
 @pytest.fixture(scope="session")
 def retrieval_runner():
     """Create a retrieval evaluation runner."""
     from evals.retrieval.runner import RetrievalEvalRunner, RunConfig
-    
+
     config = RunConfig(
         batch_size=int(os.getenv("ENDPOINT_RETRIEVER_BATCH_SIZE", "8")),
         max_retries=int(os.getenv("ENDPOINT_RETRIEVER_MAX_RETRIES", "2")),
@@ -66,14 +67,9 @@ def retrieval_runner():
 
 
 @pytest.fixture
-def sample_queries(eval_dataset):
+def sample_queries(get_dataset):
     """Get a small sample of queries for quick tests."""
     import random
+    dataset = get_dataset()
     sample_size = int(os.getenv("EVAL_SAMPLE_SIZE", "10"))
-    return random.sample(eval_dataset.queries, min(sample_size, len(eval_dataset.queries)))
-
-
-@pytest.fixture
-def langsmith_available():
-    """Returns True if LangSmith is configured and available."""
-    return LANGSMITH_AVAILABLE
+    return random.sample(dataset.queries, min(sample_size, len(dataset.queries)))

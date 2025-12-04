@@ -38,29 +38,24 @@ class TestRetrievalLatency:
     
     @pytest.mark.asyncio
     @pytest.mark.langsmith
-    async def test_latency_benchmark(self, eval_dataset, retrieval_runner):
+    async def test_latency_benchmark(self, get_dataset, retrieval_runner):
         """Benchmark overall retrieval latency."""
+        dataset = get_dataset()
         results = await retrieval_runner.run_dataset(
-            eval_dataset,
+            dataset,
             limit=int(os.getenv("EVAL_QUERY_LIMIT", "30"))
         )
         aggregate = retrieval_runner.compute_aggregate(results)
         
-        _try_langsmith_log("log_inputs", {
-            "batch_size": retrieval_runner.config.batch_size,
-            "query_count": aggregate.count,
-        })
-        _try_langsmith_log("log_outputs", {
-            "latency_p50_ms": aggregate.latency_p50,
-            "latency_p90_ms": aggregate.latency_p90,
-            "latency_p99_ms": aggregate.latency_p99,
-            "latency_mean_ms": aggregate.latency_mean,
-            "retry_rate": aggregate.retry_rate,
-        })
-        _try_langsmith_log("log_feedback", key="latency_p50", 
+        _try_langsmith_log("log_inputs", {"batch_size": retrieval_runner.config.batch_size})
+        # Normalize latencies to 0-1 scores (lower is better, so invert)
+        _try_langsmith_log("log_feedback", key="latency_p50_score", 
                          score=1.0 - min(aggregate.latency_p50 / self.MAX_P50_LATENCY_MS, 1.0))
-        _try_langsmith_log("log_feedback", key="latency_p99", 
+        _try_langsmith_log("log_feedback", key="latency_p90_score", 
+                         score=1.0 - min(aggregate.latency_p90 / 4000, 1.0))
+        _try_langsmith_log("log_feedback", key="latency_p99_score", 
                          score=1.0 - min(aggregate.latency_p99 / self.MAX_P99_LATENCY_MS, 1.0))
+        _try_langsmith_log("log_feedback", key="retry_rate", score=1.0 - aggregate.retry_rate)
         
         print(f"\n--- Latency Benchmark ---")
         print(f"  Batch size: {retrieval_runner.config.batch_size}")
@@ -85,28 +80,23 @@ class TestBatchSizeExperiment:
     @pytest.mark.asyncio
     @pytest.mark.langsmith
     @pytest.mark.parametrize("batch_size", [3, 5, 8, 10, 15])
-    async def test_batch_size_comparison(self, eval_dataset, batch_size):
+    async def test_batch_size_comparison(self, get_dataset, batch_size):
         """Compare retrieval performance at different batch sizes."""
+        dataset = get_dataset()
         config = RunConfig(batch_size=batch_size, k=batch_size)
         runner = RetrievalEvalRunner(config)
         
         sample_size = int(os.getenv("EVAL_QUERY_LIMIT", "20"))
-        results = await runner.run_dataset(eval_dataset, limit=sample_size)
+        results = await runner.run_dataset(dataset, limit=sample_size)
         aggregate = runner.compute_aggregate(results)
         
         _try_langsmith_log("log_inputs", {"batch_size": batch_size})
-        _try_langsmith_log("log_outputs", {
-            "latency_mean_ms": aggregate.latency_mean,
-            "latency_p50_ms": aggregate.latency_p50,
-            "precision": aggregate.mean_soft_precision,
-            "recall": aggregate.mean_soft_recall,
-            "hit_rate": aggregate.hit_rate,
-            "retry_rate": aggregate.retry_rate,
-        })
         _try_langsmith_log("log_feedback", key="precision", score=aggregate.mean_soft_precision)
+        _try_langsmith_log("log_feedback", key="recall", score=aggregate.mean_soft_recall)
         _try_langsmith_log("log_feedback", key="hit_rate", score=aggregate.hit_rate)
-        _try_langsmith_log("log_feedback", key="latency_normalized", 
+        _try_langsmith_log("log_feedback", key="latency_score", 
                          score=1.0 - min(aggregate.latency_mean / 3000, 1.0))
+        _try_langsmith_log("log_feedback", key="retry_rate", score=1.0 - aggregate.retry_rate)
         
         print(f"\n--- Batch Size {batch_size} ---")
         print(f"  Latency (mean): {aggregate.latency_mean:.0f}ms")
@@ -125,8 +115,9 @@ class TestRetryThresholdExperiment:
     @pytest.mark.asyncio
     @pytest.mark.langsmith
     @pytest.mark.parametrize("retry_threshold", [0, 1, 2, 3])
-    async def test_retry_threshold_comparison(self, eval_dataset, retry_threshold):
+    async def test_retry_threshold_comparison(self, get_dataset, retry_threshold):
         """Compare performance at different retry thresholds."""
+        dataset = get_dataset()
         config = RunConfig(
             batch_size=8,
             retry_threshold=retry_threshold,
@@ -135,17 +126,13 @@ class TestRetryThresholdExperiment:
         runner = RetrievalEvalRunner(config)
         
         sample_size = int(os.getenv("EVAL_QUERY_LIMIT", "20"))
-        results = await runner.run_dataset(eval_dataset, limit=sample_size)
+        results = await runner.run_dataset(dataset, limit=sample_size)
         aggregate = runner.compute_aggregate(results)
         
         _try_langsmith_log("log_inputs", {"retry_threshold": retry_threshold})
-        _try_langsmith_log("log_outputs", {
-            "latency_mean_ms": aggregate.latency_mean,
-            "precision": aggregate.mean_soft_precision,
-            "hit_rate": aggregate.hit_rate,
-            "retry_rate": aggregate.retry_rate,
-            "mean_retries": aggregate.mean_retries,
-        })
+        _try_langsmith_log("log_feedback", key="precision", score=aggregate.mean_soft_precision)
+        _try_langsmith_log("log_feedback", key="hit_rate", score=aggregate.hit_rate)
+        _try_langsmith_log("log_feedback", key="retry_rate", score=1.0 - aggregate.retry_rate)
         combined = (aggregate.mean_soft_precision * 0.7) + ((1 - aggregate.retry_rate) * 0.3)
         _try_langsmith_log("log_feedback", key="combined_score", score=combined)
         
@@ -162,22 +149,19 @@ class TestThroughput:
     
     @pytest.mark.asyncio
     @pytest.mark.langsmith
-    async def test_queries_per_second(self, eval_dataset, retrieval_runner):
+    async def test_queries_per_second(self, get_dataset, retrieval_runner):
         """Measure queries per second throughput."""
+        dataset = get_dataset()
         sample_size = int(os.getenv("EVAL_QUERY_LIMIT", "20"))
         
         start = time.perf_counter()
-        results = await retrieval_runner.run_dataset(eval_dataset, limit=sample_size)
+        results = await retrieval_runner.run_dataset(dataset, limit=sample_size)
         elapsed = time.perf_counter() - start
         
         queries_per_second = sample_size / elapsed
         
         _try_langsmith_log("log_inputs", {"query_count": sample_size})
-        _try_langsmith_log("log_outputs", {
-            "total_time_seconds": elapsed,
-            "queries_per_second": queries_per_second,
-        })
-        _try_langsmith_log("log_feedback", key="throughput_qps", 
+        _try_langsmith_log("log_feedback", key="throughput_score", 
                          score=min(queries_per_second / 2.0, 1.0))
         
         print(f"\n--- Throughput ---")

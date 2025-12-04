@@ -39,26 +39,24 @@ class TestRetrievalRelevancy:
     
     @pytest.mark.asyncio
     @pytest.mark.langsmith
-    async def test_aggregate_relevancy(self, eval_dataset, retrieval_runner):
+    async def test_aggregate_relevancy(self, get_dataset, retrieval_runner):
         """
         Test overall retrieval relevancy across the dataset.
         Runs all queries and computes aggregate metrics.
         """
+        dataset = get_dataset()
         results = await retrieval_runner.run_dataset(
-            eval_dataset, 
+            dataset, 
             limit=int(os.getenv("EVAL_QUERY_LIMIT", "50"))
         )
         aggregate = retrieval_runner.compute_aggregate(results)
         
-        # LangSmith logging
-        _try_langsmith_log("log_inputs", {
-            "dataset_size": len(eval_dataset.queries),
-            "queries_evaluated": aggregate.count,
-        })
-        _try_langsmith_log("log_outputs", aggregate.to_dict())
+        # LangSmith logging - use feedback for all metrics
+        _try_langsmith_log("log_inputs", {"query_count": aggregate.count})
         _try_langsmith_log("log_feedback", key="hit_rate", score=aggregate.hit_rate)
         _try_langsmith_log("log_feedback", key="soft_precision", score=aggregate.mean_soft_precision)
         _try_langsmith_log("log_feedback", key="soft_recall", score=aggregate.mean_soft_recall)
+        _try_langsmith_log("log_feedback", key="strict_precision", score=aggregate.mean_strict_precision)
         _try_langsmith_log("log_feedback", key="mrr", score=aggregate.mean_mrr)
         
         aggregate.print_summary()
@@ -73,23 +71,21 @@ class TestRetrievalRelevancy:
     @pytest.mark.asyncio
     @pytest.mark.langsmith
     @pytest.mark.parametrize("k", [1, 3, 5, 8])
-    async def test_precision_at_k(self, eval_dataset, retrieval_runner, k):
+    async def test_precision_at_k(self, get_dataset, retrieval_runner, k):
         """Test Precision@K at different cutoffs."""
+        dataset = get_dataset()
         retrieval_runner.config.k = k
         
         results = await retrieval_runner.run_dataset(
-            eval_dataset,
+            dataset,
             limit=int(os.getenv("EVAL_QUERY_LIMIT", "30"))
         )
         aggregate = retrieval_runner.compute_aggregate(results)
         
         _try_langsmith_log("log_inputs", {"k": k})
-        _try_langsmith_log("log_outputs", {
-            f"precision@{k}": aggregate.mean_strict_precision,
-            f"soft_precision@{k}": aggregate.mean_soft_precision,
-            f"recall@{k}": aggregate.mean_strict_recall,
-        })
-        _try_langsmith_log("log_feedback", key=f"precision_at_{k}", score=aggregate.mean_strict_precision)
+        _try_langsmith_log("log_feedback", key="strict_precision", score=aggregate.mean_strict_precision)
+        _try_langsmith_log("log_feedback", key="soft_precision", score=aggregate.mean_soft_precision)
+        _try_langsmith_log("log_feedback", key="recall", score=aggregate.mean_strict_recall)
         
         print(f"\n--- Precision@{k} ---")
         print(f"  Strict: {aggregate.mean_strict_precision:.2%}")
@@ -108,15 +104,9 @@ class TestRetrievalRelevancy:
             result = await retrieval_runner.run_single_query(query)
             metrics = RetrievalMetrics.compute(result)
             
-            _try_langsmith_log("log_inputs", {
-                "query_terms": query.query_terms,
-                "expected_endpoint": query.source_endpoint_id,
-            })
-            _try_langsmith_log("log_outputs", {
-                "retrieved": result.retrieved_ids[:5],
-                "hit": metrics.strict_hit,
-                "precision": metrics.strict_precision,
-            })
+            _try_langsmith_log("log_inputs", {"query": query.query_terms[:100]})
+            _try_langsmith_log("log_feedback", key="hit", score=1.0 if metrics.strict_hit else 0.0)
+            _try_langsmith_log("log_feedback", key="precision", score=metrics.strict_precision)
             
             if not metrics.strict_hit:
                 failures.append({
@@ -141,18 +131,19 @@ class TestRetrievalByTag:
     
     @pytest.mark.asyncio
     @pytest.mark.langsmith
-    async def test_performance_by_tag(self, eval_dataset, retrieval_runner):
+    async def test_performance_by_tag(self, get_dataset, retrieval_runner):
         """
         Analyze retrieval performance by endpoint tag.
         Identifies which endpoint categories are harder to retrieve.
         """
         from collections import defaultdict
         
+        dataset = get_dataset()
         tag_results = defaultdict(list)
-        endpoint_map = {ep.operation_id: ep for ep in eval_dataset.endpoints}
+        endpoint_map = {ep.operation_id: ep for ep in dataset.endpoints}
         
         results = await retrieval_runner.run_dataset(
-            eval_dataset,
+            dataset,
             limit=int(os.getenv("EVAL_QUERY_LIMIT", "50"))
         )
         
@@ -177,9 +168,7 @@ class TestRetrievalByTag:
             }
             print(f"  {tag:40} n={agg.count:3} hit={agg.hit_rate:.0%} prec={agg.mean_soft_precision:.0%}")
         
-        _try_langsmith_log("log_outputs", {"tag_metrics": tag_metrics})
-        
-        # Log worst performing tags
+        # Log worst performing tags as feedback
         worst_tags = sorted(tag_metrics.items(), key=lambda x: x[1]["hit_rate"])[:3]
-        for tag, metrics in worst_tags:
-            _try_langsmith_log("log_feedback", key=f"worst_tag_{tag[:20]}_hit_rate", score=metrics["hit_rate"])
+        for i, (tag, m) in enumerate(worst_tags):
+            _try_langsmith_log("log_feedback", key=f"worst_tag_{i+1}_hit_rate", score=m["hit_rate"])
