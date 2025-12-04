@@ -7,6 +7,21 @@ logger = logging.getLogger("agent.components.retrieval.glossary_retrieval")
 
 glossary_retriever = get_retriever("obp_glossary", search_kwargs={"k": 8})
 
+
+def deduplicate_documents(documents):
+    """Remove duplicate documents based on document_id metadata."""
+    seen = set()
+    unique = []
+    for doc in documents:
+        doc_id = doc.metadata.get("document_id")
+        if doc_id and doc_id not in seen:
+            seen.add(doc_id)
+            unique.append(doc)
+        elif not doc_id:
+            unique.append(doc)
+    return unique
+
+
 async def retrieve_glossary(state):
     """
     Retrieve documents
@@ -28,6 +43,8 @@ async def retrieve_glossary(state):
         question = state["question"]
     # Retrieval
     documents = await glossary_retriever.ainvoke(question)
+    # Deduplicate in case of duplicate entries in the vector store
+    documents = deduplicate_documents(documents)
     return {"documents": documents, "total_retries": total_retries}
 
 async def grade_documents_glossary(state):

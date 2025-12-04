@@ -304,6 +304,28 @@ class ChromaVectorStoreProvider(VectorStoreProvider):
                 f"'{config.collection_name}': {e}"
             )
             
+    def delete_collection(self, collection_name: str) -> bool:
+        """
+        Delete a collection from ChromaDB.
+        
+        Args:
+            collection_name: Name of the collection to delete
+            
+        Returns:
+            bool: True if deleted successfully, False if collection didn't exist
+        """
+        try:
+            import chromadb
+            client = chromadb.PersistentClient(path=str(self.persist_directory))
+            existing = [col.name for col in client.list_collections()]
+            if collection_name in existing:
+                client.delete_collection(collection_name)
+                logger.info(f"Deleted collection '{collection_name}'")
+                return True
+            return False
+        except Exception as e:
+            raise VectorStoreError(f"Failed to delete collection '{collection_name}': {e}")
+
     def create_vector_store(self, config: VectorStoreConfig) -> Chroma:
         """
         Create a new Chroma vector store instance.
@@ -323,11 +345,14 @@ class ChromaVectorStoreProvider(VectorStoreProvider):
             existing_collections = self.get_all_collection_names()
             
             # If collection exists and overwrite is not explicitly allowed
-            if config.collection_name in existing_collections and not config.overwrite_existing:
-                raise ConfigurationError(
-                    f"Collection '{config.collection_name}' already exists. "
-                    f"Set 'overwrite_existing=True' in the config to overwrite."
-                )
+            if config.collection_name in existing_collections:
+                if not config.overwrite_existing:
+                    raise ConfigurationError(
+                        f"Collection '{config.collection_name}' already exists. "
+                        f"Set 'overwrite_existing=True' in the config to overwrite."
+                    )
+                # Delete existing collection to ensure clean state
+                self.delete_collection(config.collection_name)
             
             embeddings = EmbeddingsFactory.create_embeddings(config.embedding_model)
             

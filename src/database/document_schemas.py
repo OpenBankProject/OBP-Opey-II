@@ -8,6 +8,7 @@ class GlossaryDocumentSchema:
     title: str
     description: str
     type: str = "glossary_item"
+    index: int = 0  # Used to differentiate duplicates
     
     def to_document_content(self) -> str:
         """Convert schema to document content format"""
@@ -15,8 +16,11 @@ class GlossaryDocumentSchema:
     
     def to_metadata(self) -> Dict[str, Any]:
         """Convert schema to document metadata"""
+        # Keep original casing, only replace spaces; append index if duplicate
+        base_id = self.title.replace(" ", "_")
+        doc_id = f"{base_id}_{self.index}" if self.index > 0 else base_id
         return {
-            "document_id": self.title.replace(" ", "_").lower(),
+            "document_id": doc_id,
             "title": self.title,
             "type": self.type
         }
@@ -56,7 +60,8 @@ class EndpointDocumentSchema:
         """Convert schema to document metadata"""
         
         metadata = {
-            "document_id": f"{self.method.upper()}-{self.path.replace('/', '-').replace('{', '').replace('}', '')}",
+            # Use operation_id as document_id since it's guaranteed unique per endpoint
+            "document_id": self.operation_id,
             "method": self.method.upper(),
             "operation_id": self.operation_id,
             "path": self.path,
