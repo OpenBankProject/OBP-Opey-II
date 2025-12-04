@@ -92,6 +92,32 @@ In a separate terminal run the frontend streamlit app (within another poetry she
 
 The best way to interact with the agent is through the streamlit app, but it also functions as a rest API whose docs can be found at `http://127.0.0.1:8000/docs`
 
+## Experimental Evaluation System
+
+Opey II includes a comprehensive evaluation system for testing and optimizing the retrieval component. This allows you to:
+- Run parameter sweeps (batch size, k-value, retry thresholds)
+- Export results to CSV for analysis
+- Generate visualizations to find optimal configurations
+- Test retrieval end-to-end with simple metrics
+
+### Quick Evaluation
+
+Test if your retrieval system is working correctly:
+```bash
+python scripts/run_retrieval_eval.py quick
+```
+
+### Find Optimal Batch Size
+
+Run experiments to find the best batch size for your needs:
+```bash
+python src/evals/retrieval/experiment_runner.py --experiment batch_size
+```
+
+This generates CSV data and plots showing latency vs batch size, recall vs batch size, and helps identify the sweet spot.
+
+See [docs/EXPERIMENTAL_EVALUATION.md](docs/EXPERIMENTAL_EVALUATION.md) for complete documentation.
+
 ## Langchain Tracing with Langsmith
 If you want to have metrics and tracing for the agent from LangSmith. Obtain a [Langchain tracing API key](https://smith.langchain.com/) and set:
 ```
