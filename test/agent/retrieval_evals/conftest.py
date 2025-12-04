@@ -1,7 +1,13 @@
 """
 Pytest fixtures for retrieval evaluation.
 
-IMPORTANT: This conftest must be loaded before the test modules to set up paths.
+LangSmith Integration:
+    When LANGCHAIN_TRACING_V2=true and LANGCHAIN_API_KEY is set, tests 
+    marked with @pytest.mark.langsmith will log to LangSmith using:
+        from langsmith import testing as t
+        t.log_inputs({...})
+        t.log_outputs({...})
+        t.log_feedback(key="...", score=...)
 """
 
 import os
@@ -14,20 +20,20 @@ _src_dir = _this_dir.parent.parent.parent / "src"
 if str(_src_dir) not in sys.path:
     sys.path.insert(0, str(_src_dir))
 
-# Now safe to import
 import pytest
-import asyncio
-from typing import Optional
-
 from dotenv import load_dotenv
 load_dotenv()
 
 
-# Check if LangSmith is configured
-LANGSMITH_ENABLED = (
-    os.getenv("LANGCHAIN_TRACING_V2", "").lower() == "true" 
-    and os.getenv("LANGCHAIN_API_KEY")
-)
+# Register the langsmith marker to avoid warnings when plugin not active
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "langsmith: mark test for LangSmith logging (requires langsmith pytest plugin)"
+    )
+
+
+# Check if LangSmith is available
+LANGSMITH_AVAILABLE = bool(os.getenv("LANGCHAIN_API_KEY"))
 
 
 @pytest.fixture(scope="session")
@@ -67,39 +73,7 @@ def sample_queries(eval_dataset):
     return random.sample(eval_dataset.queries, min(sample_size, len(eval_dataset.queries)))
 
 
-def langsmith_mark():
-    """
-    Return the langsmith marker if enabled, otherwise a no-op marker.
-    
-    This allows tests to optionally integrate with LangSmith without
-    requiring it to be configured.
-    """
-    if LANGSMITH_ENABLED:
-        return pytest.mark.langsmith
-    return pytest.mark.skipif(False, reason="")  # No-op marker
-
-
-# Conditionally import langsmith testing utilities
-if LANGSMITH_ENABLED:
-    try:
-        from langsmith import testing as langsmith_testing
-    except ImportError:
-        langsmith_testing = None
-        LANGSMITH_ENABLED = False
-else:
-    langsmith_testing = None
-
-
 @pytest.fixture
-def ls():
-    """
-    LangSmith testing utilities (or None if not configured).
-    
-    Usage:
-        def test_something(ls):
-            if ls:
-                ls.log_inputs({"query": "..."})
-                ls.log_outputs({"result": "..."})
-                ls.log_feedback(key="precision", score=0.8)
-    """
-    return langsmith_testing
+def langsmith_available():
+    """Returns True if LangSmith is configured and available."""
+    return LANGSMITH_AVAILABLE
