@@ -90,6 +90,9 @@ def process_glossary_data(glossary_data: Dict[str, Any]) -> List[Document]:
 
     print(f"Found {len(glossary_items)} glossary items to process")
 
+    # Track title occurrences to assign unique indices for duplicates
+    title_counts: Dict[str, int] = {}
+
     for item in glossary_items:
         if not isinstance(item, dict):
             validation_errors += 1
@@ -124,11 +127,16 @@ def process_glossary_data(glossary_data: Dict[str, Any]) -> List[Document]:
             if not title or not description:
                 validation_errors += 1
                 continue
+            
+            # Assign index for duplicate titles
+            index = title_counts.get(title, 0)
+            title_counts[title] = index + 1
                 
             # Create schema instance for validation
             schema = GlossaryDocumentSchema(
                 title=title,
-                description=description
+                description=description,
+                index=index
             )
             
             # Transform to Document using schema methods
@@ -317,10 +325,13 @@ def populate_collection(documents: List[Document], collection_name: str, chroma_
         print(f"Adding {len(documents)} documents to {collection_name}...")
         
         # Add documents in batches to avoid memory issues
+        # Use document_id from metadata as the ChromaDB ID to ensure idempotency
         batch_size = 100
         for i in range(0, len(documents), batch_size):
             batch = documents[i:i + batch_size]
-            vector_store.add_documents(batch)
+            # Extract document_id from metadata to use as deterministic IDs
+            ids = [doc.metadata.get('document_id', str(i + idx)) for idx, doc in enumerate(batch)]
+            vector_store.add_documents(batch, ids=ids)
             print(f"Added batch {i//batch_size + 1}/{(len(documents) + batch_size - 1)//batch_size}")
         
         print(f"Successfully populated {collection_name} with {len(documents)} documents")
