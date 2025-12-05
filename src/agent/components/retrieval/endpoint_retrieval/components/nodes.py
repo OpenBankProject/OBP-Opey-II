@@ -98,33 +98,23 @@ async def grade_documents(state):
     question = state["question"]
     documents = state["documents"]
 
+    # Batch grade all documents in parallel
+    grading_inputs = [{"question": question, "document": d.page_content} for d in documents]
+    scores = await retrieval_grader.abatch(grading_inputs)
+
     filtered_docs = []
-    # web_search = False
-    # glossary_search = False
-    retry_query = False
-    for d in documents:
-        score = await retrieval_grader.ainvoke(
-            {"question": question, "document": d.page_content}
-        )
+    for d, score in zip(documents, scores):
         grade = score.binary_score
         if grade == "yes":
-            print(f"{d.metadata["method"]} - {d.metadata["path"]}", " [RELEVANT]")
-            #print("---GRADE: DOCUMENT RELEVANT---")
+            print(f"{d.metadata['method']} - {d.metadata['path']}", " [RELEVANT]")
             filtered_docs.append(d)
         else:
-            print(f"{d.metadata["method"]} - {d.metadata["path"]}", " [NOT RELEVANT]")
-            #print("---GRADE: DOCUMENT NOT RELEVANT---")
-            continue
+            print(f"{d.metadata['method']} - {d.metadata['path']}", " [NOT RELEVANT]")
 
     # If there are less documents than the threshold then retry query after rewriting question
     retry_threshold = int(RETRIEVER_RETRY_THRESHOLD)
+    retry_query = len(filtered_docs) < retry_threshold
 
-    if len(filtered_docs) < retry_threshold:
-        retry_query=True
-    else:
-        retry_query=False
-
-    #print("Documents: \n", "\n".join(f"{doc.metadata["method"]} - {doc.metadata["path"]}" for doc in filtered_docs))
     return {"documents": documents, "relevant_documents": filtered_docs, "question": question, "retry_query": retry_query}
 
 

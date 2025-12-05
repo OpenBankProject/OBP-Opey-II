@@ -61,30 +61,24 @@ async def grade_documents_glossary(state):
     logging.info("---CHECK DOCUMENT RELEVANCE TO QUESTION---")
     question = state["question"]
     documents = state["documents"]
-    
+
+    # Batch grade all documents in parallel
+    grading_inputs = [{"question": question, "document": d.page_content} for d in documents]
+    scores = await retrieval_grader.abatch(grading_inputs)
+
     filtered_docs = []
-    # web_search = False
-    # glossary_search = False
-    retry_query = False
-    for d in documents:
-        score = await retrieval_grader.ainvoke(
-            {"question": question, "document": d.page_content}
-        )
+    for d, score in zip(documents, scores):
         grade = score.binary_score
         if grade == "yes":
-            logging.info(f"{d.metadata["title"]}" + " [RELEVANT]")
+            logging.info(f"{d.metadata['title']} [RELEVANT]")
             filtered_docs.append(d)
         else:
-            logging.info(f"{d.metadata["title"]}" + " [NOT RELEVANT]")
-            continue
-        
-    # If there are three or less relevant endpoints then retry query after rewriting question
+            logging.info(f"{d.metadata['title']} [NOT RELEVANT]")
+
+    # If there are two or fewer relevant documents then retry query after rewriting question
     retry_threshold = 2
-    
-    if len(filtered_docs) <= retry_threshold:
-        retry_query=True
-        
-    #logging.info("Documents: \n", "\n".join(f"{doc.metadata["title"]}" for doc in filtered_docs))
+    retry_query = len(filtered_docs) <= retry_threshold
+
     return {"documents": documents, "relevant_documents": filtered_docs, "question": question, "retry_query": retry_query}
               
 async def return_documents(state) -> OutputState:
