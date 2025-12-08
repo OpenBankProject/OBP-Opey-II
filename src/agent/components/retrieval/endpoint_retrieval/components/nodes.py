@@ -2,7 +2,8 @@ import os
 import json
 
 from langchain_core.documents import Document
-from typing import List
+from langchain_core.runnables import RunnableConfig
+from typing import List, Optional
 from agent.components.retrieval.endpoint_retrieval.components.states import OutputState
 from agent.components.retrieval.retriever_config import get_retriever
 from agent.components.retrieval.endpoint_retrieval.components.chains import retrieval_grader, endpoint_question_rewriter
@@ -10,15 +11,37 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configuration from environment variables
-RETRIEVER_BATCH_SIZE = int(os.getenv("ENDPOINT_RETRIEVER_BATCH_SIZE", "5"))
-RETRIEVER_RETRY_THRESHOLD = int(os.getenv("ENDPOINT_RETRIEVER_RETRY_THRESHOLD", "2"))
-RETRIEVER_MAX_RETRIES = int(os.getenv("ENDPOINT_RETRIEVER_MAX_RETRIES", "2"))
+# Default configuration from environment variables
+DEFAULT_BATCH_SIZE = int(os.getenv("ENDPOINT_RETRIEVER_BATCH_SIZE", "5"))
+DEFAULT_RETRY_THRESHOLD = int(os.getenv("ENDPOINT_RETRIEVER_RETRY_THRESHOLD", "2"))
+DEFAULT_MAX_RETRIES = int(os.getenv("ENDPOINT_RETRIEVER_MAX_RETRIES", "2"))
 
-endpoint_retriever = get_retriever(
-    collection_name="obp_endpoints",
-    search_kwargs={"k": RETRIEVER_BATCH_SIZE}
-)
+
+def get_retrieval_config(config: Optional[RunnableConfig]) -> tuple[int, int, int]:
+    """Extract retrieval config from RunnableConfig or use defaults.
+    
+    Config can be passed via: graph.ainvoke(input, config={"configurable": {"batch_size": 10}})
+    """
+    configurable = (config or {}).get("configurable", {})
+    return (
+        configurable.get("batch_size", DEFAULT_BATCH_SIZE),
+        configurable.get("retry_threshold", DEFAULT_RETRY_THRESHOLD),
+        configurable.get("max_retries", DEFAULT_MAX_RETRIES),
+    )
+
+
+# Cache retrievers by batch_size to avoid recreating them
+_retriever_cache: dict[int, any] = {}
+
+
+def get_endpoint_retriever(batch_size: int):
+    """Get or create a retriever with the specified batch size."""
+    if batch_size not in _retriever_cache:
+        _retriever_cache[batch_size] = get_retriever(
+            collection_name="obp_endpoints",
+            search_kwargs={"k": batch_size}
+        )
+    return _retriever_cache[batch_size]
 
 
 def deduplicate_documents(documents: List[Document]) -> List[Document]:
@@ -36,17 +59,21 @@ def deduplicate_documents(documents: List[Document]) -> List[Document]:
     return unique
 
 
-async def retrieve_endpoints(state):
+async def retrieve_endpoints(state, config: RunnableConfig = None):
     """
     Retrieve documents
 
     Args:
         state (dict): The current graph state
+        config: LangGraph RunnableConfig with optional configurable.batch_size
 
     Returns:
         state (dict): New key added to state, documents, that contains retrieved documents
     """
     print("---RETRIEVE ENDPOINTS---")
+    batch_size, _, _ = get_retrieval_config(config)
+    retriever = get_endpoint_retriever(batch_size)
+    
     rewritten_question = state.get("rewritten_question", "")
     total_retries = state.get("total_retries", 0)
 
@@ -56,7 +83,7 @@ async def retrieve_endpoints(state):
     else:
         question = state["question"]
     # Retrieval
-    documents = await endpoint_retriever.ainvoke(question)
+    documents = await retriever.ainvoke(question)
     # Deduplicate in case of duplicate entries in the vector store
     documents = deduplicate_documents(documents)
     return {"documents": documents, "total_retries": total_retries}
@@ -83,18 +110,21 @@ async def return_documents(state) -> OutputState:
     return {"output_documents": output_docs}
 
 
-async def grade_documents(state):
+async def grade_documents(state, config: RunnableConfig = None):
     """
     Determines whether the retrieved documents are relevant to the question.
 
     Args:
         state (dict): The current graph state
+        config: LangGraph RunnableConfig with optional configurable.retry_threshold
 
     Returns:
         state (dict): Updates documents key with only filtered relevant documents
     """
 
     print("---CHECK DOCUMENT RELEVANCE TO QUESTION---")
+    _, retry_threshold, _ = get_retrieval_config(config)
+    
     question = state["question"]
     documents = state["documents"]
 
@@ -112,7 +142,6 @@ async def grade_documents(state):
             print(f"{d.metadata['method']} - {d.metadata['path']}", " [NOT RELEVANT]")
 
     # If there are less documents than the threshold then retry query after rewriting question
-    retry_threshold = int(RETRIEVER_RETRY_THRESHOLD)
     retry_query = len(filtered_docs) < retry_threshold
 
     return {"documents": documents, "relevant_documents": filtered_docs, "question": question, "retry_query": retry_query}

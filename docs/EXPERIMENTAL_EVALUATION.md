@@ -5,7 +5,7 @@ This guide explains how to use the experimental evaluation system to test and op
 ## Overview
 
 The evaluation system allows you to:
-- **Run experiments** with different retrieval parameters (batch size, k-value, retry thresholds)
+- **Run experiments** with different retrieval parameters (batch size, retry thresholds)
 - **Export results to CSV** for detailed analysis
 - **Generate plots** to visualize performance trade-offs
 - **Find optimal configurations** for your specific needs
@@ -64,24 +64,11 @@ python src/evals/retrieval/experiment_runner.py \
 **Output:**
 - `src/evals/retrieval/results/batch_size_sweep_aggregate.csv` - Summary metrics for each batch size
 - `src/evals/retrieval/results/batch_size_sweep_individual.csv` - Individual query results
-- `eval_results/batch_size_sweep_analysis.png` - Visualization with 4 plots:
+- `src/evals/retrieval/results/batch_size_sweep_analysis.png` - Visualization with 4 plots:
   1. Latency vs Batch Size
   2. Recall/Precision vs Batch Size  
   3. Latency vs Recall Trade-off
   4. Combined Score (finds optimum)
-
-### K-Value Sweep
-
-Tests different top-k cutoffs for precision/recall evaluation:
-
-```bash
-python src/evals/retrieval/experiment_runner.py \
-    --experiment k_value \
-    --k-values 1 3 5 8 10
-```
-
-**Output:**
-- CSV files and plots showing how metrics change with k
 
 ### Retry Threshold Sweep
 

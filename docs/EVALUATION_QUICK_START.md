@@ -40,15 +40,7 @@ python src/evals/retrieval/experiment_runner.py \
     --limit 50
 ```
 
-### 5. Test K-Values (Precision@K)
-
-```bash
-python src/evals/retrieval/experiment_runner.py \
-    --experiment k_value \
-    --k-values 1 3 5 10
-```
-
-### 6. Test Retry Thresholds
+### 5. Test Retry Thresholds
 
 ```bash
 python src/evals/retrieval/experiment_runner.py \
@@ -56,7 +48,7 @@ python src/evals/retrieval/experiment_runner.py \
     --retry-thresholds 0 1 2 3
 ```
 
-### 7. Run All Experiments
+### 6. Run All Experiments
 
 ```bash
 python src/evals/retrieval/experiment_runner.py --experiment full

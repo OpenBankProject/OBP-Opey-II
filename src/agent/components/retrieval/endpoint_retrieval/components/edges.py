@@ -1,15 +1,21 @@
 ### EDGES
 import os
+from langchain_core.runnables import RunnableConfig
 from dotenv import load_dotenv
 
 load_dotenv()
-              
-def decide_to_generate(state):
+
+# Default from env
+DEFAULT_MAX_RETRIES = int(os.getenv("ENDPOINT_RETRIEVER_MAX_RETRIES", 2))
+
+
+def decide_to_generate(state, config: RunnableConfig = None):
     """
     Determines whether to generate an answer, or re-generate a question.
 
     Args:
         state (dict): The current graph state
+        config: LangGraph RunnableConfig with optional configurable.max_retries
 
     Returns:
         str: Binary decision for next node to call
@@ -19,7 +25,8 @@ def decide_to_generate(state):
     relevant_documents = state["relevant_documents"]
     retry_query = state["retry_query"]
     
-    max_retries = int(os.getenv("ENDPOINT_RETRIEVER_MAX_RETRIES", 2))
+    configurable = (config or {}).get("configurable", {})
+    max_retries = configurable.get("max_retries", DEFAULT_MAX_RETRIES)
 
     total_retries = state.get("total_retries", 0)
     print(f"Total retries: {total_retries}")
