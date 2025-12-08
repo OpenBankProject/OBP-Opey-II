@@ -14,7 +14,8 @@ from pydantic import BaseModel, Field
 # Prompt
 opey_system_prompt_template = """You are a friendly, helpful assistant for the Open Bank Project API called Opey. You are rebellious against old banking paradigms and have a sense of humor. Always give the user accurate and helpful information.
 
-Ensure Comprehensive Endpoint Awareness: Always use the endpoint retrieval tool to stay aware of and provide details on all available API capabilities before attempting to answer the user's question.
+Ensure Endpoint Awareness: Always use the endpoint retrieval tool to stay aware of and provide details on available API capabilities before attempting to answer the user's question.
+Assume that the endpoint retrieval tool has access to all the latest API endpoint information. And that you do not need to use the tool multiple times.
 
 Efficiency priority: If there is a tool that can help answer the user's question, use it immediately without needing to be prompted. Try to avoid answering questions without using the tools.
 
@@ -156,7 +157,16 @@ Identify the most relevant tags and use them in the query to help the vector sea
 
 query_formulator_prompt_template = ChatPromptTemplate.from_messages(
     [
-        SystemMessage(content=query_formulator_system_prompt),
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": query_formulator_system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        },
         MessagesPlaceholder("messages"),
     ]
 )
@@ -169,18 +179,32 @@ query_formulator_chain = query_formulator_prompt_template | query_formulator_llm
 
 
 
-conversation_summarizer_system_prompt_template = PromptTemplate.from_template(
-    """
-    You are a conversation summarizer that takes a list of messages and tries to summarize the conversation so far.\n
-    The messages will consist of messages from the user, responses from the chatbot, and tool calls with responses.\n
-    Try to summarize the conversation so far in a way that is concise and informative.\n
-    If there is important information in the tools or the messages,\n
-    such as a relevant bank ID user ID, or some other peice of data that is important to the users last message, include it in the summary message.
-
-    {existing_summary_message}
-
-    List of messages: {messages}
-    """
+conversation_summarizer_system_prompt_template = ChatPromptTemplate.from_messages(
+    [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": """You are a conversation summarizer that takes a list of messages and tries to summarize the conversation so far.\n
+The messages will consist of messages from the user, responses from the chatbot, and tool calls with responses.\n
+Try to summarize the conversation so far in a way that is concise and informative.\n
+If there is important information in the tools or the messages,\n
+such as a relevant bank ID user ID, or some other peice of data that is important to the users last message, include it in the summary message.""",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "{existing_summary_message}\n\nList of messages: {messages}",
+                }
+            ]
+        }
+    ]
 )
 
 conversation_summarizer_llm = get_model(model_name='medium', temperature=0)

@@ -30,10 +30,30 @@ grader_system_prompt = """You are a grader assessing the relevance of a retrieve
 
 grader_prompt_template = ChatPromptTemplate.from_messages(
     [
-        ("system", grader_system_prompt),
-        ("human", "Retrieved document: \n\n {document} \n\n User question: {question}")
+        # ("system", grader_system_prompt),
+        # ("human", "Retrieved document: \n\n {document} \n\n User question: {question}")
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": grader_system_prompt,
+                    "cache_control": {"type": "ephemeral"}, 
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Retrieved document: \n\n {document} \n\n User question: {question}",
+                }
+            ]
+        }
     ]
 )
+
 
 retrieval_grader = grader_prompt_template | llm_grader
 
@@ -155,11 +175,25 @@ system = """You are a question re-writer that converts an input question to a be
      """
 re_write_prompt = ChatPromptTemplate.from_messages(
     [
-        ("system", system),
-        (
-            "human",
-            "Here is the initial question: \n\n {question} \n Formulate an improved question.",
-        ),
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the initial question: \n\n {question} \n Formulate an improved question.",
+                }
+            ]
+        }
     ]
 )
 
