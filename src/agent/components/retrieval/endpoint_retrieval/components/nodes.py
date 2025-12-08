@@ -1,5 +1,6 @@
 import os
 import json
+import re
 
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
@@ -7,6 +8,7 @@ from typing import List, Optional
 from agent.components.retrieval.endpoint_retrieval.components.states import OutputState
 from agent.components.retrieval.retriever_config import get_retriever
 from agent.components.retrieval.endpoint_retrieval.components.chains import retrieval_grader, endpoint_question_rewriter
+from database.document_schemas import EndpointDocumentSchema
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,9 +17,11 @@ load_dotenv()
 DEFAULT_BATCH_SIZE = int(os.getenv("ENDPOINT_RETRIEVER_BATCH_SIZE", "5"))
 DEFAULT_RETRY_THRESHOLD = int(os.getenv("ENDPOINT_RETRIEVER_RETRY_THRESHOLD", "2"))
 DEFAULT_MAX_RETRIES = int(os.getenv("ENDPOINT_RETRIEVER_MAX_RETRIES", "2"))
+# Enable compact grading format by default (significant token savings)
+DEFAULT_USE_COMPACT_GRADING = os.getenv("ENDPOINT_RETRIEVER_COMPACT_GRADING", "true").lower() == "true"
 
 
-def get_retrieval_config(config: Optional[RunnableConfig]) -> tuple[int, int, int]:
+def get_retrieval_config(config: Optional[RunnableConfig]) -> tuple[int, int, int, bool]:
     """Extract retrieval config from RunnableConfig or use defaults.
     
     Config can be passed via: graph.ainvoke(input, config={"configurable": {"batch_size": 10}})
@@ -27,6 +31,7 @@ def get_retrieval_config(config: Optional[RunnableConfig]) -> tuple[int, int, in
         configurable.get("batch_size", DEFAULT_BATCH_SIZE),
         configurable.get("retry_threshold", DEFAULT_RETRY_THRESHOLD),
         configurable.get("max_retries", DEFAULT_MAX_RETRIES),
+        configurable.get("use_compact_grading", DEFAULT_USE_COMPACT_GRADING),
     )
 
 
@@ -59,6 +64,27 @@ def deduplicate_documents(documents: List[Document]) -> List[Document]:
     return unique
 
 
+def get_compact_grading_content(doc: Document) -> str:
+    """
+    Extract compact content for LLM grading to reduce token usage.
+    
+    Falls back to full content if compact extraction fails.
+    """
+    try:
+        schema = EndpointDocumentSchema.from_document(doc.page_content, doc.metadata)
+        return schema.to_grading_content()
+    except Exception:
+        # Fallback: use metadata + truncated content
+        meta = doc.metadata
+        parts = [
+            f"{meta.get('method', '')} {meta.get('path', '')}",
+            f"Summary: {meta.get('summary', '')}" if meta.get('summary') else "",
+            f"Tags: {meta.get('tags', '')}" if meta.get('tags') else "",
+        ]
+        compact = "\n".join(p for p in parts if p)
+        return compact if compact.strip() else doc.page_content[:500]
+
+
 async def retrieve_endpoints(state, config: RunnableConfig = None):
     """
     Retrieve documents
@@ -71,7 +97,7 @@ async def retrieve_endpoints(state, config: RunnableConfig = None):
         state (dict): New key added to state, documents, that contains retrieved documents
     """
     print("---RETRIEVE ENDPOINTS---")
-    batch_size, _, _ = get_retrieval_config(config)
+    batch_size, _, _, _ = get_retrieval_config(config)
     retriever = get_endpoint_retriever(batch_size)
     
     rewritten_question = state.get("rewritten_question", "")
@@ -123,13 +149,24 @@ async def grade_documents(state, config: RunnableConfig = None):
     """
 
     print("---CHECK DOCUMENT RELEVANCE TO QUESTION---")
-    _, retry_threshold, _ = get_retrieval_config(config)
+    _, retry_threshold, _, use_compact_grading = get_retrieval_config(config)
     
     question = state["question"]
     documents = state["documents"]
 
+    # Build grading inputs - use compact format to reduce token usage
+    if use_compact_grading:
+        grading_inputs = [
+            {"question": question, "document": get_compact_grading_content(d)} 
+            for d in documents
+        ]
+    else:
+        grading_inputs = [
+            {"question": question, "document": d.page_content} 
+            for d in documents
+        ]
+
     # Batch grade all documents in parallel
-    grading_inputs = [{"question": question, "document": d.page_content} for d in documents]
     scores = await retrieval_grader.abatch(grading_inputs)
 
     filtered_docs = []

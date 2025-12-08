@@ -50,11 +50,44 @@ class EndpointDocumentSchema:
     tags: List[str] = field(default_factory=list)
     
     def to_document_content(self) -> str:
-        """Convert schema to document content format"""
+        """Convert schema to document content format (full version for final output)."""
         import json
         # Format matching the original script's structure
         path_content = {self.path: {self.method.lower(): self.details}}
         return json.dumps(path_content)
+    
+    def to_grading_content(self) -> str:
+        """
+        Convert schema to compact format for LLM grading (token-efficient).
+        
+        Extracts only the fields needed for relevance assessment:
+        - summary, description (truncated), tags, parameters overview
+        """
+        import re
+        
+        summary = self.details.get("summary", "")
+        description = self.details.get("description", "")
+        
+        # Strip HTML tags and truncate description
+        description_clean = re.sub(r'<[^>]+>', ' ', description)
+        description_clean = re.sub(r'\s+', ' ', description_clean).strip()
+        # Keep first 200 chars of description for context
+        if len(description_clean) > 200:
+            description_clean = description_clean[:200] + "..."
+        
+        # Extract parameter names only (not full schemas)
+        params = self.details.get("parameters", [])
+        param_names = [p.get("name", "") for p in params if isinstance(p, dict) and p.get("in") != "body"]
+        
+        # Build compact representation
+        parts = [
+            f"{self.method.upper()} {self.path}",
+            f"Summary: {summary}" if summary else "",
+            f"Tags: {', '.join(self.tags)}" if self.tags else "",
+            f"Description: {description_clean}" if description_clean else "",
+            f"Parameters: {', '.join(param_names)}" if param_names else "",
+        ]
+        return "\n".join(p for p in parts if p)
     
     def to_metadata(self) -> Dict[str, Any]:
         """Convert schema to document metadata"""
@@ -65,7 +98,9 @@ class EndpointDocumentSchema:
             "method": self.method.upper(),
             "operation_id": self.operation_id,
             "path": self.path,
-            "tags": ", ".join(self.tags) if self.tags else ""
+            "tags": ", ".join(self.tags) if self.tags else "",
+            # Store summary in metadata for quick access without parsing page_content
+            "summary": self.details.get("summary", ""),
         }
             
         return metadata
