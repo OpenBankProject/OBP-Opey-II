@@ -135,9 +135,9 @@ async def compare_configs(
     print_banner("CONFIGURATION COMPARISON")
     
     configs = [
-        ("Small Batch", RunConfig(batch_size=3, k=3)),
-        ("Medium Batch", RunConfig(batch_size=8, k=8)),
-        ("Large Batch", RunConfig(batch_size=15, k=15)),
+        ("Small Batch", RunConfig(batch_size=3)),
+        ("Medium Batch", RunConfig(batch_size=8)),
+        ("Large Batch", RunConfig(batch_size=15)),
     ]
     
     print(f"\nTesting {len(configs)} configurations with {query_limit} queries each...")
@@ -148,7 +148,7 @@ async def compare_configs(
     results_data = []
     
     for name, config in configs:
-        print(f"\n[{name}] batch_size={config.batch_size}, k={config.k}")
+        print(f"\n[{name}] batch_size={config.batch_size}")
         
         runner = RetrievalEvalRunner(config)
         results = await runner.run_dataset(dataset, limit=query_limit)

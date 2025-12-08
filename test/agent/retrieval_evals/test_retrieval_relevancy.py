@@ -70,32 +70,6 @@ class TestRetrievalRelevancy:
     
     @pytest.mark.asyncio
     @pytest.mark.langsmith
-    @pytest.mark.parametrize("k", [1, 3, 5, 8])
-    async def test_precision_at_k(self, get_dataset, retrieval_runner, k):
-        """Test Precision@K at different cutoffs."""
-        dataset = get_dataset()
-        retrieval_runner.config.k = k
-        
-        results = await retrieval_runner.run_dataset(
-            dataset,
-            limit=int(os.getenv("EVAL_QUERY_LIMIT", "30"))
-        )
-        aggregate = retrieval_runner.compute_aggregate(results)
-        
-        _try_langsmith_log("log_inputs", {"k": k})
-        _try_langsmith_log("log_feedback", key="strict_precision", score=aggregate.mean_strict_precision)
-        _try_langsmith_log("log_feedback", key="soft_precision", score=aggregate.mean_soft_precision)
-        _try_langsmith_log("log_feedback", key="recall", score=aggregate.mean_strict_recall)
-        
-        print(f"\n--- Precision@{k} ---")
-        print(f"  Strict: {aggregate.mean_strict_precision:.2%}")
-        print(f"  Soft:   {aggregate.mean_soft_precision:.2%}")
-        print(f"  Recall: {aggregate.mean_strict_recall:.2%}")
-        
-        retrieval_runner.config.k = None
-    
-    @pytest.mark.asyncio
-    @pytest.mark.langsmith
     async def test_individual_query_samples(self, sample_queries, retrieval_runner):
         """Run individual query samples to debug specific failure cases."""
         failures = []

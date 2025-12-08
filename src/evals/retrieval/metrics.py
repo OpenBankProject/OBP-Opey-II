@@ -44,9 +44,9 @@ class RetrievalMetrics:
     retries: int
     
     @classmethod
-    def compute(cls, result: RetrievalResult, k: Optional[int] = None) -> "RetrievalMetrics":
+    def compute(cls, result: RetrievalResult) -> "RetrievalMetrics":
         """Compute all metrics from a retrieval result."""
-        retrieved = result.retrieved_ids[:k] if k else result.retrieved_ids
+        retrieved = result.retrieved_ids
         retrieved_set = set(retrieved)
         
         definitely_set = set(result.definitely_relevant)

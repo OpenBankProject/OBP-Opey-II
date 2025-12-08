@@ -20,11 +20,15 @@ from evals.retrieval.dataset_generator import EvalDataset, EvalQuery
 
 @dataclass
 class RunConfig:
-    """Configuration for an evaluation run."""
-    batch_size: int = 8  # ENDPOINT_RETRIEVER_BATCH_SIZE
+    """Configuration for an evaluation run.
+    
+    Note: batch_size here is for documentation/tracking only. The actual retrieval
+    batch size is controlled by ENDPOINT_RETRIEVER_BATCH_SIZE environment variable,
+    which must be set before the retrieval graph module is imported.
+    """
+    batch_size: int = 8  # ENDPOINT_RETRIEVER_BATCH_SIZE (tracking only)
     max_retries: int = 2  # ENDPOINT_RETRIEVER_MAX_RETRIES
     retry_threshold: int = 1  # ENDPOINT_RETRIEVER_RETRY_THRESHOLD
-    k: Optional[int] = None  # Limit for Precision@K / Recall@K (None = use all retrieved)
 
 
 class RetrievalEvalRunner:
@@ -82,7 +86,7 @@ class RetrievalEvalRunner:
         
         for i, query in enumerate(queries):
             result = await self.run_single_query(query)
-            metrics = RetrievalMetrics.compute(result, k=self.config.k)
+            metrics = RetrievalMetrics.compute(result)
             results.append((query, result, metrics))
             
             if progress_callback:
@@ -136,7 +140,7 @@ async def run_evaluation(
     
     # Run evaluation
     if verbose:
-        print(f"\nRunning evaluation (k={config.k if config else 'all'})...")
+        print(f"\nRunning evaluation...")
     
     results = await runner.run_dataset(dataset, limit=limit, progress_callback=progress if verbose else None)
     
@@ -160,12 +164,6 @@ if __name__ == "__main__":
         help="Path to eval dataset"
     )
     parser.add_argument(
-        "-k", "--top-k",
-        type=int,
-        default=None,
-        help="Evaluate Precision@K, Recall@K (default: all retrieved)"
-    )
-    parser.add_argument(
         "-n", "--limit",
         type=int,
         default=None,
@@ -182,7 +180,6 @@ if __name__ == "__main__":
     
     config = RunConfig(
         batch_size=args.batch_size,
-        k=args.top_k,
     )
     
     asyncio.run(run_evaluation(

@@ -62,8 +62,8 @@ python src/evals/retrieval/experiment_runner.py \
 ```
 
 **Output:**
-- `eval_results/batch_size_sweep_aggregate.csv` - Summary metrics for each batch size
-- `eval_results/batch_size_sweep_individual.csv` - Individual query results
+- `src/evals/retrieval/results/batch_size_sweep_aggregate.csv` - Summary metrics for each batch size
+- `src/evals/retrieval/results/batch_size_sweep_individual.csv` - Individual query results
 - `eval_results/batch_size_sweep_analysis.png` - Visualization with 4 plots:
   1. Latency vs Batch Size
   2. Recall/Precision vs Batch Size  
@@ -174,7 +174,7 @@ from evals.retrieval.plotting import plot_batch_size_analysis
 
 # Plot batch size analysis
 plot_batch_size_analysis(
-    aggregate_csv_path="eval_results/batch_size_sweep_aggregate.csv",
+    aggregate_csv_path="src/evals/retrieval/results/batch_size_sweep_aggregate.csv",
     output_path="my_analysis.png",
     show=True
 )
@@ -187,7 +187,7 @@ from evals.retrieval.plotting import plot_parameter_comparison
 
 # Compare any parameter vs any metrics
 plot_parameter_comparison(
-    aggregate_csv_path="eval_results/my_experiment_aggregate.csv",
+    aggregate_csv_path="src/evals/retrieval/results/my_experiment_aggregate.csv",
     x_param="config_batch_size",
     y_metrics=["mean_soft_recall", "latency_mean", "hit_rate"],
     output_path="custom_plot.png"
@@ -314,7 +314,7 @@ python src/evals/retrieval/experiment_runner.py \
     --experiment batch_size \
     --batch-sizes 3 5 8 10 15
 
-# 3. Look at the plot (eval_results/batch_size_sweep_analysis.png)
+# 3. Look at the plot (src/evals/retrieval/results/batch_size_sweep_analysis.png)
 #    Note the recommended batch size
 
 # 4. Validate the choice with a longer run

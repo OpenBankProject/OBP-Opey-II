@@ -159,7 +159,7 @@ def export_aggregate_metrics_to_csv(
 def export_experiment_results(
     experiment_name: str,
     results_list: list[tuple[dict, list, AggregateMetrics]],
-    output_dir: str = "eval_results",
+    output_dir: str = "src/evals/retrieval/results",
 ) -> tuple[str, str]:
     """
     Export results from multiple experiment configurations.

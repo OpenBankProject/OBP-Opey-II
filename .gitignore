@@ -6,6 +6,9 @@ checkpoints.db
 checkpoints.db-shm
 checkpoints.db-wal
 src/data/
+eval_results/
+evals/results
+src/evals/retrieval/results/
 .obp_data_hashes.json
 # Byte-compiled / optimized / DLL files
 *.py[cod]

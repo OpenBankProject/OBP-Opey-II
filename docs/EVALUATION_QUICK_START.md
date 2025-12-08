@@ -29,7 +29,7 @@ python src/evals/retrieval/experiment_runner.py --experiment batch_size
 **Output:** 
 - CSV files with detailed metrics
 - Plot showing latency vs batch size, recall vs batch size, and recommended optimum
-- Location: `eval_results/batch_size_sweep_*`
+- Location: `src/evals/retrieval/results/batch_size_sweep_*`
 
 ### 4. Custom Batch Size Test
 
@@ -111,7 +111,7 @@ python src/evals/retrieval/experiment_runner.py \
     --experiment batch_size \
     --batch-sizes 8 \
     -n 100 \
-    -o eval_results/after_change
+    -o src/evals/retrieval/results/after_change
 ```
 
 ### Scenario: System is Too Slow

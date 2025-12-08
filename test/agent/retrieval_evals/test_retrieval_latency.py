@@ -83,7 +83,7 @@ class TestBatchSizeExperiment:
     async def test_batch_size_comparison(self, get_dataset, batch_size):
         """Compare retrieval performance at different batch sizes."""
         dataset = get_dataset()
-        config = RunConfig(batch_size=batch_size, k=batch_size)
+        config = RunConfig(batch_size=batch_size)
         runner = RetrievalEvalRunner(config)
         
         sample_size = int(os.getenv("EVAL_QUERY_LIMIT", "20"))

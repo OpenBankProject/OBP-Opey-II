@@ -29,7 +29,7 @@ from evals.retrieval.plotting import (
 class ExperimentConfig:
     """Configuration for an evaluation experiment."""
     dataset_path: str = "src/evals/retrieval/eval_dataset.json"
-    output_dir: str = "eval_results"
+    output_dir: str = "src/evals/retrieval/results"
     query_limit: Optional[int] = None  # None = all queries
     
     # Parameters to sweep
@@ -360,7 +360,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-o", "--output-dir",
-        default="eval_results",
+        default="src/evals/retrieval/results",
         help="Output directory for results"
     )
     parser.add_argument(

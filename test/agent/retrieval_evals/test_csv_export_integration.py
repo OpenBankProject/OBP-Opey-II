@@ -39,7 +39,7 @@ class TestCSVExportIntegration:
         This can be used to generate data for plotting and finding optimal configs.
         """
         dataset = get_dataset()
-        config = RunConfig(batch_size=batch_size, k=batch_size)
+        config = RunConfig(batch_size=batch_size)
         runner = RetrievalEvalRunner(config)
         
         # Run evaluation
@@ -48,7 +48,7 @@ class TestCSVExportIntegration:
         aggregate = runner.compute_aggregate(results)
         
         # Export to CSV (append mode for multiple batch sizes)
-        output_dir = os.getenv("EVAL_OUTPUT_DIR", "eval_results")
+        output_dir = os.getenv("EVAL_OUTPUT_DIR", "src/evals/retrieval/results")
         os.makedirs(output_dir, exist_ok=True)
         
         csv_path = os.path.join(output_dir, "batch_size_test_results.csv")
@@ -58,7 +58,7 @@ class TestCSVExportIntegration:
         export_aggregate_metrics_to_csv(
             aggregate,
             csv_path,
-            config_params={"batch_size": batch_size, "k": config.k},
+            config_params={"batch_size": batch_size},
             append=not is_first
         )
         
@@ -106,14 +106,14 @@ async def example_batch_size_sweep_with_export():
     for batch_size in batch_sizes:
         print(f"  Testing batch_size={batch_size}...")
         
-        config = RunConfig(batch_size=batch_size, k=batch_size)
+        config = RunConfig(batch_size=batch_size)
         runner = RetrievalEvalRunner(config)
         
         results = await runner.run_dataset(dataset, limit=20)
         aggregate = runner.compute_aggregate(results)
         
         results_list.append((
-            {"batch_size": batch_size, "k": batch_size},
+            {"batch_size": batch_size},
             results,
             aggregate
         ))
@@ -125,7 +125,7 @@ async def example_batch_size_sweep_with_export():
     individual_path, aggregate_path = export_experiment_results(
         "example_batch_sweep",
         results_list,
-        "eval_results"
+        "src/evals/retrieval/results"
     )
     
     print(f"\n✓ Export complete!")
@@ -135,7 +135,7 @@ async def example_batch_size_sweep_with_export():
     # Generate plot
     try:
         from evals.retrieval.plotting import plot_batch_size_analysis
-        plot_path = "eval_results/example_batch_sweep_plot.png"
+        plot_path = "src/evals/retrieval/results/example_batch_sweep_plot.png"
         plot_batch_size_analysis(aggregate_path, output_path=plot_path, show=False)
         print(f"  Plot:       {plot_path}")
     except ImportError:
