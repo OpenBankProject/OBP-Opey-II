@@ -67,8 +67,13 @@ class UserMessageEventProcessor(BaseEventProcessor):
                     # (Compare content to ensure we're syncing the right message)
                     if message_id and content and content == self.stream_input.message:
                         self.user_message_confirmed = True
+                        
+                        # Get correlation_id from stream_input (frontend provides this)
+                        correlation_id = getattr(self.stream_input, 'correlation_id', None) or message_id
+                        
                         yield StreamEventFactory.user_message_confirmed(
                             message_id=message_id,
+                            correlation_id=correlation_id,
                             content=content
                         )
                         return

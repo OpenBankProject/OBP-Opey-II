@@ -336,3 +336,93 @@ async def user_approval(
             yield stream_manager.to_sse_format(stream_event)
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
+
+
+@router.get("/threads/{thread_id}/messages", dependencies=[Depends(session_cookie)])
+async def get_thread_messages(
+    thread_id: str,
+    stream_manager: StreamManager = Depends(get_stream_manager)
+) -> dict[str, Any]:
+    """
+    Get the authoritative message history for a thread.
+    
+    This endpoint serves as the single source of truth for thread state,
+    enabling frontend recovery/reconciliation when real-time sync fails.
+    
+    Use cases:
+    - Initial load/page refresh
+    - After reconnection
+    - When state seems inconsistent
+    
+    Args:
+        thread_id: The conversation thread ID
+        stream_manager: Injected stream manager dependency
+    
+    Returns:
+        Dictionary containing thread_id and list of messages with their metadata
+    """
+    logger.info(f"Fetching message history for thread: {thread_id}")
+    
+    # Get the graph from the session
+    agent = stream_manager.opey_session.graph
+    
+    # Build config for the thread
+    config = stream_manager.opey_session.build_config({
+        'configurable': {
+            'thread_id': thread_id,
+        }
+    })
+    
+    try:
+        # Get current state
+        current_state = await agent.aget_state(config)
+        
+        if not current_state or not current_state.values:
+            # Thread doesn't exist yet or has no messages
+            return {
+                "thread_id": thread_id,
+                "messages": [],
+                "message_count": 0
+            }
+        
+        # Get messages from state
+        messages = current_state.values.get('messages', [])
+        
+        # Convert LangChain messages to our ChatMessage format
+        formatted_messages = []
+        for msg in messages:
+            try:
+                chat_msg = ChatMessage.from_langchain(msg)
+                formatted_messages.append({
+                    "id": getattr(msg, 'id', None),
+                    "type": chat_msg.type,
+                    "content": chat_msg.content,
+                    "timestamp": getattr(msg, 'timestamp', None),
+                    "tool_calls": chat_msg.tool_calls if hasattr(chat_msg, 'tool_calls') else [],
+                    "tool_call_id": chat_msg.tool_call_id if hasattr(chat_msg, 'tool_call_id') else None,
+                    "tool_status": chat_msg.tool_status if hasattr(chat_msg, 'tool_status') else None,
+                })
+            except Exception as e:
+                logger.warning(f"Failed to convert message to ChatMessage: {e}")
+                # Include a minimal representation if conversion fails
+                formatted_messages.append({
+                    "id": getattr(msg, 'id', None),
+                    "type": msg.__class__.__name__,
+                    "content": str(msg.content) if hasattr(msg, 'content') else "",
+                    "error": f"Conversion failed: {str(e)}"
+                })
+        
+        logger.info(f"Retrieved {len(formatted_messages)} messages for thread {thread_id}")
+        
+        return {
+            "thread_id": thread_id,
+            "messages": formatted_messages,
+            "message_count": len(formatted_messages)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error retrieving thread messages for {thread_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve thread messages: {str(e)}"
+        )

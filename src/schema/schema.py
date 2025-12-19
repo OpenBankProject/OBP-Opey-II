@@ -243,6 +243,11 @@ class UserInput(BaseModel):
         default=None,
         examples=["847c6285-8fc9-4560-a83f-4e6285809254"],
     )
+    correlation_id: str | None = Field(
+        description="Frontend-generated correlation ID for reliable message matching.",
+        default=None,
+        examples=["550e8400-e29b-41d4-a716-446655440000"],
+    )
     tool_call_approval: ToolCallApproval = Field(
         description="Whether this input is a tool call approval.",
         default=False,

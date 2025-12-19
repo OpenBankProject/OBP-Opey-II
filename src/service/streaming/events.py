@@ -142,7 +142,17 @@ class UserMessageConfirmEvent(BaseStreamEvent):
     """Event fired when a user message is confirmed with its backend ID"""
     type: Literal["user_message_confirmed"] = "user_message_confirmed"
     message_id: str = Field(description="Backend-assigned message ID")
+    correlation_id: str = Field(description="Frontend-generated correlation ID for reliable matching")
     content: str = Field(description="The user's message content")
+
+    def to_sse_data(self) -> str:
+        return f"data: {self.model_dump_json()}\n\n"
+
+
+class ThreadSyncEvent(BaseStreamEvent):
+    """Event fired to sync thread_id with the frontend"""
+    type: Literal["thread_sync"] = "thread_sync"
+    thread_id: str = Field(description="Thread ID assigned/confirmed by backend")
 
     def to_sse_data(self) -> str:
         return f"data: {self.model_dump_json()}\n\n"
@@ -169,6 +179,7 @@ StreamEvent = Union[
     ApprovalRequestEvent,
     BatchApprovalRequestEvent,
     UserMessageConfirmEvent,
+    ThreadSyncEvent,
     StreamEndEvent
 ]
 
@@ -409,16 +420,34 @@ class StreamEventFactory:
         return event
 
     @staticmethod
-    def user_message_confirmed(message_id: str, content: str) -> UserMessageConfirmEvent:
+    def user_message_confirmed(message_id: str, correlation_id: str, content: str) -> UserMessageConfirmEvent:
         """
         Create a user message confirmation event.
         This is sent after the backend accepts a user message and assigns it an ID.
         """
-        event = UserMessageConfirmEvent(message_id=message_id, content=content)
+        event = UserMessageConfirmEvent(
+            message_id=message_id,
+            correlation_id=correlation_id,
+            content=content
+        )
         StreamEventFactory._log_event(
             event,
             "USER_MESSAGE_CONFIRMED",
-            {"message_id": message_id, "content_length": len(content)}
+            {"message_id": message_id, "correlation_id": correlation_id[:8], "content_length": len(content)}
+        )
+        return event
+
+    @staticmethod
+    def thread_sync(thread_id: str) -> ThreadSyncEvent:
+        """
+        Create a thread sync event.
+        This is sent at the start of a stream to sync the thread_id with the frontend.
+        """
+        event = ThreadSyncEvent(thread_id=thread_id)
+        StreamEventFactory._log_event(
+            event,
+            "THREAD_SYNC",
+            {"thread_id": thread_id}
         )
         return event
 

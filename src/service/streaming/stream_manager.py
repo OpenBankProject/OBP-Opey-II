@@ -46,6 +46,10 @@ class StreamManager:
             "message_length": len(stream_input.message) if stream_input.message else 0
         })
 
+        # Emit thread_sync event first to ensure frontend has the correct thread_id
+        # This is critical when the backend generates the thread_id (when not provided)
+        yield StreamEventFactory.thread_sync(thread_id)
+
         orchestrator = orchestrator_repository.get_or_create(thread_id, stream_input)
         
         # Track if generator is being closed to avoid yielding in finally block
