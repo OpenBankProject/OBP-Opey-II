@@ -13,7 +13,6 @@ from langchain_anthropic.chat_models import ChatAnthropic
 from langchain_core.messages import ToolMessage, SystemMessage, RemoveMessage, AIMessage, trim_messages
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
-#from langchain_community.callbacks import get_openai_callback, get_bedrock_anthropic_callback
 
 from agent.components.retrieval.endpoint_retrieval.endpoint_retrieval_graph import endpoint_retrieval_graph
 from agent.components.retrieval.glossary_retrieval.glossary_retrieval_graph import glossary_retrieval_graph
