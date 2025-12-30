@@ -1,7 +1,21 @@
 """
-Data models for the tool approval system.
-Structures to track approval metadata, context and user decisions.
+DEPRECATED: This module has been replaced by approval.py with a simpler design.
+
+The new system uses:
+- ApprovalScope (once/session/user) instead of complex ApprovalLevel + RiskLevel
+- No pattern matching - always ask on first use
+- ApprovalRequest/ApprovalDecision are simpler dataclasses
+
+This file is kept for backwards compatibility with existing tests.
+New code should use the simplified approval.py module instead.
 """
+import warnings
+warnings.warn(
+    "approval_models is deprecated. Use approval.py instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
 from typing import Literal, Dict, Any, List, Optional, Callable
 from pydantic import BaseModel, Field
 from datetime import datetime

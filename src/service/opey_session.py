@@ -6,15 +6,13 @@ from auth.usage_tracker import usage_tracker
 from fastapi import Depends, Request
 from uuid import UUID
 
-from agent.graph_builder import OpeyAgentGraphBuilder, create_basic_opey_graph, create_supervised_opey_graph
-from agent.components.tools import endpoint_retrieval_tool, glossary_retrieval_tool
-from agent.components.tools import get_tool_registry, create_approval_manager
-from agent.components.tools.approval_models import (
-    ToolApprovalMetadata, ApprovalPattern, ApprovalAction,
-    RiskLevel, ApprovalLevel
+from agent.graph_builder import OpeyAgentGraphBuilder, create_basic_opey_graph
+from agent.components.tools import (
+    create_approval_store,
+    MCPToolLoader,
+    MCPServerConfig,
 )
 
-from client.obp_client import OBPClient
 from service.checkpointer import get_global_checkpointer
 from service.redis_client import get_redis_client
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -54,13 +52,13 @@ class OpeySession:
         # Set up the model used
         self._setup_model()
         
-        # Initialize approval system
-        self.tool_registry = get_tool_registry()
+        # Initialize simplified approval store
         redis_client = get_redis_client() if os.getenv("REDIS_URL") else None
-        workspace_config = self._load_workspace_approval_config()
-        self.approval_manager = create_approval_manager(
+        user_id = str(session_id)  # Use session_id as user identifier
+        self.approval_store = create_approval_store(
+            session_id=str(session_id),
+            user_id=user_id,
             redis_client=redis_client,
-            workspace_config=workspace_config
         )
         
         # Initialize auth object only if not anonymous
@@ -74,25 +72,16 @@ class OpeySession:
             logger.warning(f"Anonymous session attempted to use {obp_api_mode} mode. Defaulting to SAFE mode.")
             obp_api_mode = "SAFE"
 
-        if obp_api_mode != "NONE" and not self.is_anonymous:
-            # Initialize the OBPClient with the auth object (only for authenticated sessions)
-            self.obp_requests = OBPClient(self.auth)
+        # Load tools from MCP servers
+        # Note: OBP API tool is now provided by the MCP server, not created here
+        tools = self._load_mcp_tools()
 
-        # Register base tools with approval metadata
-        self._register_base_tools()
-        
-        # Register OBP tools if needed
-        if obp_api_mode != "NONE" and not self.is_anonymous:
-            self._register_obp_tools(obp_api_mode)
-        
-        # Get tools from registry
-        base_tools = self.tool_registry.get_langchain_tools()
         # Initialize the graph with the appropriate tools based on the OBP API mode
         match obp_api_mode:
             case "NONE":
                 logger.info("OBP API mode set to NONE: Calls to the OBP-API will not be available")
                 self.graph = (OpeyAgentGraphBuilder()
-                              .with_tools(base_tools)
+                              .with_tools(tools)
                               .with_model(self._model_name, temperature=0.5)
                               .with_checkpointer(checkpointer)
                               .enable_human_review(False)
@@ -103,7 +92,7 @@ class OpeySession:
                     logger.info("Anonymous session using SAFE mode: Only GET requests to OBP-API will be available")
                     prompt_addition = "Note: This is an anonymous session with limited capabilities. User can only make GET requests to the OBP-API. Ensure all responses adhere to this restriction."
                     self.graph = (OpeyAgentGraphBuilder()
-                                 .with_tools(base_tools)
+                                 .with_tools(tools)
                                  .with_model(self._model_name, temperature=0.5)
                                  .add_to_system_prompt(prompt_addition)
                                  .with_checkpointer(checkpointer)
@@ -112,7 +101,7 @@ class OpeySession:
                 else:
                     logger.info("OBP API mode set to SAFE: GET requests to the OBP-API will be available")
                     self.graph = (OpeyAgentGraphBuilder()
-                                 .with_tools(base_tools)
+                                 .with_tools(tools)
                                  .with_model(self._model_name, temperature=0.5)
                                  .with_checkpointer(checkpointer)
                                  .enable_human_review(False)
@@ -121,7 +110,7 @@ class OpeySession:
             case "DANGEROUS":
                 logger.info("OBP API mode set to DANGEROUS: All requests to the OBP-API will be available subject to user approval.")
                 self.graph = (OpeyAgentGraphBuilder()
-                             .with_tools(base_tools)
+                             .with_tools(tools)
                              .with_model(self._model_name, temperature=0.5)
                              .with_checkpointer(checkpointer)
                              .enable_human_review(True)
@@ -131,7 +120,7 @@ class OpeySession:
                 logger.info("OBP API mode set to TEST: All requests to the OBP-API will be available AND WILL BE APPROVED BY DEFAULT.")
                 test_prompt = "You are in TEST mode. Operations will be auto-approved. DO NOT USE IN PRODUCTION."
                 self.graph = (OpeyAgentGraphBuilder()
-                             .with_tools(base_tools)
+                             .with_tools(tools)
                              .add_to_system_prompt(test_prompt)
                              .with_model(self._model_name, temperature=0.5)
                              .with_checkpointer(checkpointer)
@@ -140,7 +129,7 @@ class OpeySession:
 
             case _:
                 logger.error(f"OBP API mode set to {obp_api_mode}: Unknown OBP API mode. Defaulting to NONE.")
-                self.graph = create_basic_opey_graph(base_tools)
+                self.graph = create_basic_opey_graph(tools)
                 self.graph.checkpointer = checkpointer
         
         self.graph.checkpointer = checkpointer
@@ -177,139 +166,67 @@ class OpeySession:
         logger.info(f"Using model: {model_name}")
         self._model_name = model_name
     
-    def _load_workspace_approval_config(self) -> dict:
+    def _load_mcp_tools(self) -> list:
         """
-        Load workspace-level approval configuration.
-        Could be from environment, config file, or database.
+        Load tools from configured MCP servers synchronously.
+        
+        MCP servers are configured via MCP_SERVERS environment variable as JSON:
+        [
+            {"name": "obp", "url": "http://localhost:8001/sse", "transport": "sse"},
+            {"name": "other", "command": "npx", "args": ["-y", "some-mcp-server"]}
+        ]
+        
+        Returns:
+            List of LangChain tools loaded from MCP servers
         """
-        # Try to load from environment variable first
-        config_str = os.getenv("WORKSPACE_APPROVAL_CONFIG", "{}")
+        import asyncio
+        import nest_asyncio
+        
+        mcp_config_str = os.getenv("MCP_SERVERS", "[]")
         try:
-            config = json.loads(config_str)
-            if config:
-                logger.info(f"Loaded workspace approval config from environment")
-            return config
+            server_configs_raw = json.loads(mcp_config_str)
         except json.JSONDecodeError:
-            logger.warning("Invalid WORKSPACE_APPROVAL_CONFIG JSON, using empty config")
-            return {}
-    
-    def _register_base_tools(self):
-        """Register base tools (endpoint_retrieval, glossary_retrieval) with approval metadata"""
-        self.tool_registry.register_tool(
-            tool=endpoint_retrieval_tool,
-            approval_metadata=ToolApprovalMetadata(
-                tool_name="endpoint_retrieval_tool",
-                description="Retrieve OBP API endpoint documentation",
-                requires_auth=False,
-                default_risk_level=RiskLevel.SAFE,
-                patterns=[
-                    ApprovalPattern(
-                        method="*",
-                        path="*",
-                        action=ApprovalAction.AUTO_APPROVE,
-                        reason="Read-only operation"
-                    )
-                ],
-                can_be_pre_approved=True,
-                available_approval_levels=[ApprovalLevel.ONCE, ApprovalLevel.SESSION]
-            )
-        )
+            logger.warning("Invalid MCP_SERVERS JSON, skipping MCP tools")
+            return []
         
-        self.tool_registry.register_tool(
-            tool=glossary_retrieval_tool,
-            approval_metadata=ToolApprovalMetadata(
-                tool_name="glossary_retrieval_tool",
-                description="Retrieve glossary definitions",
-                requires_auth=False,
-                default_risk_level=RiskLevel.SAFE,
-                patterns=[
-                    ApprovalPattern(
-                        method="*",
-                        path="*",
-                        action=ApprovalAction.AUTO_APPROVE,
-                        reason="Read-only operation"
-                    )
-                ],
-                can_be_pre_approved=True,
-                available_approval_levels=[ApprovalLevel.ONCE, ApprovalLevel.SESSION]
-            )
-        )
-        logger.info("Registered base tools with approval metadata")
-    
-    def _register_obp_tools(self, obp_api_mode: str):
-        """Register OBP tools with approval metadata based on mode"""
-        if obp_api_mode == "SAFE":
-            # Only GET requests, auto-approve
-            patterns = [
-                ApprovalPattern(
-                    method="GET",
-                    path="*",
-                    action=ApprovalAction.AUTO_APPROVE,
-                    reason="SAFE mode: read-only operations"
+        if not server_configs_raw:
+            logger.info("No MCP servers configured")
+            return []
+        
+        # Parse into MCPServerConfig objects
+        server_configs = []
+        for raw in server_configs_raw:
+            try:
+                config = MCPServerConfig(
+                    name=raw["name"],
+                    url=raw.get("url"),
+                    transport=raw.get("transport", "sse"),
+                    command=raw.get("command"),
+                    args=raw.get("args", []),
+                    env=raw.get("env"),
                 )
-            ]
-        elif obp_api_mode == "DANGEROUS":
-            # GET auto-approved, others require approval
-            patterns = [
-                ApprovalPattern(
-                    method="GET",
-                    path="*",
-                    action=ApprovalAction.AUTO_APPROVE,
-                    reason="Read-only operation"
-                ),
-                ApprovalPattern(
-                    method="POST",
-                    path="/obp/*/accounts/*/views",
-                    action=ApprovalAction.AUTO_APPROVE,
-                    reason="View creation is low risk"
-                ),
-                ApprovalPattern(
-                    method="DELETE",
-                    path="/obp/*/banks/*",
-                    action=ApprovalAction.ALWAYS_DENY,
-                    reason="Cannot delete banks"
-                ),
-                ApprovalPattern(
-                    method="*",
-                    path="*",
-                    action=ApprovalAction.REQUIRE_APPROVAL,
-                    reason="Default: require approval for modifications"
-                )
-            ]
-        else:  # TEST mode
-            patterns = [
-                ApprovalPattern(
-                    method="*",
-                    path="*",
-                    action=ApprovalAction.AUTO_APPROVE,
-                    reason="TEST mode: auto-approve everything"
-                )
-            ]
+                server_configs.append(config)
+            except (KeyError, TypeError) as e:
+                logger.warning(f"Invalid MCP server config: {raw}, error: {e}")
+                continue
         
-        # Cast to proper literal type for get_langchain_tool
-        mode = obp_api_mode.lower()
-        if mode not in ("safe", "dangerous", "test"):
-            raise ValueError(f"Invalid OBP API mode: {obp_api_mode}")
+        if not server_configs:
+            return []
         
-        obp_tool = self.obp_requests.get_langchain_tool(mode)  # type: ignore
-        
-        self.tool_registry.register_tool(
-            tool=obp_tool,
-            approval_metadata=ToolApprovalMetadata(
-                tool_name="obp_requests",
-                description="Make HTTP requests to OBP API",
-                requires_auth=True,
-                default_risk_level=RiskLevel.DANGEROUS,
-                patterns=patterns,
-                can_be_pre_approved=True,
-                available_approval_levels=[
-                    ApprovalLevel.ONCE,
-                    ApprovalLevel.SESSION,
-                    ApprovalLevel.USER
-                ]
-            )
-        )
-        logger.info(f"Registered OBP tools for {obp_api_mode} mode with approval metadata")
+        # Load tools using MCPToolLoader
+        loader = MCPToolLoader(servers=server_configs)
+        try:
+            # Use nest_asyncio to allow nested event loops
+            # This is needed because OpeySession.__init__ is sync but we're
+            # called from an async context (FastAPI)
+            nest_asyncio.apply()
+            tools = asyncio.get_event_loop().run_until_complete(loader.load_tools())
+            
+            logger.info(f"Loaded {len(tools)} tools from {len(server_configs)} MCP server(s)")
+            return tools
+        except Exception as e:
+            logger.error(f"Failed to load MCP tools: {e}")
+            return []
 
     def build_config(self, base_config: dict | None = None) -> dict:
         """
@@ -329,11 +246,11 @@ class OpeySession:
         """
         base_config = base_config or {}
         
-        # Session-level configuration (model context, approval manager)
+        # Session-level configuration (model context, approval store)
         session_configurable = {
             "model_name": self._model_name,
             "model_kwargs": {},  # Add model_kwargs if needed in future
-            "approval_manager": self.approval_manager,
+            "approval_store": self.approval_store,
         }
         
         # Merge: base config takes precedence for runtime values like thread_id

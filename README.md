@@ -247,6 +247,61 @@ All log messages now include the function name that generated the log for easier
 - `async_obp_requests says:` - General request method logs
 
 ## Service Configuration
+
+### MCP Server Configuration
+
+Opey II can load tools from external [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers. This allows you to extend Opey's capabilities without modifying the core codebase.
+
+Configure MCP servers via the `MCP_SERVERS` environment variable as a JSON array:
+
+```env
+MCP_SERVERS='[
+  {"name": "obp", "url": "http://localhost:8001/sse", "transport": "sse"},
+  {"name": "filesystem", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"], "transport": "stdio"}
+]'
+```
+
+#### Server Configuration Options
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Unique identifier for the server |
+| `transport` | Yes | Connection type: `"sse"`, `"http"`, or `"stdio"` |
+| `url` | For sse/http | Server URL (e.g., `http://localhost:8001/sse`) |
+| `command` | For stdio | Command to run (e.g., `"npx"`, `"python"`) |
+| `args` | For stdio | Command arguments as array |
+| `env` | No | Environment variables for stdio processes |
+| `headers` | No | HTTP headers for sse/http (e.g., for auth) |
+
+#### Transport Types
+
+- **SSE (Server-Sent Events)**: For HTTP-based MCP servers using SSE streaming
+- **HTTP**: For HTTP-based MCP servers using streamable HTTP
+- **stdio**: For local process-based MCP servers (spawns a subprocess)
+
+#### Example: OBP MCP Server
+
+If you have an OBP MCP server running locally:
+
+```env
+MCP_SERVERS='[{"name": "obp", "url": "http://localhost:8001/sse", "transport": "sse"}]'
+```
+
+#### Example: Multiple Servers
+
+```env
+MCP_SERVERS='[
+  {"name": "obp", "url": "http://localhost:8001/sse", "transport": "sse"},
+  {"name": "weather", "url": "http://localhost:8002/mcp", "transport": "http", "headers": {"Authorization": "Bearer token123"}}
+]'
+```
+
+#### Notes
+
+- If `MCP_SERVERS` is not set or is empty (`[]`), no MCP tools will be loaded
+- Tools from all configured servers are combined and made available to the agent
+- Server names must be unique across configurations
+
 ### Rate Limiting
 Default rate limiting on the stream and invoke endpoints can be set with the environment variable `GLOBAL_RATE_LIMIT`
 

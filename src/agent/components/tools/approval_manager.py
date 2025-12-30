@@ -1,9 +1,23 @@
 """
-Multi-level approval management system.
-Handles checking and storing approvals at session/user/workspace levels.
+DEPRECATED: This module has been replaced by approval.py with a simpler design.
 
-Design: Per-session instance (not singleton) because it needs session-specific state.
+The new system (in approval.py) uses:
+- ApprovalStore instead of ApprovalManager
+- ApprovalScope (once/session/user) instead of ApprovalLevel
+- No pattern matching - always ask on first use
+
+This file is kept for backwards compatibility with existing tests.
+New code should use the simplified approval.py module instead.
+
+Old design: Multi-level approval management with pattern matching.
 """
+import warnings
+warnings.warn(
+    "approval_manager is deprecated. Use approval.py with ApprovalStore instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
 from typing import Dict, Tuple, Optional, Literal
 from datetime import datetime, timedelta
 import logging
@@ -13,9 +27,22 @@ from .approval_models import (
     ApprovalDecision, ApprovalRecord, ApprovalLevel,
     RiskLevel
 )
-from agent.components.states import OpeyGraphState, make_approval_key, parse_approval_key
+from agent.components.states import OpeyGraphState
 
 logger = logging.getLogger(__name__)
+
+
+def make_approval_key(tool_name: str, operation: str) -> str:
+    """Create approval key - compat shim for old code."""
+    return f"{tool_name}:{operation}"
+
+
+def parse_approval_key(key: str) -> Tuple[str, str]:
+    """Parse approval key - compat shim for old code."""
+    parts = key.split(":", 1)
+    if len(parts) != 2:
+        raise ValueError(f"Invalid approval key format: {key}")
+    return parts[0], parts[1]
 
 
 class ApprovalManager:

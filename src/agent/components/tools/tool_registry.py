@@ -1,3 +1,21 @@
+"""
+DEPRECATED: This module has been replaced by the MCP tool loading approach.
+
+The new system:
+- Loads tools from MCP servers via mcp_integration.py
+- No longer requires a registry - tools come from external MCP servers
+- Approval is handled simply by ApprovalStore (in approval.py)
+
+This file is kept for backwards compatibility with existing tests.
+New code should use MCPToolLoader from mcp_integration.py instead.
+"""
+import warnings
+warnings.warn(
+    "tool_registry is deprecated. Use MCPToolLoader from mcp_integration.py instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
 from langchain_core.tools import BaseTool
 from typing import Dict, Callable, Optional, Literal, List
 import fnmatch

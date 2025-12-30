@@ -5,7 +5,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
 
 from agent.utils.model_factory import get_model
-from agent.components.tools import glossary_retrieval_tool, endpoint_retrieval_tool
 
 from pydantic import BaseModel, Field
 
