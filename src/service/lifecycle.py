@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
 from .redis_client import get_redis_client
+from .mcp_tools_cache import initialize_mcp_tools, close_mcp_tools
 from auth import initialize_admin_client, close_admin_client
 from .streaming.orchestrator_repository import orchestrator_repository
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -66,6 +67,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Continue startup even if admin client fails - it may not be required for all operations
         logger.warning('⚠️  Admin client initialization failed - admin operations will be unavailable')
 
+    # Initialize MCP tools
+    try:
+        tools = await initialize_mcp_tools()
+        if tools:
+            logger.info(f'✅ Loaded {len(tools)} MCP tools')
+        else:
+            logger.info('No MCP tools configured')
+    except Exception as e:
+        logger.error(f'Failed to initialize MCP tools: {e}')
+        logger.warning('⚠️  MCP tools initialization failed - MCP tools will be unavailable')
+
     cleanup_task = asyncio.create_task(periodic_orchestrator_cleanup())
     cancellation_cleanup_task = asyncio.create_task(periodic_cancellation_cleanup())
     
@@ -77,6 +89,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Cleanup during shutdown
     await close_admin_client()
+    await close_mcp_tools()
     
     # Cancel cleanup tasks during shutdown
     cleanup_task.cancel()

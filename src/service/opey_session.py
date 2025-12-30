@@ -7,11 +7,8 @@ from fastapi import Depends, Request
 from uuid import UUID
 
 from agent.graph_builder import OpeyAgentGraphBuilder, create_basic_opey_graph
-from agent.components.tools import (
-    create_approval_store,
-    MCPToolLoader,
-    MCPServerConfig,
-)
+from agent.components.tools import create_approval_store
+from service.mcp_tools_cache import get_mcp_tools
 
 from service.checkpointer import get_global_checkpointer
 from service.redis_client import get_redis_client
@@ -21,7 +18,6 @@ from langchain_core.runnables.graph import MermaidDrawMethod
 
 import os
 import logging
-import json
 
 # Configure logging
 logging.basicConfig(
@@ -72,9 +68,10 @@ class OpeySession:
             logger.warning(f"Anonymous session attempted to use {obp_api_mode} mode. Defaulting to SAFE mode.")
             obp_api_mode = "SAFE"
 
-        # Load tools from MCP servers
-        # Note: OBP API tool is now provided by the MCP server, not created here
-        tools = self._load_mcp_tools()
+        # Get tools from application-level cache (loaded at startup)
+        tools = get_mcp_tools()
+        if not tools:
+            logger.warning("No MCP tools available - agent will have limited capabilities")
 
         # Initialize the graph with the appropriate tools based on the OBP API mode
         match obp_api_mode:
@@ -165,68 +162,6 @@ class OpeySession:
         
         logger.info(f"Using model: {model_name}")
         self._model_name = model_name
-    
-    def _load_mcp_tools(self) -> list:
-        """
-        Load tools from configured MCP servers synchronously.
-        
-        MCP servers are configured via MCP_SERVERS environment variable as JSON:
-        [
-            {"name": "obp", "url": "http://localhost:8001/sse", "transport": "sse"},
-            {"name": "other", "command": "npx", "args": ["-y", "some-mcp-server"]}
-        ]
-        
-        Returns:
-            List of LangChain tools loaded from MCP servers
-        """
-        import asyncio
-        import nest_asyncio
-        
-        mcp_config_str = os.getenv("MCP_SERVERS", "[]")
-        try:
-            server_configs_raw = json.loads(mcp_config_str)
-        except json.JSONDecodeError:
-            logger.warning("Invalid MCP_SERVERS JSON, skipping MCP tools")
-            return []
-        
-        if not server_configs_raw:
-            logger.info("No MCP servers configured")
-            return []
-        
-        # Parse into MCPServerConfig objects
-        server_configs = []
-        for raw in server_configs_raw:
-            try:
-                config = MCPServerConfig(
-                    name=raw["name"],
-                    url=raw.get("url"),
-                    transport=raw.get("transport", "sse"),
-                    command=raw.get("command"),
-                    args=raw.get("args", []),
-                    env=raw.get("env"),
-                )
-                server_configs.append(config)
-            except (KeyError, TypeError) as e:
-                logger.warning(f"Invalid MCP server config: {raw}, error: {e}")
-                continue
-        
-        if not server_configs:
-            return []
-        
-        # Load tools using MCPToolLoader
-        loader = MCPToolLoader(servers=server_configs)
-        try:
-            # Use nest_asyncio to allow nested event loops
-            # This is needed because OpeySession.__init__ is sync but we're
-            # called from an async context (FastAPI)
-            nest_asyncio.apply()
-            tools = asyncio.get_event_loop().run_until_complete(loader.load_tools())
-            
-            logger.info(f"Loaded {len(tools)} tools from {len(server_configs)} MCP server(s)")
-            return tools
-        except Exception as e:
-            logger.error(f"Failed to load MCP tools: {e}")
-            return []
 
     def build_config(self, base_config: dict | None = None) -> dict:
         """
