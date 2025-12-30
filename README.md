@@ -250,15 +250,35 @@ All log messages now include the function name that generated the log for easier
 
 ### MCP Server Configuration
 
-Opey II can load tools from external [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers. This allows you to extend Opey's capabilities without modifying the core codebase.
+Opey II loads tools from external [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers. This allows you to extend Opey's capabilities without modifying the core codebase.
 
-Configure MCP servers via the `MCP_SERVERS` environment variable as a JSON array:
+#### Configuration File
 
+Create a `mcp_servers.json` file in the project root (or `src/` directory):
+
+```json
+{
+  "servers": [
+    {
+      "name": "obp",
+      "url": "http://localhost:8001/sse",
+      "transport": "sse"
+    },
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+      "transport": "stdio"
+    }
+  ]
+}
+```
+
+Copy `mcp_servers.example.json` to `mcp_servers.json` and edit as needed.
+
+You can also specify a custom path via environment variable:
 ```env
-MCP_SERVERS='[
-  {"name": "obp", "url": "http://localhost:8001/sse", "transport": "sse"},
-  {"name": "filesystem", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"], "transport": "stdio"}
-]'
+MCP_SERVERS_FILE=/path/to/my-mcp-config.json
 ```
 
 #### Server Configuration Options
@@ -279,28 +299,34 @@ MCP_SERVERS='[
 - **HTTP**: For HTTP-based MCP servers using streamable HTTP
 - **stdio**: For local process-based MCP servers (spawns a subprocess)
 
-#### Example: OBP MCP Server
+#### Example: Multiple Servers with Auth
 
-If you have an OBP MCP server running locally:
-
-```env
-MCP_SERVERS='[{"name": "obp", "url": "http://localhost:8001/sse", "transport": "sse"}]'
-```
-
-#### Example: Multiple Servers
-
-```env
-MCP_SERVERS='[
-  {"name": "obp", "url": "http://localhost:8001/sse", "transport": "sse"},
-  {"name": "weather", "url": "http://localhost:8002/mcp", "transport": "http", "headers": {"Authorization": "Bearer token123"}}
-]'
+```json
+{
+  "servers": [
+    {
+      "name": "obp",
+      "url": "http://localhost:8001/sse",
+      "transport": "sse"
+    },
+    {
+      "name": "weather",
+      "url": "http://localhost:8002/mcp",
+      "transport": "http",
+      "headers": {
+        "Authorization": "Bearer token123"
+      }
+    }
+  ]
+}
 ```
 
 #### Notes
 
-- If `MCP_SERVERS` is not set or is empty (`[]`), no MCP tools will be loaded
+- If no config file is found, no MCP tools will be loaded
 - Tools from all configured servers are combined and made available to the agent
 - Server names must be unique across configurations
+- Tools are loaded once at application startup
 
 ### Rate Limiting
 Default rate limiting on the stream and invoke endpoints can be set with the environment variable `GLOBAL_RATE_LIMIT`

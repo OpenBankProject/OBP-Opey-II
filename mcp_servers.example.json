@@ -1,0 +1,9 @@
+{
+  "servers": [
+    {
+      "name": "obp",
+      "url": "http://localhost:8001/sse",
+      "transport": "sse"
+    }
+  ]
+}

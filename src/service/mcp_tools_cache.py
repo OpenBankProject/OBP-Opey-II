@@ -7,6 +7,7 @@ This avoids the async-in-sync problem of loading tools per-session.
 import os
 import json
 import logging
+from pathlib import Path
 from typing import List, Optional
 
 from langchain_core.tools import BaseTool
@@ -18,19 +19,67 @@ logger = logging.getLogger(__name__)
 _mcp_tools: Optional[List[BaseTool]] = None
 _mcp_loader: Optional[MCPToolLoader] = None
 
+# Default config file path (relative to project root)
+DEFAULT_MCP_CONFIG_FILE = "mcp_servers.json"
+
+
+def _find_config_file() -> Optional[Path]:
+    """
+    Find the MCP servers config file.
+    
+    Checks in order:
+    1. Path specified in MCP_SERVERS_FILE environment variable
+    2. mcp_servers.json in current working directory
+    3. mcp_servers.json in src/ directory
+    """
+    # Check environment variable first
+    env_path = os.getenv("MCP_SERVERS_FILE")
+    if env_path:
+        path = Path(env_path)
+        if path.exists():
+            return path
+        logger.warning(f"MCP_SERVERS_FILE set to {env_path} but file not found")
+    
+    # Check current directory
+    cwd_path = Path.cwd() / DEFAULT_MCP_CONFIG_FILE
+    if cwd_path.exists():
+        return cwd_path
+    
+    # Check src directory (for when running from project root)
+    src_path = Path.cwd() / "src" / DEFAULT_MCP_CONFIG_FILE
+    if src_path.exists():
+        return src_path
+    
+    return None
+
 
 def _parse_mcp_config() -> List[MCPServerConfig]:
-    """Parse MCP_SERVERS environment variable into config objects."""
-    mcp_config_str = os.getenv("MCP_SERVERS", "[]")
+    """Parse MCP servers config file into config objects."""
+    config_file = _find_config_file()
     
-    try:
-        server_configs_raw = json.loads(mcp_config_str)
-    except json.JSONDecodeError:
-        logger.warning("Invalid MCP_SERVERS JSON, skipping MCP tools")
+    if not config_file:
+        logger.info(f"No MCP config file found (checked {DEFAULT_MCP_CONFIG_FILE})")
         return []
     
-    if not server_configs_raw:
-        logger.info("No MCP servers configured")
+    logger.info(f"Loading MCP config from {config_file}")
+    
+    try:
+        with open(config_file) as f:
+            config_data = json.load(f)
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in {config_file}: {e}")
+        return []
+    except IOError as e:
+        logger.error(f"Failed to read {config_file}: {e}")
+        return []
+    
+    # Support both {"servers": [...]} and [...] formats
+    if isinstance(config_data, dict):
+        server_configs_raw = config_data.get("servers", [])
+    elif isinstance(config_data, list):
+        server_configs_raw = config_data
+    else:
+        logger.error(f"Invalid config format in {config_file}")
         return []
     
     server_configs = []
