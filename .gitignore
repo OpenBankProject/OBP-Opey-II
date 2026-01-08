@@ -10,6 +10,7 @@ eval_results/
 evals/results
 src/evals/retrieval/results/
 .obp_data_hashes.json
+mcp_servers.json
 # Byte-compiled / optimized / DLL files
 *.py[cod]
 *$py.class
