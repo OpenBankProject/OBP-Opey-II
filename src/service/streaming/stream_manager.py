@@ -298,44 +298,40 @@ class StreamManager:
                     "payload_type": approval_payload.get("approval_type", "single")
                 })
                 
+                # Extract tool_calls from payload (new unified format)
+                tool_calls = approval_payload.get("tool_calls", [])
+                available_scopes = approval_payload.get("available_scopes", ["once"])
+                
                 # Check if it's a batch approval or single approval
-                if approval_payload.get("approval_type") == "batch":
+                if approval_payload.get("approval_type") == "batch" or len(tool_calls) > 1:
                     # Batch approval request
                     yield StreamEventFactory.batch_approval_request(
-                        tool_calls=approval_payload.get("tool_calls", []),
-                        options=approval_payload.get("options", [])
+                        tool_calls=tool_calls,
+                        options=available_scopes
                     )
-                else:
-                    # Single approval request with rich context
-                    # Convert enum values to strings for JSON serialization
-                    risk_level = approval_payload.get("risk_level", "moderate")
-                    if hasattr(risk_level, 'value'):
-                        risk_level = risk_level.value
-                    
-                    default_approval_level = approval_payload.get("default_approval_level", "once")
-                    if hasattr(default_approval_level, 'value'):
-                        default_approval_level = default_approval_level.value
-                    
-                    available_levels = approval_payload.get("available_approval_levels", ["once"])
-                    available_levels = [
-                        level.value if hasattr(level, 'value') else level
-                        for level in available_levels
-                    ]
+                elif tool_calls:
+                    # Single approval request - extract from first tool_call
+                    tc = tool_calls[0]
                     
                     yield StreamEventFactory.approval_request(
-                        tool_name=approval_payload.get("tool_name"),
-                        tool_call_id=approval_payload.get("tool_call_id"),
-                        tool_input=approval_payload.get("tool_input", {}),
-                        message=approval_payload.get("message", "Approval required"),
-                        # Enhanced fields from ApprovalContext
-                        risk_level=risk_level,
-                        affected_resources=approval_payload.get("affected_resources", []),
-                        reversible=approval_payload.get("reversible", True),
-                        estimated_impact=approval_payload.get("estimated_impact", ""),
-                        similar_operations_count=approval_payload.get("similar_operations_count", 0),
-                        available_approval_levels=available_levels,
-                        default_approval_level=default_approval_level
+                        tool_name=tc.get("tool_name"),
+                        tool_call_id=tc.get("tool_call_id"),
+                        tool_input=tc.get("tool_args", {}),
+                        message=tc.get("description") or "Approval required",
+                        risk_level="moderate",
+                        affected_resources=[],
+                        reversible=True,
+                        estimated_impact="",
+                        similar_operations_count=0,
+                        available_approval_levels=available_scopes,
+                        default_approval_level="once"
                     )
+                else:
+                    logger.warning("Interrupt payload has no tool_calls", extra={
+                        "event_type": "empty_interrupt_payload",
+                        "thread_id": thread_id,
+                        "payload_keys": list(approval_payload.keys())
+                    })
 
         except Exception as e:
             error_msg = f"Error handling approval check: {str(e)}"

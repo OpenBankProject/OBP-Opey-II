@@ -127,8 +127,15 @@ async def initialize_mcp_tools() -> List[BaseTool]:
         _mcp_tools = await _mcp_loader.load_tools()
         logger.info(f"Loaded {len(_mcp_tools)} MCP tools: {[t.name for t in _mcp_tools]}")
         return _mcp_tools
+    except ExceptionGroup as eg:
+        # Extract nested exceptions from TaskGroup/ExceptionGroup
+        logger.error(f"Failed to load MCP tools: {eg}")
+        for i, exc in enumerate(eg.exceptions):
+            logger.error(f"  Sub-exception {i+1}: {type(exc).__name__}: {exc}")
+        _mcp_tools = []
+        return []
     except Exception as e:
-        logger.error(f"Failed to load MCP tools: {e}")
+        logger.error(f"Failed to load MCP tools: {type(e).__name__}: {e}")
         _mcp_tools = []
         return []
 
