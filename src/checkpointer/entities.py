@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, Field
 from src.client.obp_client import OBPClient
+import json
 
 class OpeyCheckpointEntity(BaseModel):
     """OBP Dynamic Entity representation of a LangGraph checkpoint."""
@@ -73,26 +74,21 @@ class DynamicEntitiesManager:
         
 
     async def create(self, entity: OpeyCheckpointEntity | OpeyCheckpointWriteEntity):
-        await self.client.async_obp_requests(
-            method="POST",
-            body=str(entity.model_dump()),
-            path=self.endpoint_url
+        await self.client.post(
+            path=self.endpoint_url,
+            body=entity.model_dump()
         )
         
     async def delete(self, entity_id: str):
-        await self.client.async_obp_requests(
-            method="DELETE",
-            body="",
+        await self.client.delete(
             path=f"{self.endpoint_url}/{entity_id}"
         )
     
     async def read(self, entity_id: str) -> dict:
-        response = await self.client.async_obp_requests(
-            method="GET",
-            body="",
+        response = await self.client.get(
             path=f"{self.endpoint_url}/{entity_id}"
         )
-        return response
+        return json.loads(response) if isinstance(response, str) else response
 
 opey_checkpoint_entity = {
   "hasPersonalEntity": True,

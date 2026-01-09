@@ -160,7 +160,7 @@ def get_admin_client() -> OBPClient:
         >>> 
         >>> # Later, anywhere in the app
         >>> admin_client = get_admin_client()
-        >>> response = await admin_client.async_obp_requests("GET", "/obp/v6.0.0/banks", "")
+        >>> response = await admin_client.get("/obp/v6.0.0/banks")
     """
     return _admin_manager.get_client()
 

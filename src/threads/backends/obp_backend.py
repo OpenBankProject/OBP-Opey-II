@@ -80,7 +80,7 @@ def _check_for_entitlements(obp_client: OBPClient) -> bool:
         
     """
     try:
-        response = obp_client.sync_obp_requests("GET", "/obp/v5.1.0/my/entitlements", "", as_json=True)
+        response = obp_client.sync_get("/obp/v5.1.0/my/entitlements", as_json=True)
     except Exception as e:
         logger.error(f"Error checking entitlements: {e}")
         return False

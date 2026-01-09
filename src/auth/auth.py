@@ -459,10 +459,8 @@ async def create_admin_direct_login_auth(
         version = os.getenv('OBP_API_VERSION', 'v6.0.0')
         
         try:
-            response_json = await obp_client.async_obp_requests(
-                "GET", 
-                f"/obp/{version}/my/entitlements",
-                ""
+            response_json = await obp_client.get(
+                f"/obp/{version}/my/entitlements"
             )
             
             if not response_json:
