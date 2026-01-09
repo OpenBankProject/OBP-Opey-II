@@ -12,15 +12,15 @@ from service.service import app
 from httpx import AsyncClient, ASGITransport
 from asgi_lifespan import LifespanManager
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-def anyio_backend():
-    return "asyncio"
+# @pytest_asyncio.fixture(scope="session", loop_scope="session")
+# def anyio_backend():
+#     return "asyncio"
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def client():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost:5000") as client:
-        print("Client is ready")
-        yield client
+# @pytest_asyncio.fixture(scope="session", loop_scope="session")
+# async def client():
+#     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost:5000") as client:
+#         print("Client is ready")
+#         yield client
 
 @pytest.fixture(scope="session")
 def get_obp_consent():
