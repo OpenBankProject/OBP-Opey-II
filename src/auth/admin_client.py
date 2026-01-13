@@ -71,7 +71,28 @@ class AdminClientManager:
             
         except Exception as e:
             logger.error(f'❌ Failed to initialize admin OBP client: {e}')
+            # Clean up any partially created resources
+            await self._cleanup_partial_init()
             raise ValueError(f'Admin client initialization failed: {e}') from e
+    
+    async def _cleanup_partial_init(self) -> None:
+        """Clean up resources from a failed initialization."""
+        if self._client:
+            try:
+                await self._client.close()
+            except Exception as cleanup_error:
+                logger.debug(f'Error during cleanup: {cleanup_error}')
+        
+        if self._auth and hasattr(self._auth, 'async_requests_client'):
+            if self._auth.async_requests_client:
+                try:
+                    await self._auth.async_requests_client.close()
+                except Exception as cleanup_error:
+                    logger.debug(f'Error during cleanup: {cleanup_error}')
+        
+        self._client = None
+        self._auth = None
+        self._initialized = False
     
     def get_client(self) -> OBPClient:
         """
@@ -112,10 +133,16 @@ class AdminClientManager:
     
     async def close(self) -> None:
         """Clean up resources during app shutdown."""
+        # Close OBP client session
+        if self._client:
+            await self._client.close()
+            logger.info('🔌 Admin OBP client session closed')
+        
+        # Close auth session
         if self._auth and hasattr(self._auth, 'async_requests_client'):
             if self._auth.async_requests_client:
                 await self._auth.async_requests_client.close()
-                logger.info('🔌 Admin client HTTP session closed')
+                logger.info('🔌 Admin auth HTTP session closed')
         
         self._initialized = False
         self._client = None
@@ -160,7 +187,7 @@ def get_admin_client() -> OBPClient:
         >>> 
         >>> # Later, anywhere in the app
         >>> admin_client = get_admin_client()
-        >>> response = await admin_client.get("/obp/v6.0.0/banks")
+        >>> banks = await admin_client.get("/obp/v6.0.0/banks")
     """
     return _admin_manager.get_client()
 

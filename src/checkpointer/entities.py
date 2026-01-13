@@ -88,7 +88,7 @@ class DynamicEntitiesManager:
         response = await self.client.get(
             path=f"{self.endpoint_url}/{entity_id}"
         )
-        return json.loads(response) if isinstance(response, str) else response
+        return response.json()
 
 opey_checkpoint_entity = {
   "hasPersonalEntity": True,
