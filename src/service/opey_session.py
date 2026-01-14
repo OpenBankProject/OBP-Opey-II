@@ -15,7 +15,7 @@ from agent.components.tools.approval_models import (
 )
 
 from client.obp_client import OBPClient
-from service.checkpointer import get_global_checkpointer
+from service.checkpointer_registry import get_global_checkpointer
 from service.redis_client import get_redis_client
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_core.runnables.graph import MermaidDrawMethod
@@ -329,12 +329,17 @@ class OpeySession:
         """
         base_config = base_config or {}
         
-        # Session-level configuration (model context, approval manager)
+        # Session-level configuration (model context, approval manager, consent_id)
         session_configurable = {
             "model_name": self._model_name,
             "model_kwargs": {},  # Add model_kwargs if needed in future
             "approval_manager": self.approval_manager,
         }
+        
+        # Add consent_id for checkpoint operations if user is authenticated
+        # This is JSON-serializable unlike the OBPClient object
+        if not self.is_anonymous and self.consent_id:
+            session_configurable["consent_id"] = self.consent_id
         
         # Merge: base config takes precedence for runtime values like thread_id
         merged_configurable = {

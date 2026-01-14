@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, Field
-from src.client.obp_client import OBPClient
+from client.obp_client import OBPClient
 import json
 
 class OpeyCheckpointEntity(BaseModel):
@@ -22,13 +22,29 @@ class OpeyCheckpointEntity(BaseModel):
     @classmethod
     def to_obp_schema(cls) -> dict:
         json_schema = cls.model_json_schema()
+        
+        # Define examples for each field
+        examples = {
+            "thread_id": "thread-abc-123",
+            "checkpoint_id": "1ef89abc-def0-6789-abcd-ef0123456789",
+            "checkpoint_ns": "",
+            "parent_checkpoint_id": "1ef89abc-def0-6789-abcd-ef0123456788",
+            "checkpoint_data": '{"v": 1, "ts": "2024-01-01T00:00:00.000Z"}',
+            "metadata": '{"source": "loop", "step": 1}',
+            "created_at": "2024-01-01T00:00:00.000000"
+        }
+        
         return {
             "hasPersonalEntity": True,
             cls.obp_entity_name(): {
                 "description": cls.__doc__.strip(),
                 "required": json_schema["required"],
                 "properties": {
-                    k: {"type": v.get("type", "string"), "description": v.get("description", "")}
+                    k: {
+                        "type": v.get("type", "string"),
+                        "description": v.get("description", ""),
+                        "example": examples.get(k, "")
+                    }
                     for k, v in json_schema["properties"].items()
                 }
             }
@@ -53,13 +69,29 @@ class OpeyCheckpointWriteEntity(BaseModel):
     @classmethod
     def to_obp_schema(cls) -> dict:
         json_schema = cls.model_json_schema()
+        
+        # Define examples for each field
+        examples = {
+            "thread_id": "thread-abc-123",
+            "checkpoint_id": "1ef89abc-def0-6789-abcd-ef0123456789",
+            "checkpoint_ns": "",
+            "task_id": "task-node-1",
+            "idx": 0,
+            "channel": "messages",
+            "value": '["AI", {"content": "Hello"}]'
+        }
+        
         return {
             "hasPersonalEntity": True,
             cls.obp_entity_name(): {
                 "description": cls.__doc__.strip(),
                 "required": json_schema["required"],
                 "properties": {
-                    k: {"type": v.get("type", "string"), "description": v.get("description", "")}
+                    k: {
+                        "type": v.get("type", "string"),
+                        "description": v.get("description", ""),
+                        "example": examples.get(k, "" if v.get("type") == "string" else 0)
+                    }
                     for k, v in json_schema["properties"].items()
                 }
             }

@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import os
 from typing import AsyncGenerator
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
@@ -8,7 +9,8 @@ from .redis_client import get_redis_client
 from auth import initialize_admin_client, close_admin_client
 from .streaming.orchestrator_repository import orchestrator_repository
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from .checkpointer import checkpointers
+from checkpointer.obp_checkpoint_saver import OBPCheckpointSaver
+from .checkpointer_registry import checkpointers
 from database.startup_updater import update_database_on_startup
 
 logger = logging.getLogger("service.lifecycle")
@@ -69,10 +71,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     cleanup_task = asyncio.create_task(periodic_orchestrator_cleanup())
     cancellation_cleanup_task = asyncio.create_task(periodic_cancellation_cleanup())
     
-    # Ensures that the checkpointer is created and closed properly, and that only this one is used
-    # for the whole app
+    # Initialize checkpointers based on configuration
+    # OBP checkpointer setup (if configured)
+    if os.getenv('CHECKPOINTER_TYPE') == 'obp':
+        try:
+            obp_checkpointer = OBPCheckpointSaver()
+            await obp_checkpointer.setup()  # Creates dynamic entities using admin client, will fail if above admin init failed
+            checkpointers['obp'] = obp_checkpointer
+            logger.info("OBP checkpointer initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize OBP checkpointer: {e}")
+            logger.warning("Falling back to SQLite checkpointer")
+    
+    # SQLite checkpointer (default/fallback)
     async with AsyncSqliteSaver.from_conn_string('checkpoints.db') as sql_checkpointer:
         checkpointers['aiosql'] = sql_checkpointer
+        logger.info("SQLite checkpointer initialized successfully")
+        
         yield
 
     # Cleanup during shutdown
