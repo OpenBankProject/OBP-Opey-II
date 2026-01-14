@@ -1,6 +1,6 @@
 from langgraph.graph import END, StateGraph, START
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.prebuilt import tools_condition, ToolNode
+from langgraph.prebuilt.tool_node import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_core.tools import BaseTool
