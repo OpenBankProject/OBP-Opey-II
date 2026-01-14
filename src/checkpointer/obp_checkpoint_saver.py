@@ -122,6 +122,8 @@ class OBPCheckpointSaver(BaseCheckpointSaver[str]):
         Returns:
             bool: True if setup exists, False otherwise.
         """
+        logger = logging.getLogger('checkpointer.obp_checkpoint_saver')
+        
         try:
             response = await admin_client.get("/obp/v6.0.0/management/system-dynamic-entities")
             response_data = response.json()
@@ -129,17 +131,40 @@ class OBPCheckpointSaver(BaseCheckpointSaver[str]):
             raise RuntimeError(f"Error checking existing OBP setup: {e}") from e
         
         if not response_data or not isinstance(response_data, dict):
+            logger.info("Response data is empty or not a dict")
             return False
         
         existing_entities = response_data.get("dynamic_entities", [])
+        logger.info(f"Found {len(existing_entities)} existing dynamic entities")
+        
         required_entities = {OpeyCheckpointEntity.obp_entity_name(), OpeyCheckpointWriteEntity.obp_entity_name()}
         
-        for entity in existing_entities:
-            entity_name = next(iter(entity))
-            if entity_name in required_entities:
-                required_entities.remove(entity_name)
+        # Extract entity names from the response
+        # Each entity dict has keys: hasPersonalEntity, <EntityName>, userId, dynamicEntityId, record_count
+        # We need to find the key that's not one of the metadata keys
+        metadata_keys = {'hasPersonalEntity', 'userId', 'dynamicEntityId', 'record_count'}
+        found_entity_names = set()
         
-        return len(required_entities) == 0    
+        for entity in existing_entities:
+            if isinstance(entity, dict):
+                # Get all keys that aren't metadata
+                entity_name_keys = set(entity.keys()) - metadata_keys
+                if entity_name_keys:
+                    # Should only be one entity name key
+                    entity_name = entity_name_keys.pop()
+                    found_entity_names.add(entity_name)
+                    logger.debug(f"Found entity: {entity_name}")
+        
+        logger.info(f"Found entity names: {found_entity_names}")
+        
+        # Check if all required entities exist
+        missing = required_entities - found_entity_names
+        if missing:
+            logger.info(f"Missing entities: {missing}")
+            return False
+        
+        logger.info("✓ All required entities found")
+        return True    
     
     async def _create_dynamic_entities(self, admin_client: OBPClient) -> None:
         """Create the required Dynamic Entities in OBP.
@@ -318,19 +343,26 @@ class OBPCheckpointSaver(BaseCheckpointSaver[str]):
         Returns:
             The retrieved checkpoint tuple, or None if not found.
         """
+        logger = logging.getLogger('checkpointer.obp_checkpoint_saver')
+        
         await self.setup()
         client = self._get_client_from_config(config)
         thread_id = str(config["configurable"]["thread_id"])
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         checkpoint_id = get_checkpoint_id(config)
         
-        async with self.lock:
-            # Query dynamic entities for checkpoints using user's client
-            endpoint = f"/obp/v6.0.0/my/dynamic-entities/{OpeyCheckpointEntity.obp_entity_name()}"
-            
-            try:
+        logger.info(f"aget_tuple called: thread_id={thread_id}, checkpoint_ns={checkpoint_ns}, checkpoint_id={checkpoint_id}")
+        
+        try:
+            async with self.lock:
+                # Query dynamic entities for checkpoints using user's client
+                endpoint = f"/obp/dynamic-entity/my/{OpeyCheckpointEntity.obp_entity_name()}"
+                logger.info(f"Fetching checkpoints from: {endpoint}")
+                
                 response = await client.get(endpoint)
                 entities = response.json().get("dynamic_entities", [])
+                logger.info(f"Retrieved {len(entities)} checkpoint entities")
+                logger.debug(f"Raw response: {response.json()}")
                 
                 # Filter checkpoints
                 matching_checkpoints = [
@@ -341,7 +373,10 @@ class OBPCheckpointSaver(BaseCheckpointSaver[str]):
                 ]
                 
                 if not matching_checkpoints:
+                    logger.info("No matching checkpoints found")
                     return None
+                
+                logger.info(f"Found {len(matching_checkpoints)} matching checkpoints")
                 
                 # Get latest if no specific checkpoint_id
                 checkpoint_entity = max(
@@ -360,7 +395,7 @@ class OBPCheckpointSaver(BaseCheckpointSaver[str]):
                     }
                 
                 # Get pending writes
-                writes_endpoint = f"/obp/v6.0.0/my/dynamic-entities/{OpeyCheckpointWriteEntity.obp_entity_name()}"
+                writes_endpoint = f"/obp/dynamic-entity/my/{OpeyCheckpointWriteEntity.obp_entity_name()}"
                 writes_response = await client.get(writes_endpoint)
                 write_entities = writes_response.json().get("dynamic_entities", [])
                 
@@ -398,8 +433,11 @@ class OBPCheckpointSaver(BaseCheckpointSaver[str]):
                         for w in pending_writes
                     ],
                 )
-            except Exception:
-                return None
+        except Exception as e:
+            logger.error(f"Error retrieving checkpoint: {e}", exc_info=True)
+            return None
+        finally:
+            await client.close()
     
     async def alist(
         self,
@@ -430,85 +468,88 @@ class OBPCheckpointSaver(BaseCheckpointSaver[str]):
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         before_id = get_checkpoint_id(before) if before else None
         
-        async with self.lock:
-            endpoint = f"/obp/v6.0.0/my/dynamic-entities/{OpeyCheckpointEntity.obp_entity_name()}"
-            response = await client.get(endpoint)
-            entities = response.json().get("dynamic_entities", [])
+        try:
+            async with self.lock:
+                endpoint = f"/obp/dynamic-entity/my/{OpeyCheckpointEntity.obp_entity_name()}"
+                response = await client.get(endpoint)
+                entities = response.json().get("dynamic_entities", [])
             
-            # Filter checkpoints
-            filtered = entities
-            if thread_id:
-                filtered = [e for e in filtered if e.get("thread_id") == thread_id]
-            if checkpoint_ns:
-                filtered = [e for e in filtered if e.get("checkpoint_ns") == checkpoint_ns]
-            if before_id:
-                filtered = [e for e in filtered if e.get("checkpoint_id", "") < before_id]
-            
-            # Apply metadata filter
-            if filter:
-                filtered = [
-                    e for e in filtered
-                    if all(
-                        json.loads(e.get("metadata", "{}")).get(k) == v
-                        for k, v in filter.items()
+                # Filter checkpoints
+                filtered = entities
+                if thread_id:
+                    filtered = [e for e in filtered if e.get("thread_id") == thread_id]
+                if checkpoint_ns:
+                    filtered = [e for e in filtered if e.get("checkpoint_ns") == checkpoint_ns]
+                if before_id:
+                    filtered = [e for e in filtered if e.get("checkpoint_id", "") < before_id]
+                
+                # Apply metadata filter
+                if filter:
+                    filtered = [
+                        e for e in filtered
+                        if all(
+                            json.loads(e.get("metadata", "{}")).get(k) == v
+                            for k, v in filter.items()
+                        )
+                    ]
+                
+                # Sort by checkpoint_id descending
+                filtered.sort(key=lambda x: x.get("checkpoint_id", ""), reverse=True)
+                
+                # Apply limit
+                if limit:
+                    filtered = filtered[:limit]
+                
+                # Get all writes once
+                writes_endpoint = f"/obp/dynamic-entity/my/{OpeyCheckpointWriteEntity.obp_entity_name()}"
+                writes_response = await client.get(writes_endpoint)
+                all_writes = writes_response.json().get("dynamic_entities", [])
+                
+                for checkpoint_entity in filtered:
+                    thread_id = checkpoint_entity["thread_id"]
+                    checkpoint_ns = checkpoint_entity["checkpoint_ns"]
+                    checkpoint_id = checkpoint_entity["checkpoint_id"]
+                    
+                    # Get writes for this checkpoint
+                    pending_writes = [
+                        w for w in all_writes
+                        if w.get("thread_id") == thread_id
+                        and w.get("checkpoint_ns") == checkpoint_ns
+                        and w.get("checkpoint_id") == checkpoint_id
+                    ]
+                    pending_writes.sort(key=lambda w: (w.get("task_id", ""), w.get("idx", 0)))
+                    
+                    checkpoint_data = self.serde.loads(checkpoint_entity["checkpoint_data"])
+                    metadata = json.loads(checkpoint_entity.get("metadata", "{}"))
+                    
+                    parent_config = None
+                    if checkpoint_entity.get("parent_checkpoint_id"):
+                        parent_config = {
+                            "configurable": {
+                                "thread_id": thread_id,
+                                "checkpoint_ns": checkpoint_ns,
+                                "checkpoint_id": checkpoint_entity["parent_checkpoint_id"],
+                            }
+                        }
+                    
+                    yield CheckpointTuple(
+                        config={
+                            "configurable": {
+                                "thread_id": thread_id,
+                                "checkpoint_ns": checkpoint_ns,
+                                "checkpoint_id": checkpoint_id,
+                            }
+                        },
+                        checkpoint=checkpoint_data,
+                        metadata=cast(CheckpointMetadata, metadata),
+                        parent_config=parent_config,
+                        pending_writes=[
+                            (w["task_id"], w["channel"], self.serde.loads(w["value"]))
+                            for w in pending_writes
+                        ],
                     )
-                ]
-            
-            # Sort by checkpoint_id descending
-            filtered.sort(key=lambda x: x.get("checkpoint_id", ""), reverse=True)
-            
-            # Apply limit
-            if limit:
-                filtered = filtered[:limit]
-            
-            # Get all writes once
-            writes_endpoint = f"/obp/v6.0.0/my/dynamic-entities/{OpeyCheckpointWriteEntity.obp_entity_name()}"
-            writes_response = await client.get(writes_endpoint)
-            all_writes = writes_response.json().get("dynamic_entities", [])
-            
-            for checkpoint_entity in filtered:
-                thread_id = checkpoint_entity["thread_id"]
-                checkpoint_ns = checkpoint_entity["checkpoint_ns"]
-                checkpoint_id = checkpoint_entity["checkpoint_id"]
-                
-                # Get writes for this checkpoint
-                pending_writes = [
-                    w for w in all_writes
-                    if w.get("thread_id") == thread_id
-                    and w.get("checkpoint_ns") == checkpoint_ns
-                    and w.get("checkpoint_id") == checkpoint_id
-                ]
-                pending_writes.sort(key=lambda w: (w.get("task_id", ""), w.get("idx", 0)))
-                
-                checkpoint_data = self.serde.loads(checkpoint_entity["checkpoint_data"])
-                metadata = json.loads(checkpoint_entity.get("metadata", "{}"))
-                
-                parent_config = None
-                if checkpoint_entity.get("parent_checkpoint_id"):
-                    parent_config = {
-                        "configurable": {
-                            "thread_id": thread_id,
-                            "checkpoint_ns": checkpoint_ns,
-                            "checkpoint_id": checkpoint_entity["parent_checkpoint_id"],
-                        }
-                    }
-                
-                yield CheckpointTuple(
-                    config={
-                        "configurable": {
-                            "thread_id": thread_id,
-                            "checkpoint_ns": checkpoint_ns,
-                            "checkpoint_id": checkpoint_id,
-                        }
-                    },
-                    checkpoint=checkpoint_data,
-                    metadata=cast(CheckpointMetadata, metadata),
-                    parent_config=parent_config,
-                    pending_writes=[
-                        (w["task_id"], w["channel"], self.serde.loads(w["value"]))
-                        for w in pending_writes
-                    ],
-                )
+        finally:
+            await client.close()
     
     async def aput(
         self,
@@ -529,10 +570,14 @@ class OBPCheckpointSaver(BaseCheckpointSaver[str]):
         Returns:
             Updated configuration after storing the checkpoint.
         """
+        logger = logging.getLogger('checkpointer.obp_checkpoint_saver')
+        
         await self.setup()
         client = self._get_client_from_config(config)
         thread_id = str(config["configurable"]["thread_id"])
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        
+        logger.info(f"aput called: thread_id={thread_id}, checkpoint_id={checkpoint['id']}, checkpoint_ns={checkpoint_ns}")
         
         checkpoint_entity = OpeyCheckpointEntity(
             thread_id=thread_id,
@@ -543,17 +588,23 @@ class OBPCheckpointSaver(BaseCheckpointSaver[str]):
             metadata=json.dumps(get_checkpoint_metadata(config, metadata)),
         )
         
-        async with self.lock:
-            endpoint = f"/obp/v6.0.0/my/dynamic-entities/{OpeyCheckpointEntity.obp_entity_name()}"
-            await client.post(endpoint, body=checkpoint_entity.model_dump(mode="json"))
-        
-        return {
-            "configurable": {
-                "thread_id": thread_id,
-                "checkpoint_ns": checkpoint_ns,
-                "checkpoint_id": checkpoint["id"],
+        try:
+            async with self.lock:
+                endpoint = f"/obp/dynamic-entity/my/{OpeyCheckpointEntity.obp_entity_name()}"
+                logger.info(f"Saving checkpoint to: {endpoint}")
+                await client.post(endpoint, body=checkpoint_entity.model_dump(mode="json"))
+                logger.info(f"✓ Checkpoint saved successfully: {checkpoint['id']}")
+            
+            return {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "checkpoint_ns": checkpoint_ns,
+                    "checkpoint_id": checkpoint["id"],
+                }
             }
-        }
+        finally:
+            await client.close()
+    
     async def aput_writes(
         self,
         config: RunnableConfig,
@@ -570,11 +621,15 @@ class OBPCheckpointSaver(BaseCheckpointSaver[str]):
             task_id: Identifier for the task creating the writes.
             task_path: Path of the task creating the writes.
         """
+        logger = logging.getLogger('checkpointer.obp_checkpoint_saver')
+        
         await self.setup()
         client = self._get_client_from_config(config)
         thread_id = str(config["configurable"]["thread_id"])
         checkpoint_ns = str(config["configurable"].get("checkpoint_ns", ""))
         checkpoint_id = str(config["configurable"]["checkpoint_id"])
+        
+        logger.info(f"aput_writes called: thread_id={thread_id}, checkpoint_id={checkpoint_id}, task_id={task_id}, writes_count={len(writes)}")
         
         write_entities = []
         for idx, (channel, value) in enumerate(writes):
@@ -589,10 +644,16 @@ class OBPCheckpointSaver(BaseCheckpointSaver[str]):
             )
             write_entities.append(write_entity)
         
-        async with self.lock:
-            endpoint = f"/obp/v6.0.0/my/dynamic-entities/{OpeyCheckpointWriteEntity.obp_entity_name()}"
-            for entity in write_entities:
-                await self.client.post(endpoint, body=entity.model_dump(mode="json"))
+        try:
+            async with self.lock:
+                endpoint = f"/obp/dynamic-entity/my/{OpeyCheckpointWriteEntity.obp_entity_name()}"
+                logger.info(f"Saving {len(write_entities)} writes to: {endpoint}")
+                for idx, entity in enumerate(write_entities):
+                    await client.post(endpoint, body=entity.model_dump(mode="json"))
+                    logger.debug(f"  Write {idx+1}/{len(write_entities)} saved")
+                logger.info(f"✓ All {len(write_entities)} writes saved successfully")
+        finally:
+            await client.close()
     
     def get_next_version(self, current: str | None, channel: None) -> str:
         """Generate the next version ID for a channel.
