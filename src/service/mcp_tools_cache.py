@@ -63,7 +63,10 @@ def _parse_oauth_config(oauth_raw: Dict[str, Any]) -> OAuthConfig:
         scopes=scopes,
         client_name=oauth_raw.get("client_name", "OBP-Opey MCP Client"),
         callback_port=oauth_raw.get("callback_port"),
+        storage_type=oauth_raw.get("storage_type", "memory"),
+        redis_key_prefix=oauth_raw.get("redis_key_prefix", "mcp:oauth:tokens"),
         token_storage_path=oauth_raw.get("token_storage_path"),
+        encryption_key_env=oauth_raw.get("encryption_key_env", "MCP_TOKEN_ENCRYPTION_KEY"),
     )
 
 

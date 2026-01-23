@@ -3,26 +3,41 @@
     {
       "name": "obp",
       "url": "http://localhost:8001/sse",
-      "transport": "sse"
+      "transport": "sse",
+      "_comment": "Basic MCP server without authentication"
     },
     {
-      "name": "example-oauth-server",
+      "name": "example-oauth-memory",
       "url": "https://mcp-server.example.com/mcp",
       "transport": "streamable_http",
       "oauth": true,
-      "_comment": "Simple OAuth DCR - uses defaults"
+      "_comment": "OAuth DCR with in-memory token storage (dev only)"
     },
     {
-      "name": "example-oauth-custom",
+      "name": "example-oauth-redis",
       "url": "https://mcp-server.example.com/mcp",
       "transport": "http",
       "oauth": {
-        "scopes": ["read", "write"],
-        "client_name": "My Custom Client",
-        "callback_port": 3000,
-        "token_storage_path": "~/.local/share/obp-opey/oauth-tokens"
+        "scopes": ["email", "profile", "openid"],
+        "client_name": "OBP-Opey Production Client",
+        "storage_type": "redis",
+        "redis_key_prefix": "mcp:oauth:tokens"
       },
-      "_comment": "OAuth DCR with custom configuration"
+      "_comment": "OAuth DCR with Redis storage (recommended for production)"
+    },
+    {
+      "name": "example-oauth-encrypted-disk",
+      "url": "https://mcp-server.example.com/mcp",
+      "transport": "streamable_http",
+      "oauth": {
+        "scopes": ["email", "profile", "openid"],
+        "client_name": "My Custom Client",
+        "callback_port": 8080,
+        "storage_type": "encrypted_disk",
+        "token_storage_path": "~/.local/share/obp-opey/oauth-tokens",
+        "encryption_key_env": "MCP_TOKEN_ENCRYPTION_KEY"
+      },
+      "_comment": "OAuth DCR with encrypted disk storage (fallback option)"
     }
   ]
 }

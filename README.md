@@ -286,12 +286,13 @@ MCP_SERVERS_FILE=/path/to/my-mcp-config.json
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Unique identifier for the server |
-| `transport` | Yes | Connection type: `"sse"`, `"http"`, or `"stdio"` |
+| `transport` | Yes | Connection type: `"sse"`, `"http"`, `"streamable_http"`, or `"stdio"` |
 | `url` | For sse/http | Server URL (e.g., `http://localhost:8001/sse`) |
 | `command` | For stdio | Command to run (e.g., `"npx"`, `"python"`) |
 | `args` | For stdio | Command arguments as array |
 | `env` | No | Environment variables for stdio processes |
 | `headers` | No | HTTP headers for sse/http (e.g., for auth) |
+| `oauth` | No | OAuth 2.1 authentication configuration (see below) |
 
 #### Transport Types
 
@@ -299,7 +300,109 @@ MCP_SERVERS_FILE=/path/to/my-mcp-config.json
 - **HTTP**: For HTTP-based MCP servers using streamable HTTP
 - **stdio**: For local process-based MCP servers (spawns a subprocess)
 
-#### Example: Multiple Servers with Auth
+#### OAuth 2.1 Authentication with Dynamic Client Registration
+
+For MCP servers that require OAuth authentication, Opey II supports OAuth 2.1 with Dynamic Client Registration (DCR). This provides automatic, secure authentication without manual client credential setup.
+
+##### Simple OAuth Configuration (Development)
+
+```json
+{
+  "name": "oauth-server",
+  "url": "https://mcp-server.example.com/mcp",
+  "transport": "streamable_http",
+  "oauth": true
+}
+```
+
+This uses default settings:
+- In-memory token storage (**not suitable for production**)
+- Default client name: "OBP-Opey MCP Client"
+- Random callback port
+
+##### Production OAuth Configuration (Redis Storage)
+
+```json
+{
+  "name": "oauth-server",
+  "url": "https://mcp-server.example.com/mcp",
+  "transport": "http",
+  "oauth": {
+    "scopes": ["email", "profile", "openid"],
+    "client_name": "OBP-Opey Production",
+    "storage_type": "redis",
+    "redis_key_prefix": "mcp:oauth:tokens"
+  }
+}
+```
+
+**Recommended for production** - Stores tokens in Redis with:
+- Persistent storage across restarts
+- Secure Redis authentication
+- Automatic token expiration
+- Multi-instance support
+
+##### Alternative: Encrypted Disk Storage
+
+```json
+{
+  "name": "oauth-server",
+  "url": "https://mcp-server.example.com/mcp",
+  "transport": "streamable_http",
+  "oauth": {
+    "storage_type": "encrypted_disk",
+    "token_storage_path": "~/.local/share/obp-opey/oauth-tokens",
+    "encryption_key_env": "MCP_TOKEN_ENCRYPTION_KEY"
+  }
+}
+```
+
+Requires encryption key in environment:
+```bash
+# Generate a new encryption key
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# Set in .env
+MCP_TOKEN_ENCRYPTION_KEY="your-generated-key-here"
+```
+
+##### OAuth Configuration Options
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `scopes` | `string[]` | `["email", "profile", "openid"]` | OAuth scopes to request |
+| `client_name` | `string` | `"OBP-Opey MCP Client"` | Client name for DCR |
+| `callback_port` | `number` | Random | Fixed port for OAuth callback |
+| `storage_type` | `"memory"` \| `"redis"` \| `"encrypted_disk"` | `"memory"` | Token storage method |
+| `redis_key_prefix` | `string` | `"mcp:oauth:tokens"` | Redis key prefix (redis only) |
+| `token_storage_path` | `string` | - | Directory path (encrypted_disk only) |
+| `encryption_key_env` | `string` | `"MCP_TOKEN_ENCRYPTION_KEY"` | Env var for encryption key (encrypted_disk only) |
+
+##### OAuth Flow
+
+When connecting to an OAuth-protected server:
+1. **Discovery**: Auto-discovers OAuth endpoints via `/.well-known/oauth-authorization-server`
+2. **Registration**: Dynamically registers client with the OAuth provider (RFC 7591)
+3. **Authorization**: Opens browser for user login and consent
+4. **Token Exchange**: Exchanges authorization code for access/refresh tokens (PKCE)
+5. **Storage**: Securely stores tokens based on `storage_type`
+6. **Refresh**: Automatically refreshes expired tokens
+
+##### Dependencies
+
+OAuth support requires optional dependencies:
+
+```bash
+# For OAuth support
+pip install fastmcp
+
+# For encrypted disk storage
+pip install cryptography
+```
+
+If not installed, OAuth servers will be skipped with a warning.
+
+#### Example: Multiple Servers with Different Auth Methods
 
 ```json
 {
@@ -314,7 +417,15 @@ MCP_SERVERS_FILE=/path/to/my-mcp-config.json
       "url": "http://localhost:8002/mcp",
       "transport": "http",
       "headers": {
-        "Authorization": "Bearer token123"
+        "Authorization": "Bearer static-token-123"
+      }
+    },
+    {
+      "name": "secure-api",
+      "url": "https://api.example.com/mcp",
+      "transport": "streamable_http",
+      "oauth": {
+        "storage_type": "redis"
       }
     }
   ]

@@ -159,9 +159,11 @@ class MCPToolLoader:
             )
             return None
         
-        oauth_config = server.oauth
+        from .oauth import create_token_storage
         
-        # Build OAuth kwargs
+        logger.info(f"Configuring OAuth for MCP server '{server.name}'")
+        
+        oauth_config = server.oauth
         oauth_kwargs: Dict[str, Any] = {
             "mcp_url": server.url,
             "client_name": oauth_config.client_name,
@@ -173,24 +175,18 @@ class MCPToolLoader:
         if oauth_config.callback_port:
             oauth_kwargs["callback_port"] = oauth_config.callback_port
         
-        # Configure token storage if path is specified
-        if oauth_config.token_storage_path:
-            try:
-                from key_value.aio.stores.disk import DiskStore
-                oauth_kwargs["token_storage"] = DiskStore(
-                    directory=oauth_config.token_storage_path
-                )
-                logger.info(
-                    f"OAuth tokens for '{server.name}' will be stored at: "
-                    f"{oauth_config.token_storage_path}"
-                )
-            except ImportError:
-                logger.warning(
-                    "key-value package not installed for persistent token storage. "
-                    "Tokens will be stored in memory. Install with: pip install key-value"
-                )
+        token_storage = create_token_storage(
+            server_name=server.name,
+            storage_type=oauth_config.storage_type,
+            redis_key_prefix=oauth_config.redis_key_prefix,
+            token_storage=oauth_config.token_storage_path,
+            encryption_key_env=oauth_config.encryption_key_env,
+        )
         
-        logger.info(f"Configuring OAuth DCR authentication for MCP server '{server.name}'")
+        if token_storage is not None:
+            oauth_kwargs["token_storage"] = token_storage
+            
+        logger.info(f"OAuth DCR for '{server.name}' using {oauth_config.storage_type} storage")
         return OAuth(**oauth_kwargs)
     
     async def close(self) -> None:
