@@ -4,6 +4,25 @@
       "name": "obp",
       "url": "http://localhost:8001/sse",
       "transport": "sse"
+    },
+    {
+      "name": "example-oauth-server",
+      "url": "https://mcp-server.example.com/mcp",
+      "transport": "streamable_http",
+      "oauth": true,
+      "_comment": "Simple OAuth DCR - uses defaults"
+    },
+    {
+      "name": "example-oauth-custom",
+      "url": "https://mcp-server.example.com/mcp",
+      "transport": "http",
+      "oauth": {
+        "scopes": ["read", "write"],
+        "client_name": "My Custom Client",
+        "callback_port": 3000,
+        "token_storage_path": "~/.local/share/obp-opey/oauth-tokens"
+      },
+      "_comment": "OAuth DCR with custom configuration"
     }
   ]
 }

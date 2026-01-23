@@ -3,9 +3,12 @@ MCP tool integration.
 
 Loads tools from MCP servers and provides them to the agent.
 Approval is handled by the simplified approval system in approval.py.
+
+Supports OAuth 2.1 with Dynamic Client Registration (DCR) for servers
+that require authenticated access.
 """
 
-from typing import Any, Optional, List, Dict
+from typing import Any, Optional, List, Dict, Literal
 from dataclasses import dataclass, field
 import logging
 
@@ -16,14 +19,37 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class OAuthConfig:
+    """OAuth 2.1 configuration for MCP server authentication via Dynamic Client Registration."""
+    
+    scopes: Optional[List[str]] = None
+    client_name: str = "OBP-Opey MCP Client"
+    callback_port: Optional[int] = None
+    
+    # Storage strategy: "memory", "redis", "encrypted_disk", etc.
+    storage_type: Literal["memory", "redis", "encrypted_disk"] = "memory" # Default to in-memory storage DEV ONLY
+    
+    # For Redis Storage
+    redis_key_prefix: Optional[str] = "mcp:oauth:tokens"
+    
+    # For encrypted disk storage of OAuth tokens
+    token_storage_path: Optional[str] = None
+    encryption_key_env: Optional[str] = "MCP_TOKEN_ENCRYPTION_KEY"  # Env var name containing encryption key
+
+
+@dataclass
 class MCPServerConfig:
     """Configuration for a single MCP server connection."""
     name: str  # Server identifier
-    transport: str = "sse"  # "sse", "http", or "stdio"
+    transport: str = "sse"  # "sse", "http", "streamable_http", or "stdio"
     
     # HTTP/SSE transport
     url: Optional[str] = None
     headers: Dict[str, str] = field(default_factory=dict)
+    
+    # OAuth authentication (for HTTP-based transports)
+    # Can be "oauth" for auto-config, or an OAuthConfig for custom settings
+    oauth: Optional[OAuthConfig] = None
     
     # stdio transport
     command: Optional[str] = None
@@ -81,12 +107,18 @@ class MCPToolLoader:
         for server in self.servers:
             config: Dict[str, Any] = {"transport": server.transport}
             
-            if server.transport in ("http", "sse"):
+            if server.transport in ("http", "sse", "streamable_http"):
                 if not server.url:
                     raise ValueError(f"MCP server '{server.name}' requires 'url' for {server.transport} transport")
                 config["url"] = server.url
                 if server.headers:
                     config["headers"] = server.headers
+                
+                # Configure OAuth authentication if specified
+                if server.oauth is not None:
+                    auth = self._build_oauth_auth(server)
+                    if auth is not None:
+                        config["auth"] = auth
                     
             elif server.transport == "stdio":
                 if not server.command:
@@ -101,6 +133,65 @@ class MCPToolLoader:
             result[server.name] = config
             
         return result
+    
+    def _build_oauth_auth(self, server: MCPServerConfig) -> Optional[Any]:
+        """
+        Build OAuth authentication handler for the server.
+        
+        Uses FastMCP's OAuth helper which implements httpx.Auth and handles:
+        - OAuth server discovery via /.well-known/oauth-authorization-server
+        - Dynamic Client Registration (RFC 7591)
+        - Authorization Code flow with PKCE
+        - Token caching and refresh
+        
+        Returns:
+            An httpx.Auth compatible object, or None if OAuth is not available
+        """
+        if server.oauth is None or server.url is None:
+            return None
+        
+        try:
+            from fastmcp.client.auth import OAuth
+        except ImportError:
+            logger.warning(
+                f"fastmcp package not installed. OAuth authentication for "
+                f"server '{server.name}' will be skipped. Install with: pip install fastmcp"
+            )
+            return None
+        
+        oauth_config = server.oauth
+        
+        # Build OAuth kwargs
+        oauth_kwargs: Dict[str, Any] = {
+            "mcp_url": server.url,
+            "client_name": oauth_config.client_name,
+        }
+        
+        if oauth_config.scopes:
+            oauth_kwargs["scopes"] = oauth_config.scopes
+        
+        if oauth_config.callback_port:
+            oauth_kwargs["callback_port"] = oauth_config.callback_port
+        
+        # Configure token storage if path is specified
+        if oauth_config.token_storage_path:
+            try:
+                from key_value.aio.stores.disk import DiskStore
+                oauth_kwargs["token_storage"] = DiskStore(
+                    directory=oauth_config.token_storage_path
+                )
+                logger.info(
+                    f"OAuth tokens for '{server.name}' will be stored at: "
+                    f"{oauth_config.token_storage_path}"
+                )
+            except ImportError:
+                logger.warning(
+                    "key-value package not installed for persistent token storage. "
+                    "Tokens will be stored in memory. Install with: pip install key-value"
+                )
+        
+        logger.info(f"Configuring OAuth DCR authentication for MCP server '{server.name}'")
+        return OAuth(**oauth_kwargs)
     
     async def close(self) -> None:
         """Clean up connections."""

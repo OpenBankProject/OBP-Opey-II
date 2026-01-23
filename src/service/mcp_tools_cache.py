@@ -8,10 +8,10 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from langchain_core.tools import BaseTool
-from agent.components.tools import MCPToolLoader, MCPServerConfig
+from agent.components.tools import MCPToolLoader, MCPServerConfig, OAuthConfig
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,20 @@ def _find_config_file() -> Optional[Path]:
     return None
 
 
+def _parse_oauth_config(oauth_raw: Dict[str, Any]) -> OAuthConfig:
+    """Parse OAuth configuration from raw dictionary."""
+    scopes = oauth_raw.get("scopes")
+    if isinstance(scopes, str):
+        scopes = scopes.split()  # Split space-separated scopes
+    
+    return OAuthConfig(
+        scopes=scopes,
+        client_name=oauth_raw.get("client_name", "OBP-Opey MCP Client"),
+        callback_port=oauth_raw.get("callback_port"),
+        token_storage_path=oauth_raw.get("token_storage_path"),
+    )
+
+
 def _parse_mcp_config() -> List[MCPServerConfig]:
     """Parse MCP servers config file into config objects."""
     config_file = _find_config_file()
@@ -85,13 +99,25 @@ def _parse_mcp_config() -> List[MCPServerConfig]:
     server_configs = []
     for raw in server_configs_raw:
         try:
+            # Parse OAuth config if present
+            oauth_config = None
+            oauth_raw = raw.get("oauth")
+            if oauth_raw is not None:
+                if isinstance(oauth_raw, dict):
+                    oauth_config = _parse_oauth_config(oauth_raw)
+                elif oauth_raw is True:
+                    # Simple "oauth": true enables OAuth with defaults
+                    oauth_config = OAuthConfig()
+                    
             config = MCPServerConfig(
                 name=raw["name"],
                 url=raw.get("url"),
                 transport=raw.get("transport", "sse"),
+                headers=raw.get("headers", {}),
                 command=raw.get("command"),
                 args=raw.get("args", []),
                 env=raw.get("env"),
+                oauth=oauth_config,
             )
             server_configs.append(config)
         except (KeyError, TypeError) as e:

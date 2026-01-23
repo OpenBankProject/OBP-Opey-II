@@ -10,7 +10,7 @@ from typing import Optional
 import logging
 
 from .approval import ApprovalStore, ApprovalScope, ApprovalRequest, ApprovalDecision
-from .mcp_integration import MCPToolLoader, MCPServerConfig
+from .mcp_integration import MCPToolLoader, MCPServerConfig, OAuthConfig
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ __all__ = [
     # MCP integration
     "MCPToolLoader",
     "MCPServerConfig",
+    "OAuthConfig",
     # Factory
     "create_approval_store",
 ]
