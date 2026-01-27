@@ -10,6 +10,15 @@ from service.dependencies import get_auth_config
 
 logger = logging.getLogger('opey.service.routers.session')
 
+
+def _extract_bearer_token(request: Request) -> str | None:
+    """Extract bearer token from Authorization header if present."""
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        return auth_header[7:]  # Strip "Bearer " prefix
+    return None
+
+
 router = APIRouter(
     tags=["session"], 
 )
@@ -54,12 +63,17 @@ async def create_session(
         # Create anonymous session
         logger.info("Creating anonymous session")
         logger.debug("create_session - Proceeding to create anonymous session")
+        
+        # Extract bearer token from Authorization header (for MCP server auth)
+        bearer_token = _extract_bearer_token(request)
+        
         session_id = uuid.uuid4()
         session_data = SessionData(
             consent_id=None,
             is_anonymous=True,
             token_usage=0,
-            request_count=0
+            request_count=0,
+            bearer_token=bearer_token,
         )
 
         await backend.create(session_id, session_data)
@@ -89,6 +103,9 @@ async def create_session(
     if not user_id:
         raise HTTPException(status_code=403, detail="Could not retrieve user information from Consent-Id")
 
+    # Extract bearer token from Authorization header (for MCP server auth)
+    bearer_token = _extract_bearer_token(request)
+    
     session_id = uuid.uuid4()
 
     # Create a session using the OBP consent JWT
@@ -97,7 +114,8 @@ async def create_session(
         is_anonymous=False,
         token_usage=0,
         request_count=0,
-        user_id=user_id
+        user_id=user_id,
+        bearer_token=bearer_token,
     )
 
     await backend.create(session_id, session_data)
@@ -148,12 +166,16 @@ async def upgrade_session(
     if not session_data.is_anonymous:
         raise HTTPException(status_code=400, detail="Session is already authenticated")
 
+    # Extract bearer token (new or preserve existing)
+    bearer_token = _extract_bearer_token(request) or session_data.bearer_token
+
     # Update session data to authenticated
     updated_session_data = SessionData(
         consent_id=consent_id,
         is_anonymous=False,
         token_usage=session_data.token_usage,  # Preserve usage stats
-        request_count=session_data.request_count
+        request_count=session_data.request_count,
+        bearer_token=bearer_token,
     )
 
     await backend.update(session_id, updated_session_data)

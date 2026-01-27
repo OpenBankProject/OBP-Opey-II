@@ -6,6 +6,7 @@ from pathlib import Path
 from schema import Feedback, FeedbackResponse, UsageInfoResponse
 from typing import Any, Annotated
 from ..opey_session import OpeySession
+from ..dependencies import get_opey_session
 from auth.session import session_cookie
 import logging
 
@@ -24,7 +25,7 @@ async def get_status() -> dict[str, Any]:
     return status_info
 
 @router.get("/mermaid_diagram", dependencies=[Depends(session_cookie)])
-async def get_mermaid_diagram(opey_session: Annotated[OpeySession, Depends()]) -> FileResponse:
+async def get_mermaid_diagram(opey_session: Annotated[OpeySession, Depends(get_opey_session)]) -> FileResponse:
     svg_path = Path("../resources/mermaid_diagram.svg")
     
     try:
@@ -64,7 +65,7 @@ async def feedback(feedback: Feedback) -> FeedbackResponse:
 
 
 @router.get("/usage", dependencies=[Depends(session_cookie)])
-async def get_usage(opey_session: Annotated[OpeySession, Depends()]) -> UsageInfoResponse:
+async def get_usage(opey_session: Annotated[OpeySession, Depends(get_opey_session)]) -> UsageInfoResponse:
     """
     Get detailed usage information for the current session.
     """

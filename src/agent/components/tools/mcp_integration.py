@@ -2,13 +2,21 @@
 MCP tool integration.
 
 Loads tools from MCP servers and provides them to the agent.
-Approval is handled by the simplified approval system in approval.py.
 
-Supports OAuth 2.1 with Dynamic Client Registration (DCR) for servers
-that require authenticated access.
+Supports two authentication modes:
+1. Bearer token pass-through: Frontend handles OAuth, passes token to agent,
+   which forwards it to MCP servers via Authorization header using interceptors.
+2. No auth: For MCP servers that don't require authentication.
+
+Architecture (Bearer Token Pass-Through):
+- Frontend performs OAuth flow with IdP (e.g., OBP-OIDC)
+- Frontend sends bearer token to Agent API
+- Agent stores token in session/config
+- Tool interceptor injects token into MCP requests at invocation time
+- MCP server validates token via JWKS
 """
 
-from typing import Any, Optional, List, Dict, Literal
+from typing import Any, Optional, List, Dict, Callable, Awaitable
 from dataclasses import dataclass, field
 import logging
 
@@ -19,37 +27,18 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class OAuthConfig:
-    """OAuth 2.1 configuration for MCP server authentication via Dynamic Client Registration."""
-    
-    scopes: Optional[List[str]] = None
-    client_name: str = "OBP-Opey MCP Client"
-    callback_port: Optional[int] = None
-    
-    # Storage strategy: "memory", "redis", "encrypted_disk", etc.
-    storage_type: Literal["memory", "redis", "encrypted_disk"] = "memory" # Default to in-memory storage DEV ONLY
-    
-    # For Redis Storage
-    redis_key_prefix: Optional[str] = "mcp:oauth:tokens"
-    
-    # For encrypted disk storage of OAuth tokens
-    token_storage_path: Optional[str] = None
-    encryption_key_env: Optional[str] = "MCP_TOKEN_ENCRYPTION_KEY"  # Env var name containing encryption key
-
-
-@dataclass
 class MCPServerConfig:
     """Configuration for a single MCP server connection."""
     name: str  # Server identifier
-    transport: str = "sse"  # "sse", "http", "streamable_http", or "stdio"
+    transport: str = "streamable_http"  # "sse", "http", "streamable_http", or "stdio"
     
     # HTTP/SSE transport
     url: Optional[str] = None
     headers: Dict[str, str] = field(default_factory=dict)
     
-    # OAuth authentication (for HTTP-based transports)
-    # Can be "oauth" for auto-config, or an OAuthConfig for custom settings
-    oauth: Optional[OAuthConfig] = None
+    # Whether this server requires bearer token authentication
+    # If True, the bearer token from the session will be added to requests
+    requires_auth: bool = False
     
     # stdio transport
     command: Optional[str] = None
@@ -61,16 +50,20 @@ class MCPToolLoader:
     """
     Loads tools from MCP servers.
     
-    Simple responsibility: connect to servers, get tools, return them.
-    Approval logic is handled separately by ApprovalStore.
+    Supports two modes:
+    1. Static tools (no auth): Load tools once at startup
+    2. Per-request tools (with bearer token): Create client per-request with user's token
     """
     
-    def __init__(self, servers: List[MCPServerConfig]):
+    def __init__(self, servers: List[MCPServerConfig], bearer_token: Optional[str] = None):
         """
         Args:
             servers: List of server configurations
+            bearer_token: Optional bearer token for authenticated requests.
+                         If provided, adds Authorization header to servers with requires_auth=True.
         """
         self.servers = servers
+        self.bearer_token = bearer_token
         self._client: Optional[MultiServerMCPClient] = None
         self._tools: List[BaseTool] = []
     
@@ -111,14 +104,17 @@ class MCPToolLoader:
                 if not server.url:
                     raise ValueError(f"MCP server '{server.name}' requires 'url' for {server.transport} transport")
                 config["url"] = server.url
-                if server.headers:
-                    config["headers"] = server.headers
                 
-                # Configure OAuth authentication if specified
-                if server.oauth is not None:
-                    auth = self._build_oauth_auth(server)
-                    if auth is not None:
-                        config["auth"] = auth
+                # Build headers, injecting bearer token if needed
+                headers = dict(server.headers)  # Copy to avoid mutating config
+                if server.requires_auth and self.bearer_token:
+                    headers["Authorization"] = f"Bearer {self.bearer_token}"
+                    logger.debug(f"Added bearer token to '{server.name}' headers")
+                elif server.requires_auth and not self.bearer_token:
+                    logger.warning(f"MCP server '{server.name}' requires auth but no bearer token provided")
+                
+                if headers:
+                    config["headers"] = headers
                     
             elif server.transport == "stdio":
                 if not server.command:
@@ -134,62 +130,80 @@ class MCPToolLoader:
             
         return result
     
-    def _build_oauth_auth(self, server: MCPServerConfig) -> Optional[Any]:
-        """
-        Build OAuth authentication handler for the server.
-        
-        Uses FastMCP's OAuth helper which implements httpx.Auth and handles:
-        - OAuth server discovery via /.well-known/oauth-authorization-server
-        - Dynamic Client Registration (RFC 7591)
-        - Authorization Code flow with PKCE
-        - Token caching and refresh
-        
-        Returns:
-            An httpx.Auth compatible object, or None if OAuth is not available
-        """
-        if server.oauth is None or server.url is None:
-            return None
-        
-        try:
-            from fastmcp.client.auth import OAuth
-        except ImportError:
-            logger.warning(
-                f"fastmcp package not installed. OAuth authentication for "
-                f"server '{server.name}' will be skipped. Install with: pip install fastmcp"
-            )
-            return None
-        
-        from .oauth import create_token_storage
-        
-        logger.info(f"Configuring OAuth for MCP server '{server.name}'")
-        
-        oauth_config = server.oauth
-        oauth_kwargs: Dict[str, Any] = {
-            "mcp_url": server.url,
-            "client_name": oauth_config.client_name,
-        }
-        
-        if oauth_config.scopes:
-            oauth_kwargs["scopes"] = oauth_config.scopes
-        
-        if oauth_config.callback_port:
-            oauth_kwargs["callback_port"] = oauth_config.callback_port
-        
-        token_storage = create_token_storage(
-            server_name=server.name,
-            storage_type=oauth_config.storage_type,
-            redis_key_prefix=oauth_config.redis_key_prefix,
-            token_storage=oauth_config.token_storage_path,
-            encryption_key_env=oauth_config.encryption_key_env,
-        )
-        
-        if token_storage is not None:
-            oauth_kwargs["token_storage"] = token_storage
-            
-        logger.info(f"OAuth DCR for '{server.name}' using {oauth_config.storage_type} storage")
-        return OAuth(**oauth_kwargs)
-    
     async def close(self) -> None:
         """Clean up connections."""
         self._client = None
         self._tools = []
+
+
+async def create_mcp_tools_with_auth(
+    servers: List[MCPServerConfig], 
+    bearer_token: Optional[str] = None
+) -> List[BaseTool]:
+    """
+    Factory function to create MCP tools with optional bearer token authentication.
+    
+    Use this for per-request tool creation when user has a bearer token.
+    
+    Args:
+        servers: List of MCP server configurations
+        bearer_token: OAuth bearer token from frontend (optional)
+        
+    Returns:
+        List of LangChain-compatible tools
+    """
+    loader = MCPToolLoader(servers=servers, bearer_token=bearer_token)
+    try:
+        return await loader.load_tools()
+    except Exception as e:
+        logger.error(f"Failed to load MCP tools: {e}")
+        return []
+
+
+def create_bearer_token_interceptor(
+    bearer_token: str,
+    server_names: Optional[List[str]] = None,
+) -> Callable:
+    """
+    Create a tool interceptor that injects bearer token into MCP requests.
+    
+    This interceptor modifies the request headers to include an Authorization
+    header with the bearer token. It's used for MCP servers that validate
+    tokens via JWKS (bearer-only auth mode).
+    
+    Args:
+        bearer_token: OAuth bearer token to inject
+        server_names: Optional list of server names to apply the token to.
+                     If None, applies to all servers.
+    
+    Returns:
+        A tool interceptor function compatible with langchain-mcp-adapters
+        
+    Example:
+        interceptor = create_bearer_token_interceptor("eyJhbGci...")
+        client = MultiServerMCPClient(config, tool_interceptors=[interceptor])
+    """
+    from langchain_mcp_adapters.interceptors import MCPToolCallRequest
+    from mcp.types import CallToolResult
+    
+    async def bearer_token_interceptor(
+        request: MCPToolCallRequest,
+        handler: Callable[[MCPToolCallRequest], Awaitable[CallToolResult]],
+    ) -> CallToolResult:
+        """Inject bearer token into request headers."""
+        # Check if we should apply to this server
+        if server_names is not None and request.server_name not in server_names:
+            return await handler(request)
+        
+        # Inject bearer token into headers
+        current_headers = request.headers or {}
+        updated_headers = {
+            **current_headers,
+            "Authorization": f"Bearer {bearer_token}",
+        }
+        modified_request = request.override(headers=updated_headers)
+        
+        logger.debug(f"Injected bearer token for MCP server '{request.server_name}'")
+        return await handler(modified_request)
+    
+    return bearer_token_interceptor

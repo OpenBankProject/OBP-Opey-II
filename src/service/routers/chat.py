@@ -5,7 +5,7 @@ from typing import Annotated, Any
 from schema import UserInput, ChatMessage, StreamInput, ToolCallApproval
 from ..opey_session import OpeySession
 from langgraph.graph.state import CompiledStateGraph
-from ..dependencies import get_stream_manager
+from ..dependencies import get_stream_manager, get_opey_session
 from ..streaming import StreamManager
 
 import logging
@@ -34,7 +34,7 @@ def _sse_response_example() -> dict[int, Any]:
 
 
 @router.post("/invoke")
-async def invoke(user_input: UserInput, request: Request, opey_session: Annotated[OpeySession, Depends()]) -> ChatMessage:
+async def invoke(user_input: UserInput, request: Request, opey_session: Annotated[OpeySession, Depends(get_opey_session)]) -> ChatMessage:
     """
     Invoke the agent with user input to retrieve a final response.
 

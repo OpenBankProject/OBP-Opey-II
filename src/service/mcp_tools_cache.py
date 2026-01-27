@@ -1,8 +1,9 @@
 """
 Application-level MCP tools cache.
 
-Loads MCP tools once at startup and provides them to all sessions.
-This avoids the async-in-sync problem of loading tools per-session.
+Loads MCP server configurations at startup. Tools can be loaded:
+1. At startup (for servers that don't require auth)
+2. Per-request with bearer token (for servers requiring user authentication)
 """
 import os
 import json
@@ -11,13 +12,14 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from langchain_core.tools import BaseTool
-from agent.components.tools import MCPToolLoader, MCPServerConfig, OAuthConfig
+from agent.components.tools import MCPToolLoader, MCPServerConfig, create_mcp_tools_with_auth
 
 logger = logging.getLogger(__name__)
 
 # Module-level cache
 _mcp_tools: Optional[List[BaseTool]] = None
 _mcp_loader: Optional[MCPToolLoader] = None
+_server_configs: Optional[List[MCPServerConfig]] = None
 
 # Default config file path (relative to project root)
 DEFAULT_MCP_CONFIG_FILE = "mcp_servers.json"
@@ -53,23 +55,6 @@ def _find_config_file() -> Optional[Path]:
     return None
 
 
-def _parse_oauth_config(oauth_raw: Dict[str, Any]) -> OAuthConfig:
-    """Parse OAuth configuration from raw dictionary."""
-    scopes = oauth_raw.get("scopes")
-    if isinstance(scopes, str):
-        scopes = scopes.split()  # Split space-separated scopes
-    
-    return OAuthConfig(
-        scopes=scopes,
-        client_name=oauth_raw.get("client_name", "OBP-Opey MCP Client"),
-        callback_port=oauth_raw.get("callback_port"),
-        storage_type=oauth_raw.get("storage_type", "memory"),
-        redis_key_prefix=oauth_raw.get("redis_key_prefix", "mcp:oauth:tokens"),
-        token_storage_path=oauth_raw.get("token_storage_path"),
-        encryption_key_env=oauth_raw.get("encryption_key_env", "MCP_TOKEN_ENCRYPTION_KEY"),
-    )
-
-
 def _parse_mcp_config() -> List[MCPServerConfig]:
     """Parse MCP servers config file into config objects."""
     config_file = _find_config_file()
@@ -102,25 +87,15 @@ def _parse_mcp_config() -> List[MCPServerConfig]:
     server_configs = []
     for raw in server_configs_raw:
         try:
-            # Parse OAuth config if present
-            oauth_config = None
-            oauth_raw = raw.get("oauth")
-            if oauth_raw is not None:
-                if isinstance(oauth_raw, dict):
-                    oauth_config = _parse_oauth_config(oauth_raw)
-                elif oauth_raw is True:
-                    # Simple "oauth": true enables OAuth with defaults
-                    oauth_config = OAuthConfig()
-                    
             config = MCPServerConfig(
                 name=raw["name"],
                 url=raw.get("url"),
-                transport=raw.get("transport", "sse"),
+                transport=raw.get("transport", "streamable_http"),
                 headers=raw.get("headers", {}),
+                requires_auth=raw.get("requires_auth", False),
                 command=raw.get("command"),
                 args=raw.get("args", []),
                 env=raw.get("env"),
-                oauth=oauth_config,
             )
             server_configs.append(config)
         except (KeyError, TypeError) as e:
@@ -137,20 +112,29 @@ async def initialize_mcp_tools() -> List[BaseTool]:
     Call this from FastAPI's lifespan handler. Tools are cached
     and available via get_mcp_tools() for all sessions.
     
+    Note: For servers with requires_auth=True, tools are loaded but
+    will fail at runtime if no bearer token is provided. Use
+    get_mcp_tools_with_auth() for authenticated access.
+    
     Returns:
         List of loaded tools (also cached globally)
     """
-    global _mcp_tools, _mcp_loader
+    global _mcp_tools, _mcp_loader, _server_configs
     
-    server_configs = _parse_mcp_config()
+    _server_configs = _parse_mcp_config()
     
-    if not server_configs:
+    if not _server_configs:
         _mcp_tools = []
         return []
     
-    logger.info(f"Loading tools from {len(server_configs)} MCP server(s)...")
+    # Log which servers require auth
+    auth_servers = [s.name for s in _server_configs if s.requires_auth]
+    if auth_servers:
+        logger.info(f"Servers requiring bearer token auth: {auth_servers}")
     
-    _mcp_loader = MCPToolLoader(servers=server_configs)
+    logger.info(f"Loading tools from {len(_server_configs)} MCP server(s)...")
+    
+    _mcp_loader = MCPToolLoader(servers=_server_configs)
     
     try:
         _mcp_tools = await _mcp_loader.load_tools()
@@ -171,10 +155,12 @@ async def initialize_mcp_tools() -> List[BaseTool]:
 
 def get_mcp_tools() -> List[BaseTool]:
     """
-    Get cached MCP tools.
+    Get cached MCP tools (loaded at startup).
     
     Must call initialize_mcp_tools() first (typically at app startup).
     Returns empty list if not initialized or initialization failed.
+    
+    Note: For authenticated MCP servers, use get_mcp_tools_with_auth() instead.
     """
     if _mcp_tools is None:
         logger.warning("MCP tools not initialized - call initialize_mcp_tools() first")
@@ -182,9 +168,42 @@ def get_mcp_tools() -> List[BaseTool]:
     return _mcp_tools
 
 
+def get_server_configs() -> List[MCPServerConfig]:
+    """Get the parsed MCP server configurations."""
+    if _server_configs is None:
+        return _parse_mcp_config()
+    return _server_configs
+
+
+def get_auth_required_servers() -> List[str]:
+    """Get list of server names that require bearer token authentication."""
+    configs = get_server_configs()
+    return [s.name for s in configs if s.requires_auth]
+
+
+async def get_mcp_tools_with_auth(bearer_token: Optional[str] = None) -> List[BaseTool]:
+    """
+    Get MCP tools with optional bearer token authentication.
+    
+    Creates a new MCP client connection with the provided bearer token.
+    Use this for per-request tool access when user has authenticated via OAuth.
+    
+    Args:
+        bearer_token: OAuth bearer token from frontend (optional)
+        
+    Returns:
+        List of LangChain-compatible tools
+    """
+    configs = get_server_configs()
+    if not configs:
+        return []
+    
+    return await create_mcp_tools_with_auth(configs, bearer_token)
+
+
 async def close_mcp_tools() -> None:
     """Clean up MCP connections during shutdown."""
-    global _mcp_tools, _mcp_loader
+    global _mcp_tools, _mcp_loader, _server_configs
     
     if _mcp_loader:
         await _mcp_loader.close()
@@ -192,3 +211,4 @@ async def close_mcp_tools() -> None:
     
     _mcp_tools = None
     _mcp_loader = None
+    _server_configs = None

@@ -8,7 +8,7 @@ from uuid import UUID
 
 from agent.graph_builder import OpeyAgentGraphBuilder, create_basic_opey_graph
 from agent.components.tools import create_approval_store
-from service.mcp_tools_cache import get_mcp_tools
+from service.mcp_tools_cache import get_mcp_tools, get_mcp_tools_with_auth, get_auth_required_servers
 
 from service.checkpointer import get_global_checkpointer
 from service.redis_client import get_redis_client
@@ -61,26 +61,52 @@ class OpeySession:
         if not self.is_anonymous:
             self.auth = OBPConsentAuth(consent_id=self.consent_id)
 
+        # Store bearer token for MCP authentication
+        self._bearer_token = session_data.bearer_token
+        
+        # Store dependencies for async initialization
+        self._checkpointer = checkpointer
+
         obp_api_mode = os.getenv("OBP_API_MODE")
 
         # For anonymous sessions, limit to SAFE or NONE modes only
         if self.is_anonymous and obp_api_mode in ["DANGEROUS", "TEST"]:
             logger.warning(f"Anonymous session attempted to use {obp_api_mode} mode. Defaulting to SAFE mode.")
             obp_api_mode = "SAFE"
+        
+        self._obp_api_mode = obp_api_mode
+        self.graph = None  # Will be initialized in async_init()
 
-        # Get tools from application-level cache (loaded at startup)
-        tools = get_mcp_tools()
+    async def async_init(self) -> "OpeySession":
+        """
+        Async initialization for components that require async setup.
+        
+        This handles loading MCP tools with bearer token authentication when needed.
+        Must be called after __init__ before using the session.
+        
+        Returns:
+            self for chaining
+        """
+        # Get tools - use authenticated if bearer token present and servers require it
+        auth_servers = get_auth_required_servers()
+        if self._bearer_token and auth_servers:
+            logger.info(f"Loading MCP tools with bearer token for servers: {auth_servers}")
+            tools = await get_mcp_tools_with_auth(self._bearer_token)
+        else:
+            # Use cached tools from startup
+            tools = get_mcp_tools()
+        
         if not tools:
             logger.warning("No MCP tools available - agent will have limited capabilities")
 
         # Initialize the graph with the appropriate tools based on the OBP API mode
-        match obp_api_mode:
+        match self._obp_api_mode:
             case "NONE":
                 logger.info("OBP API mode set to NONE: Calls to the OBP-API will not be available")
                 self.graph = (OpeyAgentGraphBuilder()
                               .with_tools(tools)
                               .with_model(self._model_name, temperature=0.5)
-                              .with_checkpointer(checkpointer)
+                              .with_checkpointer(self._checkpointer)
                               .enable_human_review(False)
                               .build())
 
@@ -92,7 +118,7 @@ class OpeySession:
                                  .with_tools(tools)
                                  .with_model(self._model_name, temperature=0.5)
                                  .add_to_system_prompt(prompt_addition)
-                                 .with_checkpointer(checkpointer)
+                                 .with_checkpointer(self._checkpointer)
                                  .enable_human_review(False)
                                  .build())
                 else:
@@ -100,7 +126,7 @@ class OpeySession:
                     self.graph = (OpeyAgentGraphBuilder()
                                  .with_tools(tools)
                                  .with_model(self._model_name, temperature=0.5)
-                                 .with_checkpointer(checkpointer)
+                                 .with_checkpointer(self._checkpointer)
                                  .enable_human_review(False)
                                  .build())
 
@@ -109,7 +135,7 @@ class OpeySession:
                 self.graph = (OpeyAgentGraphBuilder()
                              .with_tools(tools)
                              .with_model(self._model_name, temperature=0.5)
-                             .with_checkpointer(checkpointer)
+                             .with_checkpointer(self._checkpointer)
                              .enable_human_review(True)
                              .build())
 
@@ -120,16 +146,17 @@ class OpeySession:
                              .with_tools(tools)
                              .add_to_system_prompt(test_prompt)
                              .with_model(self._model_name, temperature=0.5)
-                             .with_checkpointer(checkpointer)
+                             .with_checkpointer(self._checkpointer)
                              .enable_human_review(False)
                              .build())
 
             case _:
-                logger.error(f"OBP API mode set to {obp_api_mode}: Unknown OBP API mode. Defaulting to NONE.")
+                logger.error(f"OBP API mode set to {self._obp_api_mode}: Unknown OBP API mode. Defaulting to NONE.")
                 self.graph = create_basic_opey_graph(tools)
-                self.graph.checkpointer = checkpointer
-        
-        self.graph.checkpointer = checkpointer
+                self.graph.checkpointer = self._checkpointer
+
+        self.graph.checkpointer = self._checkpointer
+        return self
         
     def _setup_model(self):
         """

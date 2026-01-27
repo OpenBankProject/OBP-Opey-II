@@ -8,3 +8,5 @@ class SessionData(BaseModel):
     token_usage: int = 0
     request_count: int = 0
     user_id: Optional[str] = None
+    # OAuth bearer token from frontend (for MCP server authentication)
+    bearer_token: Optional[str] = None
