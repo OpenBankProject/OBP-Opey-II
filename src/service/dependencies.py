@@ -4,6 +4,7 @@ FastAPI dependencies for the Opey service.
 This module provides reusable dependency functions that can be injected
 into route handlers throughout the application.
 """
+import logging
 from functools import lru_cache
 from typing import Annotated
 from uuid import UUID
@@ -11,12 +12,22 @@ from uuid import UUID
 from fastapi import Depends, Request
 
 from auth.auth import AuthConfig, OBPConsentAuth
-from auth.session import session_verifier, SessionData, session_cookie
+from auth.session import session_verifier, SessionData, session_cookie, backend
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from .opey_session import OpeySession
 from .streaming.stream_manager import StreamManager
 from .checkpointer import get_global_checkpointer
+
+logger = logging.getLogger(__name__)
+
+
+def _extract_bearer_token(request: Request) -> str | None:
+    """Extract bearer token from Authorization header if present."""
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        return auth_header[7:]  # Strip "Bearer " prefix
+    return None
 
 
 @lru_cache
@@ -44,8 +55,10 @@ async def get_opey_session(
     """
     Async dependency for creating fully initialized OpeySession instances.
     
-    This handles the two-phase initialization required for sessions with
-    bearer token authentication - sync init followed by async tool loading.
+    Implements hybrid bearer token handling:
+    - Extracts fresh token from Authorization header if present
+    - Falls back to stored session token if no header
+    - Updates session if header token differs from stored
     
     Args:
         request: FastAPI request
@@ -56,8 +69,21 @@ async def get_opey_session(
     Returns:
         Fully initialized OpeySession with loaded tools
     """
+    # Hybrid token handling: prefer fresh header token, fallback to stored
+    header_token = _extract_bearer_token(request)
+    stored_token = session_data.bearer_token
+    
+    # Determine which token to use
+    bearer_token = header_token or stored_token
+    
+    # Update stored token if header provides a new one
+    if header_token and header_token != stored_token:
+        logger.debug(f"Updating stored bearer token for session {session_id}")
+        session_data.bearer_token = header_token
+        await backend.update(session_id, session_data)
+    
     session = OpeySession(request, session_data, session_id, checkpointer)
-    await session.async_init()
+    await session.async_init(bearer_token=bearer_token)
     return session
 
 

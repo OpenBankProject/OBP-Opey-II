@@ -77,21 +77,28 @@ class OpeySession:
         self._obp_api_mode = obp_api_mode
         self.graph = None  # Will be initialized in async_init()
 
-    async def async_init(self) -> "OpeySession":
+    async def async_init(self, bearer_token: str | None = None) -> "OpeySession":
         """
         Async initialization for components that require async setup.
         
         This handles loading MCP tools with bearer token authentication when needed.
         Must be called after __init__ before using the session.
         
+        Args:
+            bearer_token: OAuth bearer token for MCP server authentication.
+                         If provided, overrides the token stored in session_data.
+        
         Returns:
             self for chaining
         """
+        # Use provided token, fall back to stored session token
+        token = bearer_token if bearer_token is not None else self._bearer_token
+        
         # Get tools - use authenticated if bearer token present and servers require it
         auth_servers = get_auth_required_servers()
-        if self._bearer_token and auth_servers:
+        if token and auth_servers:
             logger.info(f"Loading MCP tools with bearer token for servers: {auth_servers}")
-            tools = await get_mcp_tools_with_auth(self._bearer_token)
+            tools = await get_mcp_tools_with_auth(token)
         else:
             # Use cached tools from startup
             tools = get_mcp_tools()

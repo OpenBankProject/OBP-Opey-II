@@ -109,15 +109,11 @@ async def initialize_mcp_tools() -> List[BaseTool]:
     """
     Initialize MCP tools at application startup.
     
-    Call this from FastAPI's lifespan handler. Tools are cached
-    and available via get_mcp_tools() for all sessions.
-    
-    Note: For servers with requires_auth=True, tools are loaded but
-    will fail at runtime if no bearer token is provided. Use
-    get_mcp_tools_with_auth() for authenticated access.
+    Only loads tools from servers that don't require authentication.
+    Auth-required servers are loaded per-request via get_mcp_tools_with_auth().
     
     Returns:
-        List of loaded tools (also cached globally)
+        List of loaded tools from no-auth servers (also cached globally)
     """
     global _mcp_tools, _mcp_loader, _server_configs
     
@@ -127,21 +123,27 @@ async def initialize_mcp_tools() -> List[BaseTool]:
         _mcp_tools = []
         return []
     
-    # Log which servers require auth
+    # Split servers by auth requirement
+    no_auth_servers = [s for s in _server_configs if not s.requires_auth]
     auth_servers = [s.name for s in _server_configs if s.requires_auth]
+    
     if auth_servers:
-        logger.info(f"Servers requiring bearer token auth: {auth_servers}")
+        logger.info(f"Servers requiring auth (loaded per-request): {auth_servers}")
     
-    logger.info(f"Loading tools from {len(_server_configs)} MCP server(s)...")
+    if not no_auth_servers:
+        logger.info("All MCP servers require auth - tools will be loaded per-request with bearer token")
+        _mcp_tools = []
+        return []
     
-    _mcp_loader = MCPToolLoader(servers=_server_configs)
+    logger.info(f"Loading tools from {len(no_auth_servers)} no-auth MCP server(s) at startup...")
+    
+    _mcp_loader = MCPToolLoader(servers=no_auth_servers)
     
     try:
         _mcp_tools = await _mcp_loader.load_tools()
-        logger.info(f"Loaded {len(_mcp_tools)} MCP tools: {[t.name for t in _mcp_tools]}")
+        logger.info(f"Loaded {len(_mcp_tools)} MCP tools at startup: {[t.name for t in _mcp_tools]}")
         return _mcp_tools
     except ExceptionGroup as eg:
-        # Extract nested exceptions from TaskGroup/ExceptionGroup
         logger.error(f"Failed to load MCP tools: {eg}")
         for i, exc in enumerate(eg.exceptions):
             logger.error(f"  Sub-exception {i+1}: {type(exc).__name__}: {exc}")
