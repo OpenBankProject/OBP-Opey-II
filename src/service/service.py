@@ -1,8 +1,38 @@
-
+import os
+import uuid
 import logging
-from fastapi import FastAPI
-from .lifecycle import lifespan
+from typing import Any, Annotated
 
+from fastapi import FastAPI, HTTPException, Request, Response, status, Depends
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+
+from langgraph.graph.state import CompiledStateGraph
+from langsmith import Client as LangsmithClient
+
+from auth.session import session_cookie, backend, SessionData
+from auth.auth import AuthConfig
+
+from service.opey_session import OpeySession
+
+from .streaming import StreamManager
+from .streaming_legacy import _parse_input
+from .lifecycle import lifespan
+from .dependencies import get_auth_config
+
+from schema import (
+    ChatMessage,
+    Feedback,
+    FeedbackResponse,
+    StreamInput,
+    UserInput,
+    convert_message_content_to_string,
+    ToolCallApproval,
+    SessionCreateResponse,
+    UsageInfoResponse,
+    SessionUpgradeResponse,
+)
+
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -29,11 +59,10 @@ setup_middleware(
 )
 
 
-from .routers import session, chat, misc, consent
+from .routers import session, chat, misc
 app.include_router(session.router)
 app.include_router(chat.router)
 app.include_router(misc.router)
-app.include_router(consent.router)
 
 # Get OBP base URL for endpoints
 obp_base_url = get_obp_base_url()

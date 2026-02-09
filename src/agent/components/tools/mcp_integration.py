@@ -23,8 +23,6 @@ import logging
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from .elicitation import ElicitationCoordinator
-
 logger = logging.getLogger(__name__)
 
 
@@ -57,11 +55,7 @@ class MCPToolLoader:
     2. Per-request tools (with bearer token): Create client per-request with user's token
     """
     
-    def __init__(
-        self, servers: List[MCPServerConfig],
-        bearer_token: Optional[str] = None,
-        elicitation_coordinator: Optional[ElicitationCoordinator] = None,
-    ):
+    def __init__(self, servers: List[MCPServerConfig], bearer_token: Optional[str] = None):
         """
         Args:
             servers: List of server configurations
@@ -70,7 +64,6 @@ class MCPToolLoader:
         """
         self.servers = servers
         self.bearer_token = bearer_token
-        self.elicitation_coordinator = elicitation_coordinator
         self._client: Optional[MultiServerMCPClient] = None
         self._tools: List[BaseTool] = []
     
@@ -86,18 +79,11 @@ class MCPToolLoader:
             return []
         
         client_config = self._build_client_config()
-        client_kwargs: dict[str, Any] = {}
-        
-        if self.elicitation_coordinator:
-            from langchain_mcp_adapters.callbacks import Callbacks
-            client_kwargs["callbacks"] = Callbacks(
-                on_elicitation=self.elicitation_coordinator.handle_elicitation
-            )
         
         logger.info(f"Connecting to {len(self.servers)} MCP server(s)")
         
         # MultiServerMCPClient manages connections internally
-        self._client = MultiServerMCPClient(client_config, **client_kwargs)
+        self._client = MultiServerMCPClient(client_config)
         self._tools = await self._client.get_tools()
         logger.info(f"Loaded {len(self._tools)} tools from MCP servers")
         
