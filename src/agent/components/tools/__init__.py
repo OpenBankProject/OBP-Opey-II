@@ -10,7 +10,7 @@ from typing import Optional
 import logging
 
 from .approval import ApprovalStore, ApprovalScope, ApprovalRequest, ApprovalDecision
-from .mcp_integration import (
+from .mcp.mcp_integration import (
     MCPToolLoader, 
     MCPServerConfig, 
     create_mcp_tools_with_auth,

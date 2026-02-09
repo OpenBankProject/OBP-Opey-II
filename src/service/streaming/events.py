@@ -99,7 +99,6 @@ class ErrorEvent(BaseStreamEvent):
     def to_sse_data(self) -> str:
         return f"data: {self.model_dump_json()}\n\n"
 
-
 class KeepAliveEvent(BaseStreamEvent):
     """Event fired to keep the connection alive"""
     type: Literal["keep_alive"] = "keep_alive"
@@ -148,6 +147,19 @@ class UserMessageConfirmEvent(BaseStreamEvent):
     def to_sse_data(self) -> str:
         return f"data: {self.model_dump_json()}\n\n"
 
+class ConsentElicitationRequestEvent(BaseStreamEvent):
+    """Emitted when the MCP server requests user consent."""
+    type: Literal["consent_elicitation_request"] = "consent_elicitation_request"
+    elicitation_id: str = Field(description="Unique ID for the elicitation request")
+    operation_id: str = Field(description="ID of the operation requiring consent")
+    message_prompt: str = Field(description="Human-readable prompt explaining the consent request")
+    required_roles: list = Field(description="List of roles required to approve the operation")
+    server_name: str = Field(description="Name of the MCP server requesting consent")
+    tool_name: Optional[str] = Field(default=None, description="Name of the tool associated with the request")
+
+    def to_sse_data(self) -> str:
+        return f"data: {self.model_dump_json()}\n\n"
+
 
 class ThreadSyncEvent(BaseStreamEvent):
     """Event fired to sync thread_id with the frontend"""
@@ -179,6 +191,7 @@ StreamEvent = Union[
     ApprovalRequestEvent,
     BatchApprovalRequestEvent,
     UserMessageConfirmEvent,
+    ConsentElicitationRequestEvent,
     ThreadSyncEvent,
     StreamEndEvent
 ]
@@ -448,6 +461,38 @@ class StreamEventFactory:
             event,
             "THREAD_SYNC",
             {"thread_id": thread_id}
+        )
+        return event
+
+    @staticmethod
+    def consent_elicitation_request(
+        elicitation_id: str,
+        operation_id: str,
+        message_prompt: str,
+        required_roles: list,
+        server_name: str,
+        tool_name: Optional[str] = None,
+    ) -> ConsentElicitationRequestEvent:
+        """Create a consent elicitation request event for the frontend consent UI."""
+        event = ConsentElicitationRequestEvent(
+            elicitation_id=elicitation_id,
+            operation_id=operation_id,
+            message_prompt=message_prompt,
+            required_roles=required_roles,
+            server_name=server_name,
+            tool_name=tool_name,
+        )
+        StreamEventFactory._log_event(
+            event,
+            "CONSENT_ELICITATION_REQUEST",
+            {
+                "elicitation_id": elicitation_id,
+                "operation_id": operation_id,
+                "server_name": server_name,
+                "tool_name": tool_name,
+                "required_roles_count": len(required_roles),
+            },
+            {"Consent prompt": message_prompt},
         )
         return event
 
