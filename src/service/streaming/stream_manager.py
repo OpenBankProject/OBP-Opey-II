@@ -60,7 +60,19 @@ class StreamManager:
             if stream_input.tool_call_approval:
                 approval = stream_input.tool_call_approval
                 
-                if approval.is_batch():
+                if approval.is_consent_response():
+                    # Consent JWT response — resume consent_check_node interrupt
+                    logger.info("Processing consent JWT response", extra={
+                        "event_type": "consent_jwt_processing",
+                        "thread_id": thread_id,
+                    })
+                    
+                    from langgraph.types import Command
+                    graph_input = Command(
+                        resume={"consent_jwt": approval.consent_jwt}
+                    )
+                
+                elif approval.is_batch():
                     # Batch approval response
                     batch_decisions = approval.batch_decisions
                     if not batch_decisions:  # Type narrowing for linter
@@ -291,6 +303,21 @@ class StreamManager:
                 approval_payload = interrupt_obj.value
                 
                 logger.info(f"Processing interrupt payload for tool: {approval_payload.get('tool_name')}")
+                
+                # Check if this is a consent interrupt (from consent_check_node)
+                if approval_payload.get("consent_type") == "consent_required":
+                    logger.info("Processing consent request interrupt", extra={
+                        "event_type": "consent_request_from_interrupt",
+                        "thread_id": thread_id,
+                        "operation_id": approval_payload.get("operation_id"),
+                    })
+                    yield StreamEventFactory.consent_request(
+                        tool_call_id=approval_payload.get("tool_call_id", ""),
+                        tool_name=approval_payload.get("tool_name", ""),
+                        operation_id=approval_payload.get("operation_id"),
+                        required_roles=approval_payload.get("required_roles", []),
+                    )
+                    continue
                 
                 logger.info("Processing interrupt approval request", extra={
                     "event_type": "approval_request_from_interrupt",

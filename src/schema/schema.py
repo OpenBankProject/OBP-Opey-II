@@ -223,6 +223,12 @@ class ToolCallApproval(BaseModel):
         description="Batch approval decisions keyed by tool_call_id"
     )
     
+    # Consent JWT for retrying tool calls that require OBP consent
+    consent_jwt: Optional[str] = Field(
+        default=None,
+        description="OBP consent JWT to inject into tool retry headers"
+    )
+    
     def is_batch(self) -> bool:
         """Check if this is a batch approval"""
         return self.batch_decisions is not None
@@ -230,6 +236,10 @@ class ToolCallApproval(BaseModel):
     def is_single(self) -> bool:
         """Check if this is a single approval"""
         return self.tool_call_id is not None
+    
+    def is_consent_response(self) -> bool:
+        """Check if this is a consent JWT response (for retrying a consent-required tool call)"""
+        return self.consent_jwt is not None
 
 class UserInput(BaseModel):
     """Basic user input for the agent."""

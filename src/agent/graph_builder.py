@@ -12,7 +12,7 @@ from langchain_core.runnables import RunnableConfig
 
 from agent.components.states import OpeyGraphState
 from agent.components.chains import opey_system_prompt_template
-from agent.components.nodes import human_review_node, run_summary_chain, sanitize_tool_responses
+from agent.components.nodes import human_review_node, run_summary_chain, sanitize_tool_responses, consent_check_node
 from agent.components.edges import should_summarize, needs_human_review
 from agent.utils.model_factory import get_model
 from agent.utils.decorators import cancellable
@@ -179,8 +179,10 @@ class OpeyAgentGraphBuilder:
             all_tools = ToolNode(self._tools)
             opey_workflow.add_node("tools", all_tools)
             opey_workflow.add_node("sanitize_tool_responses", sanitize_tool_responses)
+            opey_workflow.add_node("consent_check", consent_check_node)
             opey_workflow.add_edge("tools", "sanitize_tool_responses")
-            opey_workflow.add_edge("sanitize_tool_responses", "opey")
+            opey_workflow.add_edge("sanitize_tool_responses", "consent_check")
+            opey_workflow.add_edge("consent_check", "opey")
         
         if self._enable_human_review:
             opey_workflow.add_node("human_review", human_review_node)

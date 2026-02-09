@@ -149,6 +149,18 @@ class UserMessageConfirmEvent(BaseStreamEvent):
         return f"data: {self.model_dump_json()}\n\n"
 
 
+class ConsentRequestEvent(BaseStreamEvent):
+    """Event fired when a tool call requires OBP consent (Consent-JWT)"""
+    type: Literal["consent_request"] = "consent_request"
+    tool_call_id: str = Field(description="ID of the tool call that needs consent")
+    tool_name: str = Field(description="Name of the tool requiring consent")
+    operation_id: Optional[str] = Field(default=None, description="OBP API operation that requires consent")
+    required_roles: list = Field(default_factory=list, description="OBP roles required for this operation")
+
+    def to_sse_data(self) -> str:
+        return f"data: {self.model_dump_json()}\n\n"
+
+
 class ThreadSyncEvent(BaseStreamEvent):
     """Event fired to sync thread_id with the frontend"""
     type: Literal["thread_sync"] = "thread_sync"
@@ -179,6 +191,7 @@ StreamEvent = Union[
     ApprovalRequestEvent,
     BatchApprovalRequestEvent,
     UserMessageConfirmEvent,
+    ConsentRequestEvent,
     ThreadSyncEvent,
     StreamEndEvent
 ]
@@ -458,6 +471,32 @@ class StreamEventFactory:
             event, 
             "STREAM_END", 
             {"message": "Stream completed"}
+        )
+        return event
+
+    @staticmethod
+    def consent_request(
+        tool_call_id: str,
+        tool_name: str,
+        operation_id: Optional[str] = None,
+        required_roles: Optional[list] = None,
+    ) -> ConsentRequestEvent:
+        """Create a consent request event for tool calls requiring OBP consent."""
+        event = ConsentRequestEvent(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            operation_id=operation_id,
+            required_roles=required_roles or [],
+        )
+        StreamEventFactory._log_event(
+            event,
+            "CONSENT_REQUEST",
+            {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "operation_id": operation_id,
+                "required_roles_count": len(required_roles or []),
+            },
         )
         return event
 

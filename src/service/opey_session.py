@@ -76,6 +76,7 @@ class OpeySession:
         
         self._obp_api_mode = obp_api_mode
         self.graph = None  # Will be initialized in async_init()
+        self._tools = []  # Will be populated in async_init()
 
     async def async_init(self, bearer_token: str | None = None) -> "OpeySession":
         """
@@ -105,6 +106,9 @@ class OpeySession:
         
         if not tools:
             logger.warning("No MCP tools available - agent will have limited capabilities")
+
+        # Store tools for consent retry (tools_by_name in config)
+        self._tools = tools
 
         # Initialize the graph with the appropriate tools based on the OBP API mode
         match self._obp_api_mode:
@@ -220,6 +224,7 @@ class OpeySession:
             "model_name": self._model_name,
             "model_kwargs": {},  # Add model_kwargs if needed in future
             "approval_store": self.approval_store,
+            "tools_by_name": {t.name: t for t in self._tools},
         }
         
         # Merge: base config takes precedence for runtime values like thread_id

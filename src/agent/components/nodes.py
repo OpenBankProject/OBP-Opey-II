@@ -331,10 +331,150 @@ async def sanitize_tool_responses(state: OpeyGraphState, config: RunnableConfig)
     tool_message.content = sanitized_content
     logger.info("Sanitized ToolMessage content due to excessive token count")
     return {"messages": [tool_message]}
+
+
+# ============================================================================
+# Consent Check Node - Post-tool-execution consent handling
+# ============================================================================
+
+
+def _parse_consent_error(tool_message: ToolMessage) -> Dict | None:
+    """
+    Check if a ToolMessage contains a consent_required error from the MCP server.
     
+    Returns parsed consent info dict or None if not a consent error.
+    Expected MCP server error format:
+        {"error": "consent_required", "required_roles": [...], "operation_id": "..."}
+    """
+    content = tool_message.content
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    elif isinstance(content, dict):
+        parsed = content
+    else:
+        return None
     
+    if isinstance(parsed, dict) and parsed.get("error") == "consent_required":
+        return parsed
+    return None
+
+
+def _find_tool_call_for_message(messages: List, tool_call_id: str) -> Dict | None:
+    """Find the original AIMessage tool call that produced a given tool_call_id."""
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.get("id") == tool_call_id:
+                    return tc
+    return None
+
+
+async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
+    """
+    Check tool responses for consent_required errors from MCP servers.
     
+    When the MCP server's call_obp_api tool requires a Consent-JWT but none was
+    provided, it returns a structured error. This node detects that error,
+    interrupts to request a consent JWT from the frontend, then retries the 
+    tool call with the JWT injected into the headers argument.
     
+    Flow:
+        1. Scan recent ToolMessages for consent_required errors
+        2. If found → interrupt() with consent details
+        3. Frontend obtains consent JWT from OBP and resumes
+        4. Re-invoke the tool with Consent-JWT in headers
+        5. Replace error ToolMessage with successful result
+    """
+    messages = state["messages"]
+    if not messages:
+        return {}
     
+    # Find ToolMessages with consent_required errors
+    consent_errors = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            consent_info = _parse_consent_error(msg)
+            if consent_info:
+                consent_errors.append((msg, consent_info))
     
+    if not consent_errors:
+        return {}
+    
+    # For now, handle the first consent error (could batch later)
+    error_msg, consent_info = consent_errors[0]
+    tool_call_id = error_msg.tool_call_id
+    
+    # Find the original tool call to get the tool name and args
+    original_tc = _find_tool_call_for_message(messages, tool_call_id)
+    if not original_tc:
+        logger.error(f"Could not find original tool call for consent error (tool_call_id={tool_call_id})")
+        return {}
+    
+    logger.info(f"Consent required for tool '{original_tc['name']}', operation: {consent_info.get('operation_id')}")
+    
+    # Interrupt to request consent JWT from frontend
+    consent_payload = {
+        "consent_type": "consent_required",
+        "tool_call_id": tool_call_id,
+        "tool_name": original_tc["name"],
+        "tool_args": original_tc.get("args", {}),
+        "operation_id": consent_info.get("operation_id"),
+        "required_roles": consent_info.get("required_roles", []),
+    }
+    
+    user_response = interrupt(consent_payload)
+    
+    # ---- Resumed after frontend provides consent JWT ----
+    
+    consent_jwt = user_response.get("consent_jwt")
+    if not consent_jwt:
+        logger.warning("Consent response received without consent_jwt — treating as denied")
+        denial_message = ToolMessage(
+            content="Consent denied — no consent JWT provided",
+            tool_call_id=tool_call_id,
+            status="error",
+        )
+        return {"messages": [denial_message]}
+    
+    # Retry the tool call with Consent-JWT injected into headers arg
+    logger.info(f"Retrying tool '{original_tc['name']}' with consent JWT")
+    
+    original_args = dict(original_tc.get("args", {}))
+    existing_headers = original_args.get("headers", {}) or {}
+    original_args["headers"] = {**existing_headers, "Consent-JWT": consent_jwt}
+    
+    # Find the tool function from the graph's tool node
+    configurable = config.get("configurable", {}) if config else {}
+    tools_by_name = configurable.get("tools_by_name", {})
+    tool_fn = tools_by_name.get(original_tc["name"])
+    
+    if not tool_fn:
+        logger.error(f"Tool '{original_tc['name']}' not found in tools_by_name for consent retry")
+        error_message = ToolMessage(
+            content=f"Failed to retry with consent: tool '{original_tc['name']}' not found",
+            tool_call_id=tool_call_id,
+            status="error",
+        )
+        return {"messages": [error_message]}
+    
+    try:
+        result = await tool_fn.ainvoke(original_args)
+        retry_message = ToolMessage(
+            content=str(result),
+            tool_call_id=tool_call_id,
+            status="success",
+        )
+        logger.info(f"Consent retry successful for tool '{original_tc['name']}'")
+        return {"messages": [retry_message]}
+    except Exception as e:
+        logger.error(f"Consent retry failed for tool '{original_tc['name']}': {e}")
+        error_message = ToolMessage(
+            content=f"Consent retry failed: {str(e)}",
+            tool_call_id=tool_call_id,
+            status="error",
+        )
+        return {"messages": [error_message]}
 
