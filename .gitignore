@@ -167,6 +167,11 @@ cython_debug/
 
 agent_architecture.png
 
+# Node
+node_modules/
+cli/node_modules/
+cli/package-lock.json
+
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
