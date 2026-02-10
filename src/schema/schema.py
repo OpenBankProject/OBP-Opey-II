@@ -258,8 +258,8 @@ class UserInput(BaseModel):
         default=None,
         examples=["550e8400-e29b-41d4-a716-446655440000"],
     )
-    tool_call_approval: ToolCallApproval = Field(
-        description="Whether this input is a tool call approval.",
+    tool_call_approval: ToolCallApproval | bool = Field(
+        description="Tool call approval object (with consent_jwt, approval, or batch_decisions) or False if not an approval.",
         default=False,
     )
 

@@ -57,6 +57,7 @@ class StreamManager:
 
         try:
             # Parse input for the graph
+            logger.info(f"\n\nSTREAM INPUT: {stream_input.model_dump()}\n\n")
             if stream_input.tool_call_approval:
                 approval = stream_input.tool_call_approval
                 

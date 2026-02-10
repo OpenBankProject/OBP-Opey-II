@@ -164,12 +164,12 @@ class OpeySession:
                     self.graph = builder.build()
 
             case "DANGEROUS":
-                logger.info("OBP API mode set to DANGEROUS: All requests to the OBP-API will be available subject to user approval.")
+                logger.info("OBP API mode set to DANGEROUS: All requests to the OBP-API will be available (consent handled by MCP server).")
                 builder = (OpeyAgentGraphBuilder()
                           .with_tools(tools)
                           .with_model(self._model_name, temperature=0.5)
                           .with_checkpointer(self._checkpointer)
-                          .enable_human_review(True))
+                          .enable_human_review(False))  # Consent flow handles authorization
                 if no_tools_prompt:
                     builder.add_to_system_prompt(no_tools_prompt)
                 self.graph = builder.build()
