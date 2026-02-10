@@ -347,11 +347,27 @@ def _parse_consent_error(tool_message: ToolMessage) -> Dict | None:
         {"error": "consent_required", "required_roles": [...], "operation_id": "..."}
     """
     content = tool_message.content
+    
+    # Handle Anthropic-style content (list of content blocks)
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text", "")
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, dict) and parsed.get("error") == "consent_required":
+                        return parsed
+                except (json.JSONDecodeError, TypeError):
+                    continue
+        return None
+    
+    # Handle string content
     if isinstance(content, str):
         try:
             parsed = json.loads(content)
         except (json.JSONDecodeError, TypeError):
             return None
+    # Handle dict content
     elif isinstance(content, dict):
         parsed = content
     else:
@@ -398,9 +414,11 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
         if isinstance(msg, ToolMessage):
             consent_info = _parse_consent_error(msg)
             if consent_info:
+                logger.info(f"🔐 CONSENT_FLOW: Detected consent_required error in tool message (tool_call_id={msg.tool_call_id})")
                 consent_errors.append((msg, consent_info))
     
     if not consent_errors:
+        logger.debug("🔐 CONSENT_FLOW: No consent errors found in messages, passing through")
         return {}
     
     # For now, handle the first consent error (could batch later)
@@ -413,7 +431,7 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
         logger.error(f"Could not find original tool call for consent error (tool_call_id={tool_call_id})")
         return {}
     
-    logger.info(f"Consent required for tool '{original_tc['name']}', operation: {consent_info.get('operation_id')}")
+    logger.info(f"🔐 CONSENT_FLOW: Consent required for tool '{original_tc['name']}', operation: {consent_info.get('operation_id')}")
     
     # Interrupt to request consent JWT from frontend
     consent_payload = {
@@ -425,13 +443,15 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
         "required_roles": consent_info.get("required_roles", []),
     }
     
+    logger.info(f"🔐 CONSENT_FLOW: Calling interrupt() with consent_payload (operation_id={consent_info.get('operation_id')})")
     user_response = interrupt(consent_payload)
     
     # ---- Resumed after frontend provides consent JWT ----
     
+    logger.info(f"🔐 CONSENT_FLOW: Graph resumed after interrupt, user_response keys: {list(user_response.keys()) if isinstance(user_response, dict) else type(user_response)}")
     consent_jwt = user_response.get("consent_jwt")
     if not consent_jwt:
-        logger.warning("Consent response received without consent_jwt — treating as denied")
+        logger.warning(f"🔐 CONSENT_FLOW: Consent response received without consent_jwt (user_response={user_response}) — treating as denied")
         denial_message = ToolMessage(
             content="Consent denied — no consent JWT provided",
             tool_call_id=tool_call_id,
@@ -440,11 +460,14 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
         return {"messages": [denial_message]}
     
     # Retry the tool call with Consent-JWT injected into headers arg
-    logger.info(f"Retrying tool '{original_tc['name']}' with consent JWT")
+    jwt_preview = consent_jwt[:50] + "..." if len(consent_jwt) > 50 else consent_jwt
+    logger.info(f"🔐 CONSENT_FLOW: Retrying tool '{original_tc['name']}' with consent JWT (preview: {jwt_preview})")
     
     original_args = dict(original_tc.get("args", {}))
     existing_headers = original_args.get("headers", {}) or {}
+    logger.info(f"🔐 CONSENT_FLOW: Original headers before injection: {existing_headers}")
     original_args["headers"] = {**existing_headers, "Consent-JWT": consent_jwt}
+    logger.info(f"🔐 CONSENT_FLOW: Headers after Consent-JWT injection: {list(original_args['headers'].keys())}")
     
     # Find the tool function from the graph's tool node
     configurable = config.get("configurable", {}) if config else {}
@@ -461,16 +484,18 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
         return {"messages": [error_message]}
     
     try:
+        logger.info(f"🔐 CONSENT_FLOW: Invoking tool '{original_tc['name']}' with modified args (headers include Consent-JWT)")
         result = await tool_fn.ainvoke(original_args)
+        logger.info(f"🔐 CONSENT_FLOW: Tool invocation completed, result type: {type(result)}, preview: {str(result)[:200]}")
         retry_message = ToolMessage(
             content=str(result),
             tool_call_id=tool_call_id,
             status="success",
         )
-        logger.info(f"Consent retry successful for tool '{original_tc['name']}'")
+        logger.info(f"🔐 CONSENT_FLOW: Consent retry successful for tool '{original_tc['name']}', returning new ToolMessage")
         return {"messages": [retry_message]}
     except Exception as e:
-        logger.error(f"Consent retry failed for tool '{original_tc['name']}': {e}")
+        logger.error(f"🔐 CONSENT_FLOW: Consent retry failed for tool '{original_tc['name']}': {e}", exc_info=True)
         error_message = ToolMessage(
             content=f"Consent retry failed: {str(e)}",
             tool_call_id=tool_call_id,

@@ -62,15 +62,19 @@ class StreamManager:
                 
                 if approval.is_consent_response():
                     # Consent JWT response — resume consent_check_node interrupt
-                    logger.info("Processing consent JWT response", extra={
+                    jwt_preview = approval.consent_jwt[:50] + "..." if approval.consent_jwt and len(approval.consent_jwt) > 50 else approval.consent_jwt
+                    logger.info(f"🔐 CONSENT_FLOW: Received consent JWT from frontend (preview: {jwt_preview})", extra={
                         "event_type": "consent_jwt_processing",
                         "thread_id": thread_id,
+                        "jwt_length": len(approval.consent_jwt) if approval.consent_jwt else 0,
+                        "jwt_preview": jwt_preview,
                     })
                     
                     from langgraph.types import Command
                     graph_input = Command(
                         resume={"consent_jwt": approval.consent_jwt}
                     )
+                    logger.info(f"🔐 CONSENT_FLOW: Created Command(resume={{consent_jwt: ...}}) to resume consent_check_node")
                 
                 elif approval.is_batch():
                     # Batch approval response
