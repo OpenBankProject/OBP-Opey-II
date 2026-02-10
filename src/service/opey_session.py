@@ -95,6 +95,8 @@ class OpeySession:
         # Use provided token, fall back to stored session token
         token = bearer_token if bearer_token is not None else self._bearer_token
         
+        logger.info(f"DEBUG: token value = {token[:20] if token else 'None'}... (type: {type(token)})")
+        
         # Get tools - use authenticated if bearer token present and servers require it
         auth_servers = get_auth_required_servers()
         if token and auth_servers:
@@ -110,56 +112,80 @@ class OpeySession:
         # Store tools for consent retry (tools_by_name in config)
         self._tools = tools
 
+        # Prepare prompt addition for no-tool scenario
+        no_tools_prompt = None
+        if not tools:
+            no_tools_prompt = (
+                "\n\n=== IMPORTANT: NO TOOLS AVAILABLE ===\n"
+                "Your API tools are currently unavailable. Do NOT fabricate tool calls, simulate API responses, "
+                "or generate fake data. When users ask for API operations or live data:\n"
+                "1. Inform them your tools are currently unavailable\n"
+                "2. Suggest they check their authentication or try again later\n"
+                "3. You may provide general information about OBP API concepts from your training, "
+                "but clearly state you cannot access live data or perform actions right now.\n"
+                "=================================="
+            )
+
         # Initialize the graph with the appropriate tools based on the OBP API mode
         match self._obp_api_mode:
             case "NONE":
                 logger.info("OBP API mode set to NONE: Calls to the OBP-API will not be available")
-                self.graph = (OpeyAgentGraphBuilder()
-                              .with_tools(tools)
-                              .with_model(self._model_name, temperature=0.5)
-                              .with_checkpointer(self._checkpointer)
-                              .enable_human_review(False)
-                              .build())
+                builder = (OpeyAgentGraphBuilder()
+                          .with_tools(tools)
+                          .with_model(self._model_name, temperature=0.5)
+                          .with_checkpointer(self._checkpointer)
+                          .enable_human_review(False))
+                if no_tools_prompt:
+                    builder.add_to_system_prompt(no_tools_prompt)
+                self.graph = builder.build()
 
             case "SAFE":
                 if self.is_anonymous:
                     logger.info("Anonymous session using SAFE mode: Only GET requests to OBP-API will be available")
                     prompt_addition = "Note: This is an anonymous session with limited capabilities. User can only make GET requests to the OBP-API. Ensure all responses adhere to this restriction."
-                    self.graph = (OpeyAgentGraphBuilder()
-                                 .with_tools(tools)
-                                 .with_model(self._model_name, temperature=0.5)
-                                 .add_to_system_prompt(prompt_addition)
-                                 .with_checkpointer(self._checkpointer)
-                                 .enable_human_review(False)
-                                 .build())
+                    builder = (OpeyAgentGraphBuilder()
+                              .with_tools(tools)
+                              .with_model(self._model_name, temperature=0.5)
+                              .add_to_system_prompt(prompt_addition)
+                              .with_checkpointer(self._checkpointer)
+                              .enable_human_review(False))
+                    if no_tools_prompt:
+                        builder.add_to_system_prompt(no_tools_prompt)
+                    self.graph = builder.build()
                 else:
                     logger.info("OBP API mode set to SAFE: GET requests to the OBP-API will be available")
-                    self.graph = (OpeyAgentGraphBuilder()
-                                 .with_tools(tools)
-                                 .with_model(self._model_name, temperature=0.5)
-                                 .with_checkpointer(self._checkpointer)
-                                 .enable_human_review(False)
-                                 .build())
+                    builder = (OpeyAgentGraphBuilder()
+                              .with_tools(tools)
+                              .with_model(self._model_name, temperature=0.5)
+                              .with_checkpointer(self._checkpointer)
+                              .enable_human_review(False))
+                    if no_tools_prompt:
+                        builder.add_to_system_prompt(no_tools_prompt)
+                    self.graph = builder.build()
 
             case "DANGEROUS":
                 logger.info("OBP API mode set to DANGEROUS: All requests to the OBP-API will be available subject to user approval.")
-                self.graph = (OpeyAgentGraphBuilder()
-                             .with_tools(tools)
-                             .with_model(self._model_name, temperature=0.5)
-                             .with_checkpointer(self._checkpointer)
-                             .enable_human_review(True)
-                             .build())
+                builder = (OpeyAgentGraphBuilder()
+                          .with_tools(tools)
+                          .with_model(self._model_name, temperature=0.5)
+                          .with_checkpointer(self._checkpointer)
+                          .enable_human_review(True))
+                if no_tools_prompt:
+                    builder.add_to_system_prompt(no_tools_prompt)
+                self.graph = builder.build()
 
             case "TEST":
                 logger.info("OBP API mode set to TEST: All requests to the OBP-API will be available AND WILL BE APPROVED BY DEFAULT.")
                 test_prompt = "You are in TEST mode. Operations will be auto-approved. DO NOT USE IN PRODUCTION."
-                self.graph = (OpeyAgentGraphBuilder()
-                             .with_tools(tools)
-                             .add_to_system_prompt(test_prompt)
-                             .with_model(self._model_name, temperature=0.5)
-                             .with_checkpointer(self._checkpointer)
-                             .enable_human_review(False)
-                             .build())
+                builder = (OpeyAgentGraphBuilder()
+                          .with_tools(tools)
+                          .add_to_system_prompt(test_prompt)
+                          .with_model(self._model_name, temperature=0.5)
+                          .with_checkpointer(self._checkpointer)
+                          .enable_human_review(False))
+                if no_tools_prompt:
+                    builder.add_to_system_prompt(no_tools_prompt)
+                self.graph = builder.build()
 
             case _:
                 logger.error(f"OBP API mode set to {self._obp_api_mode}: Unknown OBP API mode. Defaulting to NONE.")

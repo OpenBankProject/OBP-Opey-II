@@ -109,7 +109,7 @@ class MCPToolLoader:
                 headers = dict(server.headers)  # Copy to avoid mutating config
                 if server.requires_auth and self.bearer_token:
                     headers["Authorization"] = f"Bearer {self.bearer_token}"
-                    logger.debug(f"Added bearer token to '{server.name}' headers")
+                    logger.info(f"DEBUG: Injecting bearer token to '{server.name}' - token starts with: {self.bearer_token[:20]}...")
                 elif server.requires_auth and not self.bearer_token:
                     logger.warning(f"MCP server '{server.name}' requires auth but no bearer token provided")
                 
