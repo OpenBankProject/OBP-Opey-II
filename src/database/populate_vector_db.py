@@ -24,7 +24,7 @@ if os.path.basename(current_dir) == "src":
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from langchain.schema import Document
+from langchain_core.documents import Document
 from agent.components.retrieval.retriever_config import (
     VectorStoreConfig, 
     get_vector_store_manager, 
