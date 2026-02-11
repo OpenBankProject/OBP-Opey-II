@@ -397,12 +397,15 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
     interrupts to request a consent JWT from the frontend, then retries the 
     tool call with the JWT injected into the headers argument.
     
+    Uses the add_messages reducer's update-by-ID feature: returning a ToolMessage
+    with the same ID as the original error message replaces it in-place.
+    
     Flow:
         1. Scan recent ToolMessages for consent_required errors
         2. If found → interrupt() with consent details
         3. Frontend obtains consent JWT from OBP and resumes
         4. Re-invoke the tool with Consent-JWT in headers
-        5. Replace error ToolMessage with successful result
+        5. Replace error ToolMessage with successful result (same message ID)
     """
     messages = state["messages"]
     if not messages:
@@ -414,7 +417,7 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
         if isinstance(msg, ToolMessage):
             consent_info = _parse_consent_error(msg)
             if consent_info:
-                logger.info(f"🔐 CONSENT_FLOW: Detected consent_required error in tool message (tool_call_id={msg.tool_call_id})")
+                logger.info(f"🔐 CONSENT_FLOW: Detected consent_required error in tool message (tool_call_id={msg.tool_call_id}, id={msg.id})")
                 consent_errors.append((msg, consent_info))
     
     if not consent_errors:
@@ -424,6 +427,8 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
     # For now, handle the first consent error (could batch later)
     error_msg, consent_info = consent_errors[0]
     tool_call_id = error_msg.tool_call_id
+    error_msg_id = error_msg.id  # Store the ID — we'll reuse it to update in-place
+    logger.info(f"🔐 CONSENT_FLOW: Will replace message id={error_msg_id} after consent (tool_call_id={tool_call_id})")
     
     # Find the original tool call to get the tool name and args
     original_tc = _find_tool_call_for_message(messages, tool_call_id)
@@ -449,15 +454,19 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
     # ---- Resumed after frontend provides consent JWT ----
     
     logger.info(f"🔐 CONSENT_FLOW: Graph resumed after interrupt, user_response keys: {list(user_response.keys()) if isinstance(user_response, dict) else type(user_response)}")
+    
     consent_jwt = user_response.get("consent_jwt")
     if not consent_jwt:
-        logger.warning(f"🔐 CONSENT_FLOW: Consent response received without consent_jwt (user_response={user_response}) — treating as denied")
-        denial_message = ToolMessage(
-            content="Consent denied — no consent JWT provided",
-            tool_call_id=tool_call_id,
-            status="error",
-        )
-        return {"messages": [denial_message]}
+        logger.warning(f"🔐 CONSENT_FLOW: No consent_jwt in response — treating as denied")
+        # Return state update with replacement message (same ID → updates in-place)
+        return {
+            "messages": [ToolMessage(
+                content="Consent denied — no consent JWT provided",
+                tool_call_id=tool_call_id,
+                id=error_msg_id,
+                status="error",
+            )]
+        }
     
     # Retry the tool call with Consent-JWT injected into headers arg
     jwt_preview = consent_jwt[:50] + "..." if len(consent_jwt) > 50 else consent_jwt
@@ -465,7 +474,6 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
     
     original_args = dict(original_tc.get("args", {}))
     existing_headers = original_args.get("headers", {}) or {}
-    logger.info(f"🔐 CONSENT_FLOW: Original headers before injection: {existing_headers}")
     original_args["headers"] = {**existing_headers, "Consent-JWT": consent_jwt}
     logger.info(f"🔐 CONSENT_FLOW: Headers after Consent-JWT injection: {list(original_args['headers'].keys())}")
     
@@ -476,30 +484,36 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
     
     if not tool_fn:
         logger.error(f"Tool '{original_tc['name']}' not found in tools_by_name for consent retry")
-        error_message = ToolMessage(
-            content=f"Failed to retry with consent: tool '{original_tc['name']}' not found",
-            tool_call_id=tool_call_id,
-            status="error",
-        )
-        return {"messages": [error_message]}
+        return {
+            "messages": [ToolMessage(
+                content=f"Failed to retry with consent: tool '{original_tc['name']}' not found",
+                tool_call_id=tool_call_id,
+                id=error_msg_id,
+                status="error",
+            )]
+        }
     
     try:
-        logger.info(f"🔐 CONSENT_FLOW: Invoking tool '{original_tc['name']}' with modified args (headers include Consent-JWT)")
+        logger.info(f"🔐 CONSENT_FLOW: Invoking tool '{original_tc['name']}' with modified args")
         result = await tool_fn.ainvoke(original_args)
-        logger.info(f"🔐 CONSENT_FLOW: Tool invocation completed, result type: {type(result)}, preview: {str(result)[:200]}")
-        retry_message = ToolMessage(
+        logger.info(f"🔐 CONSENT_FLOW: Tool result preview: {str(result)[:300]}")
+        # Return state update with replacement message (same ID → updates in-place via add_messages reducer)
+        replacement = ToolMessage(
             content=str(result),
             tool_call_id=tool_call_id,
+            id=error_msg_id,
             status="success",
         )
-        logger.info(f"🔐 CONSENT_FLOW: Consent retry successful for tool '{original_tc['name']}', returning new ToolMessage")
-        return {"messages": [retry_message]}
+        logger.info(f"🔐 CONSENT_FLOW: Replacing message id={error_msg_id} in-place with retry result")
+        return {"messages": [replacement]}
     except Exception as e:
-        logger.error(f"🔐 CONSENT_FLOW: Consent retry failed for tool '{original_tc['name']}': {e}", exc_info=True)
-        error_message = ToolMessage(
-            content=f"Consent retry failed: {str(e)}",
-            tool_call_id=tool_call_id,
-            status="error",
-        )
-        return {"messages": [error_message]}
+        logger.error(f"🔐 CONSENT_FLOW: Consent retry failed: {e}", exc_info=True)
+        return {
+            "messages": [ToolMessage(
+                content=f"Consent retry failed: {str(e)}",
+                tool_call_id=tool_call_id,
+                id=error_msg_id,
+                status="error",
+            )]
+        }
 
