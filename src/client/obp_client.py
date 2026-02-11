@@ -1,225 +1,291 @@
 from auth.auth import BaseAuth
 import aiohttp
 import asyncio
-import os
 import json
 import logging
+import os
 
-from typing import Any, Literal, Optional
+from typing import Literal
 from langchain_core.tools import StructuredTool
 
 logger = logging.getLogger(__name__)
 
 
+class OBPResponse:
+    """Response object mimicking requests.Response interface for OBP API calls."""
+    
+    def __init__(self, data: dict | list, status_code: int, url: str, headers: dict):
+        self._json_data = data
+        self.status_code = status_code
+        self.url = url
+        self.headers = headers
+        self.ok = 200 <= status_code < 300
+    
+    def json(self) -> dict | list:
+        """Return the JSON-decoded content of the response."""
+        return self._json_data
+    
+    @property
+    def text(self) -> str:
+        """Return the response content as a string."""
+        return json.dumps(self._json_data, ensure_ascii=False, separators=(',', ':'))
+    
+    def raise_for_status(self):
+        """Raise an exception if the response status is not OK."""
+        if not self.ok:
+            error_msg = "Unknown error"
+            if isinstance(self._json_data, dict):
+                error_msg = self._json_data.get('message', 
+                                                 self._json_data.get('error', 
+                                                                     self._json_data.get('failMsg', str(self._json_data))))
+            raise Exception(f"HTTP {self.status_code}: {error_msg}")
+    
+    def __repr__(self) -> str:
+        return f"<OBPResponse [{self.status_code}]>"
+
+
 class OBPClient:
-    """HTTP client for the Open Bank Project (OBP) API."""
+    """HTTP client for the Open Bank Project (OBP) API using aiohttp."""
     
     def __init__(self, auth: BaseAuth):
         """
         Initialize the OBPClient with an authentication object.
 
         Args:
-            auth (BaseAuth): An instance of a class that inherits from BaseAuth for authentication.
+            auth: An instance of a class that inherits from BaseAuth for authentication.
         """
         self.auth = auth
         self.obp_base_url = os.getenv("OBP_BASE_URL")
         if not self.obp_base_url:
             raise ValueError("OBP_BASE_URL environment variable is not set.")
+        self._session: aiohttp.ClientSession | None = None
+    
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create the aiohttp session."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+    
+    async def close(self) -> None:
+        """Close the aiohttp session."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+    
+    async def __aenter__(self):
+        """Async context manager entry."""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        await self.close()
+        return False
 
-    def _extract_username_from_jwt(self, consent_id: str) -> str:
-        # need to create a function that extracts the username from the consent ID
-        pass
-
-    async def _async_request(self, method: str, url: str, body: Any | None):
+    async def _make_request(self, method: str, path: str, body: dict | None = None, operation_id: str | None = None) -> OBPResponse:
+        """
+        Make an async HTTP request to the OBP API.
+        
+        Args:
+            method: HTTP method (GET, POST, PUT, DELETE, PATCH).
+            path: The API endpoint path.
+            body: Optional JSON body for the request.
+            operation_id: Optional OBP API operation ID for approval tracking.
+            
+        Returns:
+            OBPResponse object with requests.Response-like interface.
+        """
+        url = f"{self.obp_base_url}{path}"
+        headers = self.auth.construct_headers()
+        
+        # Log the user information from consent JWT
+        consent_id = headers.get('Consent-Id')
+        if consent_id:
+            logger.info(f"OBP {method} request - Consent ID: {consent_id}, URL: {url}")
+        else:
+            logger.info(f"OBP {method} request - No consent JWT (anonymous), URL: {url}")
+        
+        session = await self._get_session()
+        
         try:
-            async with aiohttp.ClientSession() as session:
-                headers = self.auth.construct_headers()
-
-                # Log the user information from consent JWT
-                consent_id = headers.get('Consent-Id')
-                if consent_id:
-                    logger.info(f"_async_request says: Making OBP API request - Primary user consentID: {consent_id}, Method: {method}, URL: {url}")
+            async with session.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=body,
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+                response_data = await response.json()
+                status = response.status
+                response_headers = dict(response.headers)
+                
+                logger.info(f"OBP {method} request: Response status {status} from {url}")
+                
+                obp_response = OBPResponse(
+                    data=response_data,
+                    status_code=status,
+                    url=url,
+                    headers=response_headers
+                )
+                
+                if obp_response.ok:
+                    logger.debug(f"OBP {method} response: {obp_response.text[:500]}")
                 else:
-                    logger.info(f"_async_request says: Making OBP API request - No consent JWT found (anonymous user), Method: {method}, URL: {url}")
-
-                async with session.request(method, url, json=body, headers=headers) as response:
-                    json_response = await response.json()
-                    status = response.status
-                    logger.info(f"_async_request says: Received response with status {status} from {url}")
-                    logger.debug(f"_async_request says: Response content: {json.dumps(json_response, indent=2)}")
-                    return json_response, status
-
+                    logger.error(f"OBP {method} error ({status}): {obp_response.text[:500]}")
+                
+                return obp_response
+                    
         except aiohttp.ClientError as e:
-            logger.error(f"_async_request says: Error fetching data from {url}: {e}")
-        except asyncio.TimeoutError:
-            logger.error(f"_async_request says: Request to {url} timed out")
+            logger.error(f"OBP {method} request failed for {url}: {e}")
+            raise
+        except asyncio.TimeoutError as e:
+            logger.error(f"OBP {method} request timed out for {url}: {e}")
+            raise
 
-    async def async_obp_get_requests(self, path: str, operation_id: str | None = None):
+    async def get(self, path: str, operation_id: str | None = None) -> OBPResponse:
         """
-        Exectues a GET request to the OpenBankProject (OBP) API.
-        ONLY GET requests are allowed in this mode, but OBP supports all kinds of requests.
-        This is a tool that only allows GET requests to be made to the OBP API as a safety measure.
+        Execute a GET request to the OBP API.
+        
         Args:
-            path (str): The API endpoint path to send the request to.
-            operation_id (str, optional): The OBP API operation ID for this endpoint (used for approval tracking).
+            path: The API endpoint path.
+            operation_id: The OBP API operation ID for approval tracking.
+            
         Returns:
-            dict: The JSON response from the OBP API if the request is successful.
-            dict: The error response from the OBP API if the request fails.
+            OBPResponse object.
+            
         Example:
-            response = await obp_get_requests('/obp/v4.0.0/banks')
-            print(response)
+            response = await client.get('/obp/v4.0.0/banks')
+            data = response.json()
         """
-        url = f"{self.obp_base_url}{path}"
+        return await self._make_request("GET", path, operation_id=operation_id)
 
-        try:
-            response = await self._async_request("GET", url, None)
-        except Exception as e:
-            logger.error(f"async_obp_get_requests says: Error fetching data from {url}: {e}")
-            return
-
-        if response is None:
-            logger.error("async_obp_get_requests says: OBP returned 'None' response")
-            return
-        json_response, status = response
-
-        logger.info(f"async_obp_get_requests says: Response from OBP:\n{json.dumps(json_response, indent=2)}")
-
-        # Convert response to JSON string to prevent serialization corruption downstream
-        # This fixes the ANK corruption bug by ensuring proper JSON serialization
-        try:
-            json_string = json.dumps(json_response, ensure_ascii=False, separators=(',', ':'))
-            logger.info(f"async_obp_get_requests says: Successfully serialized OBP response to JSON string (length: {len(json_string)})")
-        except (TypeError, ValueError) as e:
-            logger.error(f"async_obp_get_requests says: JSON serialization error: {e}")
-            json_string = json.dumps({"error": "Failed to serialize OBP response", "details": str(json_response)})
-            logger.error(f"async_obp_get_requests says: Using fallback error response")
-
-        if status == 200:
-            logger.info(f"async_obp_get_requests says: OBP request successful (status: {status})")
-            return json_string
-        else:
-            logger.error(f"async_obp_get_requests says: Error fetching data from OBP (status: {status}): {json_response}")
-            # Extract error message from response for better error reporting
-            error_msg = "Unknown error"
-            if isinstance(json_response, dict):
-                error_msg = json_response.get('message', json_response.get('error', json_response.get('failMsg', str(json_response))))
-            elif isinstance(json_response, str):
-                error_msg = json_response
-
-            raise Exception(f"OBP API error (status: {status}): {error_msg}")
-
-    async def async_obp_requests(self, method: str, path: str, body: str, operation_id: str | None = None):
+    async def post(self, path: str, body: dict | None = None, operation_id: str | None = None) -> OBPResponse:
         """
-        Executes a request to the OpenBankProject (OBP) API.
+        Execute a POST request to the OBP API.
+        
         Args:
-            method (str): The HTTP method to use for the request (e.g., 'GET', 'POST').
-            path (str): The API endpoint path to send the request to.
-            body (str): The JSON body to include in the request. If empty, no body is sent.
-            operation_id (str, optional): The OBP API operation ID for this endpoint (used for approval tracking). Use the same operationId as in the docs.
+            path: The API endpoint path.
+            body: The JSON body to include in the request.
+            operation_id: The OBP API operation ID for approval tracking.
+            
         Returns:
-            dict: The JSON response from the OBP API if the request is successful.
-            dict: The error response from the OBP API if the request fails.
-        Raises:
-            ValueError: If the response status code is not in the 2xx range.
+            OBPResponse object.
+            
         Example:
-            response = await obp_requests('GET', '/obp/v4.0.0/banks', '')
-            print(response)
+            response = await client.post('/obp/v4.0.0/banks/BANK_ID/accounts', body={'name': 'test'})
+            data = response.json()
         """
-        url = f"{self.obp_base_url}{path}"
+        return await self._make_request("POST", path, body=body, operation_id=operation_id)
 
-        if body == '':
-            json_body = None
-        else:
-            json_body = json.loads(body)
+    async def put(self, path: str, body: dict | None = None, operation_id: str | None = None) -> OBPResponse:
+        """
+        Execute a PUT request to the OBP API.
+        
+        Args:
+            path: The API endpoint path.
+            body: The JSON body to include in the request.
+            operation_id: The OBP API operation ID for approval tracking.
+            
+        Returns:
+            OBPResponse object.
+            
+        Example:
+            response = await client.put('/obp/v4.0.0/banks/BANK_ID/accounts/ACCOUNT_ID', body={'name': 'updated'})
+            data = response.json()
+        """
+        return await self._make_request("PUT", path, body=body, operation_id=operation_id)
 
-        try:
-            response = await self._async_request(method, url, json_body)
-        except Exception as e:
-            logger.error(f"async_obp_requests says: Error fetching data from {url}: {e}")
-            return
+    async def delete(self, path: str, operation_id: str | None = None) -> OBPResponse:
+        """
+        Execute a DELETE request to the OBP API.
+        
+        Args:
+            path: The API endpoint path.
+            operation_id: The OBP API operation ID for approval tracking.
+            
+        Returns:
+            OBPResponse object.
+            
+        Example:
+            response = await client.delete('/obp/v4.0.0/banks/BANK_ID/accounts/ACCOUNT_ID')
+            data = response.json()
+        """
+        return await self._make_request("DELETE", path, operation_id=operation_id)
 
-        if response is None:
-            logger.error("async_obp_requests says: OBP returned 'None' response")
-            return
-        json_response, status = response
-
-        logger.info(f"async_obp_requests says: Response from OBP:\n{json.dumps(json_response, indent=2)}")
-
-        # Convert response to JSON string to prevent serialization corruption downstream
-        # This fixes the ANK corruption bug by ensuring proper JSON serialization
-        try:
-            json_string = json.dumps(json_response, ensure_ascii=False, separators=(',', ':'))
-            logger.info(f"async_obp_requests says: Successfully serialized OBP response to JSON string (length: {len(json_string)})")
-        except (TypeError, ValueError) as e:
-            logger.error(f"async_obp_requests says: JSON serialization error: {e}")
-            json_string = json.dumps({"error": "Failed to serialize OBP response", "details": str(json_response)})
-            logger.error(f"async_obp_requests says: Using fallback error response")
-
-        if 200 <= status < 300:  # Accept all 2xx status codes as success
-            logger.info(f"async_obp_requests says: OBP request successful (status: {status})")
-            return json_string
-        else:
-            logger.error(f"async_obp_requests says: Error fetching data from OBP (status: {status}): {json_response}")
-            # Extract error message from response for better error reporting
-            error_msg = "Unknown error"
-            if isinstance(json_response, dict):
-                error_msg = json_response.get('message', json_response.get('error', json_response.get('failMsg', str(json_response))))
-            elif isinstance(json_response, str):
-                error_msg = json_response
-
-            raise Exception(f"OBP API error (status: {status}): {error_msg}")
+    async def patch(self, path: str, body: dict | None = None, operation_id: str | None = None) -> OBPResponse:
+        """
+        Execute a PATCH request to the OBP API.
+        
+        Args:
+            path: The API endpoint path.
+            body: The JSON body to include in the request.
+            operation_id: The OBP API operation ID for approval tracking.
+            
+        Returns:
+            OBPResponse object.
+            
+        Example:
+            response = await client.patch('/obp/v4.0.0/banks/BANK_ID/accounts/ACCOUNT_ID', body={'status': 'active'})
+            data = response.json()
+        """
+        return await self._make_request("PATCH", path, body=body, operation_id=operation_id)
 
     def get_langchain_tool(self, mode: Literal["safe", "dangerous", "test"]):
         """
         Returns the langchain tool for the OBP requests module.
+        
         Args:
-            mode (str): The mode to use for the langchain tool. Can be "safe", "dangerous", or "test".
+            mode: The mode to use for the langchain tool. Can be "safe", "dangerous", or "test".
+            
         Returns:
             StructuredTool: The langchain tool for the OBP requests module.
         """
-
         match mode:
             case "safe":
                 return StructuredTool.from_function(
-                    coroutine=self.async_obp_get_requests,
+                    coroutine=self.get,
                     name="obp_requests",
-                    description=self.async_obp_get_requests.__doc__,
+                    description=self.get.__doc__,
                 )
-            case "dangerous":
+            case "dangerous" | "test":
+                async def obp_requests(method: str, path: str, body: str = "", operation_id: str | None = None) -> str:
+                    """
+                    Make HTTP requests to the OBP API.
+                    
+                    Args:
+                        method: HTTP method (GET, POST, PUT, DELETE, PATCH).
+                        path: The API endpoint path.
+                        body: JSON body as string (use empty string for GET/DELETE).
+                        operation_id: The OBP API operation ID (used for approval tracking).
+                        
+                    Returns:
+                        JSON string response from the OBP API.
+                    """
+                    method = method.upper()
+                    json_body = json.loads(body) if body else None
+                    
+                    response: OBPResponse
+                    match method:
+                        case "GET":
+                            response = await self.get(path, operation_id)
+                        case "POST":
+                            response = await self.post(path, json_body, operation_id)
+                        case "PUT":
+                            response = await self.put(path, json_body, operation_id)
+                        case "DELETE":
+                            response = await self.delete(path, operation_id)
+                        case "PATCH":
+                            response = await self.patch(path, json_body, operation_id)
+                        case _:
+                            raise ValueError(f"Unsupported HTTP method: {method}")
+                    
+                    # Return JSON string for LangChain tool compatibility
+                    return response.text
+                
                 return StructuredTool.from_function(
-                    coroutine=self.async_obp_requests,
+                    coroutine=obp_requests,
                     name="obp_requests",
-                    description=self.async_obp_requests.__doc__,
-                )
-            case "test":
-                return StructuredTool.from_function(
-                    coroutine=self.async_obp_requests,
-                    name="obp_requests",
-                    description=self.async_obp_requests.__doc__,
+                    description=obp_requests.__doc__,
                 )
             case _:
                 raise ValueError(f"Invalid mode: {mode}. Must be 'safe', 'dangerous', or 'test'.")
 
-    def sync_obp_requests(self, method: str, path: str, body: str, as_json: bool = False):
-        """
-        Synchronous wrapper for async_obp_requests.
-        Mainly for use in admin scripts and non-async contexts.
-        I.e. don't use this with the langchain tools or agent.
-        
-        Args:
-            method (str): The HTTP method to use for the request (e.g., 'GET', 'POST').
-            path (str): The API endpoint path to send the request to.
-            body (str): The JSON body to include in the request. If empty, no body is sent.
-        """
-        try:
-            response = asyncio.run(self.async_obp_requests(method, path, body))
-            
-        except Exception as e:
-            logger.error(f"Error fetching data from {path}: {e}")
-            raise
-        
-        if as_json and response is not None:
-            return json.loads(response)
-        
-        
-        return response

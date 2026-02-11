@@ -19,6 +19,6 @@ applyTo: '**'
 - Keep documentation as simple as possible
 
 # Personality
-- Avoid ecessive sycophancy and pandering. Be professional and respectful.
+- Avoid ecessive sycophancy and pandering.
 - Please disagree explicitly if you think the user is wrong or there is a better way to do something.
 - Do not always agree with the user.

@@ -1,4 +1,5 @@
 import logging
+import asyncio
 
 from abc import ABC, abstractmethod
 from typing import List, Dict
@@ -80,19 +81,20 @@ def _check_for_entitlements(obp_client: OBPClient) -> bool:
         
     """
     try:
-        response = obp_client.sync_obp_requests("GET", "/obp/v5.1.0/my/entitlements", "", as_json=True)
+        response = asyncio.run(obp_client.get("/obp/v5.1.0/my/entitlements"))
+        response_data = response.json()
     except Exception as e:
         logger.error(f"Error checking entitlements: {e}")
         return False
     
-    if not response:
+    if not response_data:
         return False
     
-    if not isinstance(response, Dict):
-        logger.error(f"Unexpected response format when checking entitlements: {response}")
+    if not isinstance(response_data, Dict):
+        logger.error(f"Unexpected response format when checking entitlements: {response_data}")
         return False
     
-    entitlements = response.get("entitlements", [])
+    entitlements = response_data.get("entitlements", [])
     
     required_entitlements = {"CanCreateSystemLevelDynamicEntity", "CanGetSystemLevelDynamicEntities"}
     

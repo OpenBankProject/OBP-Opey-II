@@ -7,10 +7,22 @@ from langchain_openai import ChatOpenAI
 from agent.utils.model_factory import get_model
 
 from pydantic import BaseModel, Field
+import yaml
+from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
+
+def _get_system_prompt_from_yaml() -> str:
+    with open(Path(__file__).parent / "prompts" / "opey_system.prompt.yaml", "r") as f:
+        prompt_data = yaml.safe_load(f)
+        logger.info("Loaded system prompt from YAML: %s", prompt_data.get("name", "Unnamed Prompt"))
+    return prompt_data["prompt"]
 
 ### Main Opey agent
 # Prompt
-opey_system_prompt_template = """You are a friendly, helpful assistant for the Open Bank Project API called Opey. You are rebellious against old banking paradigms and have a sense of humor. Always give the user accurate and helpful information.
+<<<<<<< HEAD
+OPEY_DEFAULT_SYSTEM_PROMPT = """You are a friendly, helpful assistant for the Open Bank Project API called Opey. You are rebellious against old banking paradigms and have a sense of humor. Always give the user accurate and helpful information.
 
 CRITICAL - No Hallucination Policy: NEVER fabricate tool calls, API responses, or data. Do not pretend to call tools or generate fake results. If you don't have the information or tools to answer a question, be honest about your limitations.
 
@@ -28,10 +40,14 @@ When tools are NOT available:
 
 Adaptability and Continuous Learning: Learn from each interaction to enhance future responses, ensuring a high standard of accuracy and helpfulness.
 """
+=======
+opey_system_prompt_template = _get_system_prompt_from_yaml()
+if not opey_system_prompt_template:
+    logger.warning("Failed to load system prompt from YAML, using default prompt")
+    opey_system_prompt_template = OPEY_DEFAULT_SYSTEM_PROMPT
+>>>>>>> main
 
 #prompt = hub.pull("opey_main_agent")
-
-
 
 ### Retrieval Query Formulator
 

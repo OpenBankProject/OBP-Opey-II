@@ -83,6 +83,9 @@ OBP_PASSWORD="your-obp-password"
 OBP_CONSUMER_KEY="your-obp-consumer-key"
 ```
 
+### 5. Changing the system prompt
+Opey only knows about its environment as long as you tell it. The default system prompt is OpenBankProject-focused. Iterating on the prompt for better final responses or better alignment with your particular instance is recommended. All you need to do is edit the [prompt file](/src/agent/components/prompts/opey_system.prompt.yaml)
+
 ## Running
 Activate the poetry venv using `poetry shell` in the current directory
 

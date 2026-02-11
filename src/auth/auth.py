@@ -459,18 +459,14 @@ async def create_admin_direct_login_auth(
         version = os.getenv('OBP_API_VERSION', 'v6.0.0')
         
         try:
-            response_json = await obp_client.async_obp_requests(
-                "GET", 
-                f"/obp/{version}/my/entitlements",
-                ""
+            entitlements_response = await obp_client.get(
+                f"/obp/{version}/my/entitlements"
             )
+            entitlements_data = entitlements_response.json()
             
-            if not response_json:
+            if not entitlements_data:
                 logger.warning('Failed to fetch entitlements - received empty response')
                 return admin_auth
-            
-            # Parse the JSON string response
-            entitlements_response = json.loads(response_json) if isinstance(response_json, str) else response_json
             
             # Use provided entitlements or default set
             if required_entitlements is None:
@@ -481,7 +477,7 @@ async def create_admin_direct_login_auth(
                     'CanGetSystemLevelDynamicEntities'
                 ]
             
-            all_present, missing = _check_entitlements(entitlements_response, required_entitlements)
+            all_present, missing = _check_entitlements(entitlements_data, required_entitlements)
             
             if not all_present:
                 logger.warning(
@@ -492,5 +488,8 @@ async def create_admin_direct_login_auth(
         except Exception as e:
             logger.error(f'Failed to verify admin entitlements: {e}')
             # Don't raise - auth still works, just couldn't verify entitlements
+        finally:
+            # Always close the temporary client session
+            await obp_client.close()
     
     return admin_auth
