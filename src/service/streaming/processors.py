@@ -222,6 +222,32 @@ class ToolEventProcessor(BaseEventProcessor):
     def __init__(self, stream_input: StreamInput):
         super().__init__(stream_input)
         self.pending_tool_calls = {}
+        self.tool_call_history = {}
+
+    @staticmethod
+    def _is_consent_required_error(content) -> bool:
+        """Check if tool output is a consent_required error from the MCP server."""
+        try:
+            if isinstance(content, str):
+                parsed = json.loads(content)
+            elif isinstance(content, dict):
+                parsed = content
+            elif isinstance(content, list):
+                # Anthropic-style content blocks
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        try:
+                            parsed = json.loads(item.get("text", ""))
+                            if isinstance(parsed, dict) and parsed.get("error") == "consent_required":
+                                return True
+                        except (json.JSONDecodeError, TypeError):
+                            continue
+                return False
+            else:
+                return False
+            return isinstance(parsed, dict) and parsed.get("error") == "consent_required"
+        except (json.JSONDecodeError, TypeError):
+            return False
 
     async def process(self, event: LangGraphStreamEvent) -> AsyncGenerator[StreamEvent, None]:
         """Process tool-related events"""
@@ -250,6 +276,10 @@ class ToolEventProcessor(BaseEventProcessor):
                         try:
                             logger.info(f"TOOL_EVENT_DEBUG - Adding: {tool_call} to pending tool calls")
                             self.pending_tool_calls[tool_call["id"]] = {
+                                "name": tool_call["name"],
+                                "input": tool_call["args"]
+                            }
+                            self.tool_call_history[tool_call["id"]] = {
                                 "name": tool_call["name"],
                                 "input": tool_call["args"]
                             }
@@ -310,29 +340,22 @@ class ToolEventProcessor(BaseEventProcessor):
                             if hasattr(message, 'status'):
                                 logger.debug(f"Status value: {message.status}")
 
+                            # Skip tool_complete for consent_required errors.
+                            # The tool card stays in "pending" state; consent_check_node
+                            # will emit the real tool_complete after consent retry in stream 2.
+                            if self._is_consent_required_error(message.content):
+                                logger.info(
+                                    f"🔐 CONSENT_FLOW: Suppressing tool_complete for consent_required error "
+                                    f"(tool_call_id={tool_call_id}). Will be emitted after consent retry."
+                                )
+                                # Keep in pending_tool_calls so tool_call_history has it
+                                continue
+
                             # Determine status from message
                             status = "success"
                             if hasattr(message, 'status') and message.status == "error":
                                 status = "error"
                                 logger.error(f"TOOL_ERROR_DEBUG - Status set to error from message.status")
-                            # elif isinstance(message.content, str):
-                            #     content_lower = message.content.lower()
-                            #     # Enhanced error detection patterns
-                            #     # TODO: Change this it is absolutely horrible
-                            #     error_patterns = [
-                            #         'error:', 'exception(', 'failed', 'obp-', 'http 4', 'http 5',
-                            #         'value too long', 'unauthorized', 'forbidden', 'bad request',
-                            #         'internal server error', 'not found', 'conflict', 'unprocessable',
-                            #         'obp api error', 'status: 4', 'status: 5'
-                            #     ]
-                            #     matched_patterns = [pattern for pattern in error_patterns if pattern in content_lower]
-                            #     if matched_patterns:
-                            #         status = "error"
-                            #         logger.error(f"TOOL_ERROR_DEBUG - Status set to error from content patterns: {matched_patterns}")
-                            #     else:
-                            #         logger.error(f"TOOL_ERROR_DEBUG - No error patterns matched in content")
-
-                            logger.error(f"TOOL_ERROR_DEBUG - Final status determination: {status}")
 
                             # Try to parse tool output
                             try:
@@ -403,9 +426,51 @@ class ToolEventProcessor(BaseEventProcessor):
                                 details={"tool_call_id": tool_call_id, "original_event": event}
                             )
 
+        # Handle tool message updates from non-tools nodes (e.g., consent_check retry).
+        # When consent_check_node replaces a ToolMessage in-place (same ID), we need
+        # to emit a new tool_complete so the frontend updates the tool card content.
+        if (
+            event["event"] == "on_chain_end"
+            and any(t.startswith("graph:step:") for t in event.get("tags", []))
+            and event["data"].get("output") is not None
+            and "messages" in event["data"]["output"]
+            and event["metadata"].get("langgraph_node", "") not in ("tools", "opey")
+        ):
+            node_name = event["metadata"].get("langgraph_node", "")
+            messages = event["data"]["output"]["messages"]
+            if not isinstance(messages, list):
+                messages = [messages]
+
+            for message in messages:
+                if not isinstance(message, ToolMessage):
+                    continue
+                tool_call_id = message.tool_call_id
+                if not tool_call_id or tool_call_id not in self.tool_call_history:
+                    continue
+
+                tool_info = self.tool_call_history[tool_call_id]
+                status = "error" if (hasattr(message, "status") and message.status == "error") else "success"
+
+                try:
+                    tool_output = json.loads(message.content) if isinstance(message.content, str) else message.content
+                except (json.JSONDecodeError, TypeError):
+                    tool_output = message.content
+
+                logger.info(
+                    f"🔐 CONSENT_FLOW: Emitting updated tool_complete for tool_call_id={tool_call_id} "
+                    f"from node={node_name}, status={status}"
+                )
+                yield StreamEventFactory.tool_end(
+                    tool_name=tool_info["name"],
+                    tool_call_id=tool_call_id,
+                    tool_output=tool_output,
+                    status=status
+                )
+
     def reset_for_new_message(self):
         """Reset tool processor state for a new message"""
         self.pending_tool_calls = {}
+        self.tool_call_history = {}
 
 
 class ApprovalEventProcessor(BaseEventProcessor):

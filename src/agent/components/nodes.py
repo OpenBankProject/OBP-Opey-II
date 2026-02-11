@@ -497,9 +497,10 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
         logger.info(f"🔐 CONSENT_FLOW: Invoking tool '{original_tc['name']}' with modified args")
         result = await tool_fn.ainvoke(original_args)
         logger.info(f"🔐 CONSENT_FLOW: Tool result preview: {str(result)[:300]}")
+        
         # Return state update with replacement message (same ID → updates in-place via add_messages reducer)
         replacement = ToolMessage(
-            content=str(result),
+            content=result,
             tool_call_id=tool_call_id,
             id=error_msg_id,
             status="success",
