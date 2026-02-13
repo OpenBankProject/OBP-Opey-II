@@ -60,7 +60,7 @@ class OpeyAgentGraphBuilder:
     def reset(self):
         """Reset builder to default state"""
         self._tools: List[BaseTool] = []
-        self._system_prompt: str = opey_system_prompt_template
+        self._system_prompt: str = os.getenv("OPEY_SYSTEM_PROMPT", opey_system_prompt_template)
         self._model_name: str = "medium"
         self._temperature: float = 0.7
         self._checkpointer: Optional[BaseCheckpointSaver] = None
