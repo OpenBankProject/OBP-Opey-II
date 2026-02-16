@@ -1,11 +1,7 @@
 import os
 import logging
-from typing import Optional
 from abc import ABC, abstractmethod
-from pydantic import BaseModel
 from fastapi import HTTPException
-from typing import Protocol
-import logging
 
 from auth.session import SessionData
 
