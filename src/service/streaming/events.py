@@ -199,56 +199,104 @@ StreamEvent = Union[
 
 class StreamEventFactory:
     """Factory class for creating stream events"""
-    
+
+    _log_full_messages = os.getenv("LOG_FULL_MESSAGES", "false").lower() == "true"
+
+    @staticmethod
+    def _get_content_preview(event: BaseStreamEvent, max_chars: int = 500) -> Optional[str]:
+        """
+        Extract the main content field from an event and return a
+        pretty-printed, truncated preview for compact logging.
+        """
+        content = None
+        label = None
+        event_type = getattr(event, 'type', '')
+
+        # Pick the most interesting field depending on event shape
+        if hasattr(event, 'tool_output'):
+            content = event.tool_output
+            label = "output"
+        elif hasattr(event, 'tool_input'):
+            content = event.tool_input
+            label = "input"
+        elif hasattr(event, 'content') and event_type not in ('assistant_token',):
+            content = event.content
+            label = "content"
+
+        if content is None:
+            return None
+
+        # Parse JSON strings so they render as pretty-printed JSON, not escaped mess
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        if isinstance(content, (dict, list)):
+            formatted = json.dumps(content, indent=2)
+        else:
+            formatted = str(content)
+
+        total_len = len(formatted)
+        if total_len > max_chars:
+            formatted = formatted[:max_chars] + f"\n  ... ({total_len} chars total)"
+
+        indented = formatted.replace('\n', '\n    ')
+        return f"  {label}: {indented}"
+
     @staticmethod
     def _log_event(event: BaseStreamEvent, event_type: str, details: Dict[str, Any] = None, extra_messages: Dict[str, str] = None):
         """
-        Pretty print and log an event in a single, well-formatted log entry
-        
-        Args:
-            event: The event object to log
-            event_type: The event type identifier (e.g., "ASSISTANT_START")
-            details: Key details to display in the first log line
-            extra_messages: Additional messages to log on separate lines
+        Log a stream event. Format depends on LOG_FULL_MESSAGES env var.
+
+        When LOG_FULL_MESSAGES=false (default): compact header + truncated content preview.
+        When LOG_FULL_MESSAGES=true: full multi-line format with complete JSON event data.
         """
-        log_parts = []
-        
-        # Add header with event type and separator
-        header = f"\n======== EVENT [{event_type}] ========"
         details_str = ", ".join([f"{k}={v}" for k, v in (details or {}).items()])
+
+        if not StreamEventFactory._log_full_messages:
+            # Compact: header line + optional truncated content preview
+            parts = [f"[{event_type}]", details_str]
+            if extra_messages:
+                for key, message in extra_messages.items():
+                    parts.append(f"| {key}: {message}")
+            header = " ".join(parts)
+
+            preview = StreamEventFactory._get_content_preview(event)
+            if preview:
+                logger.info(f"{header}\n{preview}")
+            else:
+                logger.info(header)
+            return
+
+        # Full verbose format
+        log_parts = []
+        header = f"\n======== EVENT [{event_type}] ========"
         log_parts.append(header)
         log_parts.append(details_str)
-        
-        # Add extra messages if any
+
         if extra_messages:
             log_parts.append("----- Additional Information -----")
             for key, message in extra_messages.items():
                 log_parts.append(f"{key}: {message}")
-        
-        # Format and add the event data
+
         log_parts.append("----- Event Data -----")
         event_data = event.to_sse_data().strip()
-        
-        # Try to pretty print the JSON part of the event data
+
         try:
-            # Extract just the JSON part from "data: {...}"
             json_part = event_data[6:] if event_data.startswith("data: ") else event_data
-            if json_part != "[DONE]":  # Skip for stream_end events
+            if json_part != "[DONE]":
                 parsed_json = json.loads(json_part)
                 formatted_json = json.dumps(parsed_json, indent=2)
                 log_parts.append(f"data: {formatted_json}")
             else:
                 log_parts.append(event_data)
-        except:
-            # Fall back to raw data if JSON parsing fails
+        except Exception:
             log_parts.append(event_data)
-        
-        # Add footer
+
         log_parts.append("=" * len(header) + "\n")
-        
-        # Join all parts and log as a single message
-        log_message = "\n".join(log_parts)
-        logger.info(log_message)
+        logger.info("\n".join(log_parts))
 
     @staticmethod
     def assistant_start(message_id: str, run_id: str) -> AssistantStartEvent:

@@ -1,3 +1,4 @@
+import os
 import logging
 from typing import AsyncGenerator, Optional, Literal
 from langchain_core.runnables.schema import StreamEvent as LangGraphStreamEvent
@@ -12,6 +13,7 @@ from service.opey_session import OpeySession
 from .orchestrator_repository import orchestrator_repository
 
 logger = logging.getLogger(__name__)
+_log_full = os.getenv("LOG_FULL_MESSAGES", "false").lower() == "true"
 
 
 class StreamManager:
@@ -57,7 +59,11 @@ class StreamManager:
 
         try:
             # Parse input for the graph
-            logger.info(f"\n\nSTREAM INPUT: {stream_input.model_dump()}\n\n")
+            if _log_full:
+                logger.info(f"\n\nSTREAM INPUT: {stream_input.model_dump()}\n\n")
+            else:
+                msg_preview = (stream_input.message[:80] + "...") if stream_input.message and len(stream_input.message) > 80 else stream_input.message
+                logger.info(f"Stream input: message={msg_preview!r} stream_tokens={stream_input.stream_tokens} has_approval={stream_input.tool_call_approval is not None}")
             if stream_input.tool_call_approval:
                 approval = stream_input.tool_call_approval
                 
@@ -271,34 +277,22 @@ class StreamManager:
             # According to LangGraph docs, __interrupt__ appears in state.values after stream ends
             agent_state = await self.graph.aget_state(config)
 
-            logger.info(f"=== CHECKING FOR INTERRUPTS ===", extra={
-                "event_type": "interrupt_check_start",
-                "thread_id": thread_id
-            })
-            logger.info(f"Agent state details:")
-            logger.info(f"  - Next nodes: {agent_state.next}")
-            logger.info(f"  - Tasks: {len(agent_state.tasks) if agent_state.tasks else 0} tasks")
-            logger.info(f"  - Has __interrupt__ in values: {'__interrupt__' in agent_state.values}")
-            logger.info(f"  - State values keys: {list(agent_state.values.keys()) if agent_state.values else 'None'}")
-            
+            task_count = len(agent_state.tasks) if agent_state.tasks else 0
+            has_interrupt = '__interrupt__' in agent_state.values if agent_state.values else False
+
+            if _log_full:
+                logger.info(f"=== CHECKING FOR INTERRUPTS ===")
+                logger.info(f"Agent state: next={agent_state.next}, tasks={task_count}, has_interrupt={has_interrupt}, keys={list(agent_state.values.keys()) if agent_state.values else 'None'}")
+
             # Collect all interrupts from tasks
             interrupts = []
             if agent_state.tasks:
-                logger.info(f"  - Inspecting {len(agent_state.tasks)} task(s) for interrupts")
-                for i, task in enumerate(agent_state.tasks):
-                    logger.info(f"    Task {i}: name='{task.name}', has_interrupts={hasattr(task, 'interrupts')}")
-                    if hasattr(task, 'interrupts'):
-                        logger.info(f"      Interrupts count: {len(task.interrupts) if task.interrupts else 0}")
-                        if task.interrupts:
-                            interrupts.extend(task.interrupts)
-            else:
-                logger.info(f"  - No tasks in agent state")
+                for task in agent_state.tasks:
+                    if hasattr(task, 'interrupts') and task.interrupts:
+                        interrupts.extend(task.interrupts)
             
             if not interrupts:
-                logger.info("No interrupts found in state after stream completed", extra={
-                    "event_type": "no_interrupts_found",
-                    "thread_id": thread_id
-                })
+                logger.debug("No interrupts found in state after stream completed")
                 return
             
             logger.info(f"Processing {len(interrupts)} interrupt(s)")

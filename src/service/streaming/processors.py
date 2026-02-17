@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 import logging
 from typing import AsyncGenerator, Optional, Dict, Any
@@ -10,6 +11,7 @@ from schema import StreamInput, convert_message_content_to_string
 
 
 logger = logging.getLogger(__name__)
+_log_full = os.getenv("LOG_FULL_MESSAGES", "false").lower() == "true"
 
 
 class BaseEventProcessor:
@@ -260,21 +262,21 @@ class ToolEventProcessor(BaseEventProcessor):
             and "messages" in event["data"]["output"]
             and event["metadata"].get("langgraph_node", "") == "opey"
         ):
-            logger.info(f"TOOL_EVENT_DEBUG - Processing event: {event['event']} with metadata: {event.get('metadata', {})}")
+            if _log_full:
+                logger.info(f"TOOL_EVENT_DEBUG - Processing event: {event['event']} with metadata: {event.get('metadata', {})}")
+            else:
+                logger.info(f"Processing tool event: {event['event']} node={event.get('metadata', {}).get('langgraph_node', '')}")
 
             messages = event["data"]["output"]["messages"]
             if not isinstance(messages, list):
                 messages = [messages]
 
-
-            grabbed_run_id = event.get("run_id", None)
-            print(f"Grabbed run_id from tool: {grabbed_run_id}")  # Debugging line
-
             for message in messages:
                 if isinstance(message, AIMessage) and hasattr(message, 'tool_calls') and message.tool_calls:
                     for tool_call in message.tool_calls:
                         try:
-                            logger.info(f"TOOL_EVENT_DEBUG - Adding: {tool_call} to pending tool calls")
+                            if _log_full:
+                                logger.info(f"TOOL_EVENT_DEBUG - Adding: {tool_call} to pending tool calls")
                             self.pending_tool_calls[tool_call["id"]] = {
                                 "name": tool_call["name"],
                                 "input": tool_call["args"]
@@ -317,17 +319,17 @@ class ToolEventProcessor(BaseEventProcessor):
             if not isinstance(messages, list):
                 messages = [messages]
 
-            logger.info(f"\n\nTOOL_EVENT_DEBUG - Processing event:\n{json.dumps(event, indent=2, default=str)}\n\n")
-
-            grabbed_run_id = event.get("run_id", None)
-            print(f"Grabbed run_id from tool completion: {grabbed_run_id}") 
+            if _log_full:
+                logger.info(f"\n\nTOOL_EVENT_DEBUG - Processing event:\n{json.dumps(event, indent=2, default=str)}\n\n")
 
             for message in messages:
-                logger.info(f"TOOL_EVENT_DEBUG - Processing message of instance ({type(message)}): {message}")
+                if _log_full:
+                    logger.info(f"TOOL_EVENT_DEBUG - Processing message of instance ({type(message)}): {message}")
                 if isinstance(message, ToolMessage):
                     tool_call_id = message.tool_call_id
-                    logger.info(f"TOOL_EVENT_DEBUG - Found ToolMessage with tool_call_id: {tool_call_id}")
-                    logger.info(f"TOOL_EVENT_DEBUG - Current pending_tool_calls: {self.pending_tool_calls.keys()}")
+                    if _log_full:
+                        logger.info(f"TOOL_EVENT_DEBUG - Found ToolMessage with tool_call_id: {tool_call_id}")
+                        logger.info(f"TOOL_EVENT_DEBUG - Current pending_tool_calls: {self.pending_tool_calls.keys()}")
                     if tool_call_id in self.pending_tool_calls:
                         try:
                             tool_info = self.pending_tool_calls[tool_call_id]
@@ -392,24 +394,17 @@ class ToolEventProcessor(BaseEventProcessor):
                                     for_message_id=getattr(message, 'id', None),
                                     details={"tool_call_id": tool_call_id, "tool_name": tool_info["name"], "tool_output": tool_output}
                                 )
-                                logger.error(f"TOOL_ERROR_STREAM - About to yield error event: {error_event.model_dump_json()}")
                                 yield error_event
-                                logger.error(f"TOOL_ERROR_STREAM - Successfully yielded error event")
 
-                            logger.error(f"TOOL_END_STREAM - About to emit tool_end event for tool_call_id={tool_call_id} with status={status}")
-                            logger.info(f"TOOL_END_STREAM - About to emit tool_end event for tool_call_id={tool_call_id} with status={status}")
                             tool_end_event = StreamEventFactory.tool_end(
                                 tool_name=tool_info["name"],
                                 tool_call_id=tool_call_id,
                                 tool_output=tool_output,
                                 status=status
                             )
-                            logger.error(f"TOOL_END_STREAM - Yielding tool_end event: {tool_end_event.model_dump_json()}")
                             yield tool_end_event
-                            logger.error(f"TOOL_END_STREAM - Successfully yielded tool_end event")
 
                             # Remove from pending
-                            logger.info(f"TOOL_EVENT_DEBUG - Removing tool_call_id {tool_call_id} from pending_tool_calls")
                             del self.pending_tool_calls[tool_call_id]
                         except Exception as e:
                             error_msg = f"Error processing tool completion: {str(e)}"
