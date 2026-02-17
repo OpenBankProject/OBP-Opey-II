@@ -457,7 +457,7 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
         # Return state update with replacement message (same ID → updates in-place)
         return {
             "messages": [ToolMessage(
-                content="Consent denied — no consent JWT provided",
+                content="End user denied consent for this tool.",
                 tool_call_id=tool_call_id,
                 id=error_msg_id,
                 status="error",
