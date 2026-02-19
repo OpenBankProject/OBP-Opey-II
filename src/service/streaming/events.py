@@ -152,10 +152,12 @@ class UserMessageConfirmEvent(BaseStreamEvent):
 class ConsentRequestEvent(BaseStreamEvent):
     """Event fired when a tool call requires OBP consent (Consent-JWT)"""
     type: Literal["consent_request"] = "consent_request"
-    tool_call_id: str = Field(description="ID of the tool call that needs consent")
+    tool_call_id: str = Field(description="ID of the primary tool call that needs consent")
     tool_name: str = Field(description="Name of the tool requiring consent")
     operation_id: Optional[str] = Field(default=None, description="OBP API operation that requires consent")
     required_roles: list = Field(default_factory=list, description="OBP roles required for this operation")
+    tool_call_count: int = Field(default=1, description="Number of tool calls waiting on this consent (>1 means batch)")
+    bank_id: Optional[str] = Field(default=None, description="OBP bank ID from the consent_required error")
 
     def to_sse_data(self) -> str:
         return f"data: {self.model_dump_json()}\n\n"
@@ -528,6 +530,8 @@ class StreamEventFactory:
         tool_name: str,
         operation_id: Optional[str] = None,
         required_roles: Optional[list] = None,
+        tool_call_count: int = 1,
+        bank_id: Optional[str] = None,
     ) -> ConsentRequestEvent:
         """Create a consent request event for tool calls requiring OBP consent."""
         event = ConsentRequestEvent(
@@ -535,6 +539,8 @@ class StreamEventFactory:
             tool_name=tool_name,
             operation_id=operation_id,
             required_roles=required_roles or [],
+            tool_call_count=tool_call_count,
+            bank_id=bank_id,
         )
         StreamEventFactory._log_event(
             event,
@@ -544,6 +550,8 @@ class StreamEventFactory:
                 "tool_name": tool_name,
                 "operation_id": operation_id,
                 "required_roles_count": len(required_roles or []),
+                "tool_call_count": tool_call_count,
+                "bank_id": bank_id,
             },
         )
         return event

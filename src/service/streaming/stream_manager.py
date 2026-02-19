@@ -145,7 +145,12 @@ class StreamManager:
             else:
                 # Regular user message
                 input_message = ChatMessage(type="human", content=stream_input.message)
-                
+
+                # Resolve any pending consent/approval interrupts from a previous turn
+                # that was cancelled without properly denying them. Without this, the
+                # interrupted node may fire again and re-emit the same consent request.
+                await self._fix_pending_interrupts(config)
+
                 # CRITICAL: Check for orphaned tool calls before adding new message
                 # This can happen when cancellation occurs during tool execution
                 await self._fix_orphaned_tool_calls(config)
@@ -305,16 +310,18 @@ class StreamManager:
                 
                 # Check if this is a consent interrupt (from consent_check_node)
                 if approval_payload.get("consent_type") == "consent_required":
-                    logger.info("Processing consent request interrupt", extra={
-                        "event_type": "consent_request_from_interrupt",
-                        "thread_id": thread_id,
-                        "operation_id": approval_payload.get("operation_id"),
-                    })
+                    tool_call_count = approval_payload.get("tool_call_count", 1)
+                    logger.info(
+                        f"Processing consent request interrupt: operation={approval_payload.get('operation_id')} "
+                        f"({tool_call_count} tool call(s))"
+                    )
                     yield StreamEventFactory.consent_request(
                         tool_call_id=approval_payload.get("tool_call_id", ""),
                         tool_name=approval_payload.get("tool_name", ""),
                         operation_id=approval_payload.get("operation_id"),
                         required_roles=approval_payload.get("required_roles", []),
+                        tool_call_count=tool_call_count,
+                        bank_id=approval_payload.get("bank_id"),
                     )
                     continue
                 
@@ -369,6 +376,127 @@ class StreamManager:
                 error_message=error_msg,
                 error_code="approval_check_error",
                 details={"thread_id": thread_id, "error_type": type(e).__name__}
+            )
+
+    async def _fix_pending_interrupts(self, config: RunnableConfig) -> None:
+        """
+        Resolve any pending consent or approval interrupts before adding a new user message.
+
+        When a user cancels a consent/approval dialog without properly denying it (i.e.
+        without calling the /approval endpoint), the graph is left with:
+          1. A pending interrupt task in the checkpoint, AND
+          2. ToolMessages with consent_required / pending-approval content still in state
+
+        If left unresolved, the interrupted node may re-run and emit the same interrupt
+        again on the next turn. This method detects that situation and:
+          - Replaces the stale consent_required ToolMessages with explicit denial messages
+            (using the same IDs so the add_messages reducer updates them in-place)
+          - Updates the checkpoint as if the interrupted node completed, which clears
+            the pending interrupt task
+
+        Safe to call even when there are no pending interrupts (no-op in that case).
+        """
+        from langchain_core.messages import ToolMessage as LCToolMessage
+
+        thread_id = config.get("configurable", {}).get("thread_id")
+
+        try:
+            agent_state = await self.graph.aget_state(config)
+            if not agent_state or not agent_state.tasks:
+                return
+
+            interrupts = []
+            for task in agent_state.tasks:
+                if hasattr(task, 'interrupts') and task.interrupts:
+                    interrupts.extend(task.interrupts)
+
+            if not interrupts:
+                return
+
+            logger.warning(
+                f"Found {len(interrupts)} pending interrupt(s) for thread {thread_id} "
+                f"before new user message — resolving as cancelled",
+                extra={"event_type": "pending_interrupt_cleanup", "thread_id": thread_id}
+            )
+
+            messages = agent_state.values.get("messages", []) if agent_state.values else []
+
+            for interrupt_obj in interrupts:
+                payload = interrupt_obj.value
+
+                if payload.get("consent_type") == "consent_required":
+                    # Consent interrupt — replace consent_required ToolMessages with denials
+                    tool_call_ids = payload.get("tool_call_ids", [])
+                    if not tool_call_ids and payload.get("tool_call_id"):
+                        tool_call_ids = [payload["tool_call_id"]]
+
+                    denial_messages = []
+                    for tool_call_id in tool_call_ids:
+                        original_msg_id = None
+                        for msg in messages:
+                            if isinstance(msg, LCToolMessage) and msg.tool_call_id == tool_call_id:
+                                original_msg_id = msg.id
+                                break
+
+                        denial_msg = LCToolMessage(
+                            content="Consent request cancelled — user sent a new message.",
+                            tool_call_id=tool_call_id,
+                            status="error",
+                        )
+                        if original_msg_id:
+                            denial_msg.id = original_msg_id  # Replace in-place via reducer
+                        denial_messages.append(denial_msg)
+
+                    # Update state as if consent_check completed with these denial messages,
+                    # which clears the interrupt task in the checkpoint.
+                    await self.graph.aupdate_state(
+                        config,
+                        {"messages": denial_messages},
+                        as_node="consent_check",
+                    )
+                    logger.info(
+                        f"Resolved pending consent interrupt for "
+                        f"operation={payload.get('operation_id')} "
+                        f"with {len(denial_messages)} denial(s)",
+                        extra={"event_type": "consent_interrupt_resolved", "thread_id": thread_id}
+                    )
+
+                elif payload.get("tool_calls") or payload.get("tool_call_id"):
+                    # Human-review (approval) interrupt — deny all pending tool calls
+                    tool_calls = payload.get("tool_calls", [])
+                    if not tool_calls and payload.get("tool_call_id"):
+                        tool_calls = [{"tool_call_id": payload["tool_call_id"]}]
+
+                    denial_messages = [
+                        LCToolMessage(
+                            content="Tool call cancelled — user sent a new message.",
+                            tool_call_id=tc.get("tool_call_id"),
+                            status="error",
+                        )
+                        for tc in tool_calls
+                        if tc.get("tool_call_id")
+                    ]
+
+                    await self.graph.aupdate_state(
+                        config,
+                        {"messages": denial_messages},
+                        as_node="human_review",
+                    )
+                    logger.info(
+                        f"Resolved pending approval interrupt with {len(denial_messages)} denial(s)",
+                        extra={"event_type": "approval_interrupt_resolved", "thread_id": thread_id}
+                    )
+                else:
+                    logger.warning(
+                        f"Unknown pending interrupt type for thread {thread_id}: {list(payload.keys())}",
+                        extra={"event_type": "unknown_interrupt_type", "thread_id": thread_id}
+                    )
+
+        except Exception as e:
+            logger.error(
+                f"Error fixing pending interrupts: {e}",
+                exc_info=True,
+                extra={"event_type": "pending_interrupt_fix_error", "thread_id": thread_id}
             )
 
     async def _fix_orphaned_tool_calls(self, config: RunnableConfig) -> None:
