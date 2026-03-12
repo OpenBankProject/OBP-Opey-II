@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from auth.session import session_verifier, SessionData, session_cookie
-from auth.auth import OBPConsentAuth
+from auth.auth import OBPConsentAuth, OBPBearerAuth
 from auth.usage_tracker import usage_tracker
 from fastapi import Depends, Request
 from uuid import UUID
@@ -59,7 +59,10 @@ class OpeySession:
         
         # Initialize auth object only if not anonymous
         if not self.is_anonymous:
-            self.auth = OBPConsentAuth(consent_id=self.consent_id)
+            if session_data.bearer_token:
+                self.auth = OBPBearerAuth(bearer_token=session_data.bearer_token)
+            elif self.consent_id:
+                self.auth = OBPConsentAuth(consent_id=self.consent_id)
 
         # Store bearer token for MCP authentication
         self._bearer_token = session_data.bearer_token

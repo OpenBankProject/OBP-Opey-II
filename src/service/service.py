@@ -45,7 +45,7 @@ logger = logging.getLogger('opey.service')
 app = FastAPI(lifespan=lifespan)
 
 # Setup configuration
-from .config import get_cors_config, setup_auth, setup_rate_limiting, get_obp_base_url
+from .config import get_cors_config, setup_rate_limiting, get_obp_base_url
 from .middleware import setup_middleware
 
 cors_allowed_origins, cors_allowed_methods, cors_allowed_headers = get_cors_config()

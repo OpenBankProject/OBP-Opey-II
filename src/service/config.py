@@ -3,7 +3,6 @@ Configuration setup for the Opey service.
 
 This module handles all configuration initialization including:
 - CORS settings
-- Authentication configuration
 - Rate limiting setup
 - Environment variables parsing
 """
@@ -12,7 +11,6 @@ import logging
 from typing import Tuple
 from fastapi import FastAPI
 
-from auth.auth import AuthConfig, OBPConsentAuth
 from auth.rate_limiting import create_limiter, _rate_limit_exceeded_handler, get_user_id_from_request
 from slowapi.errors import RateLimitExceeded
 
@@ -51,20 +49,6 @@ def get_cors_config() -> Tuple[list[str], list[str], list[str]]:
     return cors_allowed_origins, cors_allowed_methods, cors_allowed_headers
 
 
-def setup_auth() -> AuthConfig:
-    """
-    Configure and return authentication strategies.
-    
-    Currently only OBP consent authentication is supported.
-    
-    Returns:
-        Configured AuthConfig instance
-    """
-    auth_config = AuthConfig()
-    auth_config.register_auth_strategy("obp_consent_id", OBPConsentAuth())
-    logger.info("Authentication configured with OBP consent strategy")
-    return auth_config
-
 
 def setup_rate_limiting(app: FastAPI) -> None:
     """
@@ -97,7 +81,6 @@ def get_obp_base_url() -> str | None:
 
 __all__ = [
     'get_cors_config',
-    'setup_auth',
     'setup_rate_limiting',
     'get_obp_base_url',
 ]
