@@ -11,8 +11,9 @@ import logging
 
 from .approval import ApprovalStore, ApprovalScope, ApprovalRequest, ApprovalDecision
 from .mcp_integration import (
-    MCPToolLoader, 
-    MCPServerConfig, 
+    MCPToolLoader,
+    MCPServerConfig,
+    MCPConnectionError,
     create_mcp_tools_with_auth,
     create_bearer_token_interceptor,
 )
@@ -28,6 +29,7 @@ __all__ = [
     # MCP integration
     "MCPToolLoader",
     "MCPServerConfig",
+    "MCPConnectionError",
     "create_mcp_tools_with_auth",
     "create_bearer_token_interceptor",
     # Factory
