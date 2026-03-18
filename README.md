@@ -18,31 +18,11 @@ You can also then run commands by first activating `poetry shell` which should a
 After installing poetry, install the poetry shell plugin with `poetry self add poetry-plugin-shell` and you should be good to go.
 
 
-### 2. Creating the vector database
-Create the 'data' folder by running 
-```bash
-mkdir src/data
-``` 
-Check the README.md in the `src/scripts` directory for more information on how to populate the vector database.
+### 2. Setting up MCP tools
 
-Run the vector database population script to create the vector database collections:
-```bash
-python src/database/populate_vector_db.py
-```
+`cp mcp_servers.example.json mcp_servers.json`
 
-#### Automatic Database Updates
-Opey II can automatically check for OBP data changes on startup and update the vector database when changes are detected. To enable this feature, set in your `.env`:
-
-```env
-UPDATE_DATABASE_ON_STARTUP="true"
-UPDATE_DATABASE_ENDPOINT_TYPE="all"  # Options: "static", "dynamic", "all"
-```
-
-When enabled, the system will:
-- Fetch current OBP glossary and endpoint data on startup
-- Compare with previously imported data using SHA-256 hashes
-- Rebuild the database only if changes are detected
-- Store hashes for future comparisons
+As a minimum, Opey should be connected to [OBP-MCP](https://github.com/OpenBankProject/OBP-MCP), or it won't know anything about the Open Bank Project except for what you put in the [system prompt](#5-changing-the-system-prompt). Instructions for setting up OBP-MCP as an internal, consent-based MCP server that works with OBP-Portal etc. can be found in [Appendix 1](https://github.com/OpenBankProject/OBP-MCP/blob/main/README.md#appendix-1---opey-setup) of the OBP-MCP readme. 
 
 ### 3. Setting up the environment 
 First you will need to rename the `.env.example` file to `.env` and change several parameters. You have options on which LLM provider you decide to use for the backend agent system. 

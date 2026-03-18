@@ -92,7 +92,8 @@ def _parse_mcp_config() -> List[MCPServerConfig]:
                 url=raw.get("url"),
                 transport=raw.get("transport", "streamable_http"),
                 headers=raw.get("headers", {}),
-                requires_auth=raw.get("requires_auth", False),
+                # Support both new "forward_bearer_token" and legacy "requires_auth"
+                forward_bearer_token=raw.get("forward_bearer_token", raw.get("requires_auth", False)),
                 command=raw.get("command"),
                 args=raw.get("args", []),
                 env=raw.get("env"),
@@ -124,8 +125,8 @@ async def initialize_mcp_tools() -> List[BaseTool]:
         return []
     
     # Split servers by auth requirement
-    no_auth_servers = [s for s in _server_configs if not s.requires_auth]
-    auth_servers = [s.name for s in _server_configs if s.requires_auth]
+    no_auth_servers = [s for s in _server_configs if not s.forward_bearer_token]
+    auth_servers = [s.name for s in _server_configs if s.forward_bearer_token]
     
     if auth_servers:
         logger.info(f"Servers requiring auth (loaded per-request): {auth_servers}")
@@ -178,7 +179,7 @@ def get_server_configs() -> List[MCPServerConfig]:
 def get_auth_required_servers() -> List[str]:
     """Get list of server names that require bearer token authentication."""
     configs = get_server_configs()
-    return [s.name for s in configs if s.requires_auth]
+    return [s.name for s in configs if s.forward_bearer_token]
 
 
 async def get_mcp_tools_with_auth(bearer_token: Optional[str] = None) -> List[BaseTool]:

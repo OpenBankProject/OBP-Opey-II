@@ -4,14 +4,14 @@
       "name": "obp-mcp",
       "url": "http://localhost:9100/mcp",
       "transport": "streamable_http",
-      "requires_auth": true,
-      "_comment": "OBP-MCP server with bearer token auth (token from frontend OAuth flow)"
+      "forward_bearer_token": true,
+      "_comment": "OBP-MCP server - forwards the user's OAuth bearer token via Authorization header"
     },
     {
       "name": "local-tools",
       "url": "http://localhost:8001/mcp",
       "transport": "streamable_http",
-      "requires_auth": false,
+      "forward_bearer_token": false,
       "_comment": "Local MCP server without authentication"
     },
     {
