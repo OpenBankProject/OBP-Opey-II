@@ -36,9 +36,9 @@ class MCPServerConfig:
     url: Optional[str] = None
     headers: Dict[str, str] = field(default_factory=dict)
     
-    # Whether this server requires bearer token authentication
-    # If True, the bearer token from the session will be added to requests
-    requires_auth: bool = False
+    # Whether to forward the user's bearer token to this server
+    # If True, the bearer token from the session will be added as an Authorization header
+    forward_bearer_token: bool = False
     
     # stdio transport
     command: Optional[str] = None
@@ -60,7 +60,7 @@ class MCPToolLoader:
         Args:
             servers: List of server configurations
             bearer_token: Optional bearer token for authenticated requests.
-                         If provided, adds Authorization header to servers with requires_auth=True.
+                         If provided, adds Authorization header to servers with forward_bearer_token=True.
         """
         self.servers = servers
         self.bearer_token = bearer_token
@@ -107,11 +107,11 @@ class MCPToolLoader:
                 
                 # Build headers, injecting bearer token if needed
                 headers = dict(server.headers)  # Copy to avoid mutating config
-                if server.requires_auth and self.bearer_token:
+                if server.forward_bearer_token and self.bearer_token:
                     headers["Authorization"] = f"Bearer {self.bearer_token}"
                     logger.info(f"DEBUG: Injecting bearer token to '{server.name}' - token starts with: {self.bearer_token[:20]}...")
-                elif server.requires_auth and not self.bearer_token:
-                    logger.warning(f"MCP server '{server.name}' requires auth but no bearer token provided")
+                elif server.forward_bearer_token and not self.bearer_token:
+                    logger.warning(f"MCP server '{server.name}' has forward_bearer_token=true but no bearer token provided")
                 
                 if headers:
                     config["headers"] = headers
