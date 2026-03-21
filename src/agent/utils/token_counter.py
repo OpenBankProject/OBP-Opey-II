@@ -1,8 +1,11 @@
 import os
+import logging
 from typing import Optional
 from .model_factory import get_model, get_context_window, get_max_tokens
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.utils import count_tokens_approximately
+
+logger = logging.getLogger("uvicorn.error")
 
 def count_tokens_from_messages(messages: list[BaseMessage], model_name: str, model_kwargs: Optional[dict] = None) -> int:
     """Count the number of tokens in a list of messages for a given model.
@@ -23,7 +26,11 @@ def count_tokens_from_messages(messages: list[BaseMessage], model_name: str, mod
     try:
         total_tokens += counting_llm.get_num_tokens_from_messages(messages)
     except NotImplementedError as e:
-        print(f"Could not count tokens for model provider {os.getenv('MODEL_PROVIDER')}:\n{e}\n\nApproximating token count...")
+        logger.warning(f"Could not count tokens for model provider {os.getenv('MODEL_PROVIDER')}: {e}. Approximating...")
+        total_tokens += count_tokens_approximately(messages)
+    except Exception as e:
+        # Safety net for invalid message structures (e.g. missing tool_results after summarization)
+        logger.warning(f"Token counting failed: {e}. Approximating...")
         total_tokens += count_tokens_approximately(messages)
     
     return total_tokens

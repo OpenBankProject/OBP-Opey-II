@@ -11,7 +11,7 @@ from uuid import UUID
 
 from fastapi import Depends, Request
 
-from auth.auth import AuthConfig, OBPConsentAuth
+from auth.auth import AuthConfig, OBPConsentAuth, OBPBearerAuth
 from auth.session import session_verifier, SessionData, session_cookie, backend
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
@@ -43,6 +43,7 @@ def get_auth_config() -> AuthConfig:
     """
     auth_config = AuthConfig()
     auth_config.register_auth_strategy("obp_consent_id", OBPConsentAuth())
+    auth_config.register_auth_strategy("obp_bearer", OBPBearerAuth())
     return auth_config
 
 

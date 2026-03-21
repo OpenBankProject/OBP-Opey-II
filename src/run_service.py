@@ -21,6 +21,11 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
+# Quiet down noisy third-party loggers
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("mcp").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 # Log the current configuration for confirmation
 logging.info(f"🚀 Opey II Service starting")
 logging.info(f"📊 Log level: {log_level}")

@@ -1,4 +1,4 @@
-from .auth import AuthConfig, OBPConsentAuth, OBPDirectLoginAuth
+from .auth import AuthConfig, OBPConsentAuth, OBPBearerAuth, OBPDirectLoginAuth
 from .admin_client import (
     initialize_admin_client,
     get_admin_client,
@@ -10,6 +10,7 @@ from .admin_client import (
 __all__ = [
     "AuthConfig",
     "OBPConsentAuth",
+    "OBPBearerAuth",
     "OBPDirectLoginAuth",
     "initialize_admin_client",
     "get_admin_client",

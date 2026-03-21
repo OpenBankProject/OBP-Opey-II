@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from langchain_core.tools import BaseTool
-from agent.components.tools import MCPToolLoader, MCPServerConfig, create_mcp_tools_with_auth
+from agent.components.tools import MCPToolLoader, MCPServerConfig, MCPConnectionError, create_mcp_tools_with_auth
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,8 @@ def _parse_mcp_config() -> List[MCPServerConfig]:
                 url=raw.get("url"),
                 transport=raw.get("transport", "streamable_http"),
                 headers=raw.get("headers", {}),
-                requires_auth=raw.get("requires_auth", False),
+                # Support both new "forward_bearer_token" and legacy "requires_auth"
+                forward_bearer_token=raw.get("forward_bearer_token", raw.get("requires_auth", False)),
                 command=raw.get("command"),
                 args=raw.get("args", []),
                 env=raw.get("env"),
@@ -124,8 +125,8 @@ async def initialize_mcp_tools() -> List[BaseTool]:
         return []
     
     # Split servers by auth requirement
-    no_auth_servers = [s for s in _server_configs if not s.requires_auth]
-    auth_servers = [s.name for s in _server_configs if s.requires_auth]
+    no_auth_servers = [s for s in _server_configs if not s.forward_bearer_token]
+    auth_servers = [s.name for s in _server_configs if s.forward_bearer_token]
     
     if auth_servers:
         logger.info(f"Servers requiring auth (loaded per-request): {auth_servers}")
@@ -143,14 +144,12 @@ async def initialize_mcp_tools() -> List[BaseTool]:
         _mcp_tools = await _mcp_loader.load_tools()
         logger.info(f"Loaded {len(_mcp_tools)} MCP tools at startup: {[t.name for t in _mcp_tools]}")
         return _mcp_tools
-    except ExceptionGroup as eg:
-        logger.error(f"Failed to load MCP tools: {eg}")
-        for i, exc in enumerate(eg.exceptions):
-            logger.error(f"  Sub-exception {i+1}: {type(exc).__name__}: {exc}")
+    except MCPConnectionError as e:
+        logger.error(f"MCP startup error: {e}")
         _mcp_tools = []
         return []
     except Exception as e:
-        logger.error(f"Failed to load MCP tools: {type(e).__name__}: {e}")
+        logger.error(f"Unexpected error loading MCP tools: {type(e).__name__}: {e}")
         _mcp_tools = []
         return []
 
@@ -180,7 +179,7 @@ def get_server_configs() -> List[MCPServerConfig]:
 def get_auth_required_servers() -> List[str]:
     """Get list of server names that require bearer token authentication."""
     configs = get_server_configs()
-    return [s.name for s in configs if s.requires_auth]
+    return [s.name for s in configs if s.forward_bearer_token]
 
 
 async def get_mcp_tools_with_auth(bearer_token: Optional[str] = None) -> List[BaseTool]:

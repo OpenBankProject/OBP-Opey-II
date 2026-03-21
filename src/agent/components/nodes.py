@@ -5,10 +5,6 @@ import logging
 
 from typing import List, Dict
 
-from pprint import pprint
-
-from langchain_openai.chat_models import ChatOpenAI
-from langchain_anthropic.chat_models import ChatAnthropic
 from langchain_core.messages import ToolMessage, SystemMessage, RemoveMessage, AIMessage, trim_messages
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
@@ -52,36 +48,55 @@ async def run_summary_chain(state: OpeyGraphState):
         include_system=True
     )
 
-    # We need to verify that all tool messages in the trimmed messages are preceded by an AI message with a tool call
-    to_insert: List[tuple] = []
-    for i, trimmed_messages_msg in enumerate(trimmed_messages):
-        # Stop at each ToolMessage to find the AIMessage that called it
-        if isinstance(trimmed_messages_msg, ToolMessage):
-            print(f"Checking tool message {trimmed_messages_msg}")
-            tool_call_id = trimmed_messages_msg.tool_call_id
-            found_tool_call = False
-            for k, msg in enumerate(messages):
-                # Find the AIMessage that called the tool
-                if isinstance(msg, AIMessage) and msg.tool_calls:
-                    # Check if a tool call with the same tool_call_id as our ToolMessage is in the tool calls of the AIMessage
-                    if tool_call_id in [tool_call["id"] for tool_call in msg.tool_calls]:
-                        # Insert the AIMessage before the ToolMessage in the trimmed messages, the insert method inserts element before the index
-                        to_insert.append((i, msg))
-                        found_tool_call = True
-                        break
-            if not found_tool_call:
-                raise Exception(f"Could not find tool call for ToolMessage {trimmed_messages_msg} with id {trimmed_messages_msg.id} in the messages")
+    # Build an index: tool_call_id -> parent AIMessage (from full conversation)
+    tool_call_id_to_ai_msg: Dict[str, AIMessage] = {}
+    for msg in messages:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            for tc in msg.tool_calls:
+                tool_call_id_to_ai_msg[tc["id"]] = msg
 
-    # Insert the AIMessages before the ToolMessages in trimmed_messages
-    if to_insert:
-        for pair in to_insert:
-            i, msg = pair
-            trimmed_messages.insert(i, msg)
+    # Collect IDs of messages we must keep
+    trimmed_ids = {msg.id for msg in trimmed_messages}
 
-    print(f"\nTrimmed messages:\n")
+    # For every ToolMessage in the trimmed set, ensure its parent AIMessage is included
+    required_ai_msg_ids = set()
     for msg in trimmed_messages:
-        msg.pretty_print()
-    delete_messages = [RemoveMessage(id=message.id) for message in messages if message not in trimmed_messages]
+        if isinstance(msg, ToolMessage):
+            parent_ai = tool_call_id_to_ai_msg.get(msg.tool_call_id)
+            if parent_ai:
+                required_ai_msg_ids.add(parent_ai.id)
+                trimmed_ids.add(parent_ai.id)
+            else:
+                logger.warning(f"Could not find parent AIMessage for ToolMessage {msg.id} (tool_call_id={msg.tool_call_id})")
+
+    # For every required AIMessage, ensure ALL its sibling ToolMessages are included
+    # This fixes the batch tool_use bug: if an AIMessage has N tool_uses, all N ToolMessages must be present
+    for msg in messages:
+        if isinstance(msg, AIMessage) and msg.id in required_ai_msg_ids and msg.tool_calls:
+            for tc in msg.tool_calls:
+                # Find the ToolMessage for this tool_call_id
+                for candidate in messages:
+                    if isinstance(candidate, ToolMessage) and candidate.tool_call_id == tc["id"]:
+                        trimmed_ids.add(candidate.id)
+                        break
+
+    # Also handle AIMessages already in trimmed set that have tool_calls — ensure their ToolMessages are included too
+    for msg in trimmed_messages:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            for tc in msg.tool_calls:
+                for candidate in messages:
+                    if isinstance(candidate, ToolMessage) and candidate.tool_call_id == tc["id"]:
+                        trimmed_ids.add(candidate.id)
+                        break
+
+    # Rebuild trimmed_messages from original messages to preserve correct ordering
+    trimmed_messages = [msg for msg in messages if msg.id in trimmed_ids]
+
+    logger.debug(f"Trimmed messages after repair ({len(trimmed_messages)} messages):")
+    for msg in trimmed_messages:
+        logger.debug(f"  {type(msg).__name__} id={msg.id}")
+
+    delete_messages = [RemoveMessage(id=message.id) for message in messages if message.id not in trimmed_ids]
 
     # Reset total tokens count, this is fine to do even though messages remain in the state as the tokens are counted
     # at the run of the Opey node
@@ -347,11 +362,27 @@ def _parse_consent_error(tool_message: ToolMessage) -> Dict | None:
         {"error": "consent_required", "required_roles": [...], "operation_id": "..."}
     """
     content = tool_message.content
+    
+    # Handle Anthropic-style content (list of content blocks)
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text", "")
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, dict) and parsed.get("error") == "consent_required":
+                        return parsed
+                except (json.JSONDecodeError, TypeError):
+                    continue
+        return None
+    
+    # Handle string content
     if isinstance(content, str):
         try:
             parsed = json.loads(content)
         except (json.JSONDecodeError, TypeError):
             return None
+    # Handle dict content
     elif isinstance(content, dict):
         parsed = content
     else:
@@ -372,109 +403,183 @@ def _find_tool_call_for_message(messages: List, tool_call_id: str) -> Dict | Non
     return None
 
 
+async def _retry_tool_with_consent(
+    tool_call_id: str,
+    error_msg_id: str,
+    original_tc: Dict,
+    consent_jwt: str,
+    tools_by_name: Dict,
+) -> ToolMessage:
+    """Retry a single tool call with an injected Consent-JWT. Returns a replacement ToolMessage."""
+    tool_name = original_tc["name"]
+    tool_fn = tools_by_name.get(tool_name)
+    if not tool_fn:
+        logger.error(f"🔐 CONSENT_FLOW: Tool '{tool_name}' not found in tools_by_name for consent retry")
+        return ToolMessage(
+            content=f"Failed to retry with consent: tool '{tool_name}' not found",
+            tool_call_id=tool_call_id,
+            id=error_msg_id,
+            status="error",
+        )
+
+    original_args = dict(original_tc.get("args", {}))
+    existing_headers = original_args.get("headers", {}) or {}
+    original_args["headers"] = {**existing_headers, "Consent-JWT": consent_jwt}
+
+    try:
+        logger.info(f"🔐 CONSENT_FLOW: Retrying '{tool_name}' (tool_call_id={tool_call_id}) with Consent-JWT")
+        result = await tool_fn.ainvoke(original_args)
+        return ToolMessage(
+            content=result,
+            tool_call_id=tool_call_id,
+            id=error_msg_id,
+            status="success",
+        )
+    except Exception as e:
+        logger.error(f"🔐 CONSENT_FLOW: Consent retry failed for '{tool_name}': {e}", exc_info=True)
+        return ToolMessage(
+            content=f"Consent retry failed: {str(e)}",
+            tool_call_id=tool_call_id,
+            id=error_msg_id,
+            status="error",
+        )
+
+
 async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
     """
     Check tool responses for consent_required errors from MCP servers.
-    
-    When the MCP server's call_obp_api tool requires a Consent-JWT but none was
-    provided, it returns a structured error. This node detects that error,
-    interrupts to request a consent JWT from the frontend, then retries the 
-    tool call with the JWT injected into the headers argument.
-    
+
+    Handles batch tool calls correctly: when multiple tool calls fail with
+    consent_required, they are grouped by operation_id. Each distinct operation
+    triggers one interrupt (and requires its own Consent-JWT, since JWTs are
+    scoped per operation). Tool calls sharing the same operation_id are retried
+    together using that operation's JWT.
+
+    Uses the add_messages reducer's update-by-ID feature: returning a ToolMessage
+    with the same ID as the original error message replaces it in-place.
+
     Flow:
-        1. Scan recent ToolMessages for consent_required errors
-        2. If found → interrupt() with consent details
-        3. Frontend obtains consent JWT from OBP and resumes
-        4. Re-invoke the tool with Consent-JWT in headers
-        5. Replace error ToolMessage with successful result
+        1. Scan all ToolMessages for consent_required errors
+        2. Group by operation_id
+        3. For each distinct operation: interrupt() → get JWT → retry all tools for that op
+        4. Return all replacement ToolMessages at once
     """
     messages = state["messages"]
     if not messages:
         return {}
-    
-    # Find ToolMessages with consent_required errors
+
+    # Only scan the most recent batch of ToolMessages (since the last AIMessage with
+    # tool_calls). This prevents old unresolved consent errors from previous turns
+    # re-triggering the interrupt when the user sends a new message.
+    last_ai_idx = -1
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if isinstance(msg, AIMessage) and getattr(msg, 'tool_calls', None):
+            last_ai_idx = i
+            break
+
+    if last_ai_idx < 0:
+        logger.debug("🔐 CONSENT_FLOW: No AIMessage with tool_calls found, passing through")
+        return {}
+
+    recent_messages = messages[last_ai_idx + 1:]
+
+    # Collect consent_required ToolMessages from the current batch only
     consent_errors = []
-    for msg in messages:
+    for msg in recent_messages:
         if isinstance(msg, ToolMessage):
             consent_info = _parse_consent_error(msg)
             if consent_info:
-                consent_errors.append((msg, consent_info))
-    
+                original_tc = _find_tool_call_for_message(messages, msg.tool_call_id)
+                if original_tc:
+                    logger.info(
+                        f"🔐 CONSENT_FLOW: Detected consent_required error "
+                        f"(tool_call_id={msg.tool_call_id}, operation={consent_info.get('operation_id')})"
+                    )
+                    consent_errors.append({
+                        "error_msg": msg,
+                        "consent_info": consent_info,
+                        "original_tc": original_tc,
+                    })
+                else:
+                    logger.error(f"🔐 CONSENT_FLOW: Could not find original tool call for tool_call_id={msg.tool_call_id}")
+
     if not consent_errors:
+        logger.debug("🔐 CONSENT_FLOW: No consent errors found, passing through")
         return {}
-    
-    # For now, handle the first consent error (could batch later)
-    error_msg, consent_info = consent_errors[0]
-    tool_call_id = error_msg.tool_call_id
-    
-    # Find the original tool call to get the tool name and args
-    original_tc = _find_tool_call_for_message(messages, tool_call_id)
-    if not original_tc:
-        logger.error(f"Could not find original tool call for consent error (tool_call_id={tool_call_id})")
-        return {}
-    
-    logger.info(f"Consent required for tool '{original_tc['name']}', operation: {consent_info.get('operation_id')}")
-    
-    # Interrupt to request consent JWT from frontend
-    consent_payload = {
-        "consent_type": "consent_required",
-        "tool_call_id": tool_call_id,
-        "tool_name": original_tc["name"],
-        "tool_args": original_tc.get("args", {}),
-        "operation_id": consent_info.get("operation_id"),
-        "required_roles": consent_info.get("required_roles", []),
-    }
-    
-    user_response = interrupt(consent_payload)
-    
-    # ---- Resumed after frontend provides consent JWT ----
-    
-    consent_jwt = user_response.get("consent_jwt")
-    if not consent_jwt:
-        logger.warning("Consent response received without consent_jwt — treating as denied")
-        denial_message = ToolMessage(
-            content="Consent denied — no consent JWT provided",
-            tool_call_id=tool_call_id,
-            status="error",
-        )
-        return {"messages": [denial_message]}
-    
-    # Retry the tool call with Consent-JWT injected into headers arg
-    logger.info(f"Retrying tool '{original_tc['name']}' with consent JWT")
-    
-    original_args = dict(original_tc.get("args", {}))
-    existing_headers = original_args.get("headers", {}) or {}
-    original_args["headers"] = {**existing_headers, "Consent-JWT": consent_jwt}
-    
-    # Find the tool function from the graph's tool node
+
+    # Group by operation_id — each distinct operation needs its own Consent-JWT
+    # (JWTs are scoped to specific operations/roles in OBP)
+    groups: Dict[str, list] = {}
+    for ce in consent_errors:
+        op_id = ce["consent_info"].get("operation_id") or "__unknown__"
+        groups.setdefault(op_id, []).append(ce)
+
+    logger.info(
+        f"🔐 CONSENT_FLOW: {len(consent_errors)} consent error(s) across "
+        f"{len(groups)} distinct operation(s): {list(groups.keys())}"
+    )
+
     configurable = config.get("configurable", {}) if config else {}
     tools_by_name = configurable.get("tools_by_name", {})
-    tool_fn = tools_by_name.get(original_tc["name"])
-    
-    if not tool_fn:
-        logger.error(f"Tool '{original_tc['name']}' not found in tools_by_name for consent retry")
-        error_message = ToolMessage(
-            content=f"Failed to retry with consent: tool '{original_tc['name']}' not found",
-            tool_call_id=tool_call_id,
-            status="error",
+
+    all_replacements = []
+
+    for op_id, group in groups.items():
+        first = group[0]
+        required_roles = first["consent_info"].get("required_roles", [])
+        tool_call_ids = [ce["error_msg"].tool_call_id for ce in group]
+
+        # Build the interrupt payload — one per distinct operation
+        consent_payload = {
+            "consent_type": "consent_required",
+            # Primary fields (used by stream_manager to emit ConsentRequestEvent)
+            "tool_call_id": first["error_msg"].tool_call_id,
+            "tool_name": first["original_tc"]["name"],
+            "operation_id": op_id if op_id != "__unknown__" else None,
+            "required_roles": required_roles,
+            "bank_id": first["consent_info"].get("bank_id"),
+            # Batch context so the frontend can show "N tool calls need this consent"
+            "tool_call_count": len(group),
+            "tool_call_ids": tool_call_ids,
+        }
+
+        logger.info(
+            f"🔐 CONSENT_FLOW: Interrupting for operation '{op_id}' "
+            f"({len(group)} tool call(s): {tool_call_ids})"
         )
-        return {"messages": [error_message]}
-    
-    try:
-        result = await tool_fn.ainvoke(original_args)
-        retry_message = ToolMessage(
-            content=str(result),
-            tool_call_id=tool_call_id,
-            status="success",
+        user_response = interrupt(consent_payload)
+        logger.info(
+            f"🔐 CONSENT_FLOW: Resumed for operation '{op_id}', "
+            f"response keys: {list(user_response.keys()) if isinstance(user_response, dict) else type(user_response)}"
         )
-        logger.info(f"Consent retry successful for tool '{original_tc['name']}'")
-        return {"messages": [retry_message]}
-    except Exception as e:
-        logger.error(f"Consent retry failed for tool '{original_tc['name']}': {e}")
-        error_message = ToolMessage(
-            content=f"Consent retry failed: {str(e)}",
-            tool_call_id=tool_call_id,
-            status="error",
-        )
-        return {"messages": [error_message]}
+
+        consent_jwt = user_response.get("consent_jwt")
+
+        if not consent_jwt:
+            logger.warning(f"🔐 CONSENT_FLOW: Consent denied for operation '{op_id}' — denying {len(group)} tool call(s)")
+            for ce in group:
+                all_replacements.append(ToolMessage(
+                    content="End user denied consent for this tool.",
+                    tool_call_id=ce["error_msg"].tool_call_id,
+                    id=ce["error_msg"].id,
+                    status="error",
+                ))
+        else:
+            jwt_preview = consent_jwt[:50] + "..." if len(consent_jwt) > 50 else consent_jwt
+            logger.info(
+                f"🔐 CONSENT_FLOW: Consent approved for operation '{op_id}' (JWT preview: {jwt_preview}) "
+                f"— retrying {len(group)} tool call(s)"
+            )
+            for ce in group:
+                replacement = await _retry_tool_with_consent(
+                    tool_call_id=ce["error_msg"].tool_call_id,
+                    error_msg_id=ce["error_msg"].id,
+                    original_tc=ce["original_tc"],
+                    consent_jwt=consent_jwt,
+                    tools_by_name=tools_by_name,
+                )
+                all_replacements.append(replacement)
+
+    return {"messages": all_replacements}
 

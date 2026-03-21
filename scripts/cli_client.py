@@ -229,9 +229,8 @@ class OpeyCliClient:
         if consent_jwt:
             approval_data = {"consent_jwt": consent_jwt}
         else:
-            # Deny — send empty approval with no consent_jwt
-            # The consent_check_node will treat missing jwt as denial
-            approval_data = {"consent_jwt": None}
+            # Deny — explicitly signal consent denial
+            approval_data = {"consent_denied": True}
 
         await self.send_approval(approval_data)
 

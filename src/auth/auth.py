@@ -197,6 +197,83 @@ class OBPConsentAuth(BaseAuth):
                 logger.error(f'Error retrieving current user ID: {error_text}')
                 return None
 
+class OBPBearerAuth(BaseAuth):
+    def __init__(self, bearer_token: str | None = None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.base_uri = os.getenv('OBP_BASE_URL')
+        if not self.base_uri:
+            raise ValueError('OBP_BASE_URL not set in environment variables')
+
+        self.token = bearer_token
+
+        version = os.getenv('OBP_API_VERSION')
+        if not version:
+            raise ValueError('OBP_API_VERSION not set in environment variables')
+
+        self.current_user_url = self.base_uri + f'/obp/{version}/users/current'
+
+    def construct_headers(self, token: str | None = None) -> Dict[str, str]:
+        if not token and not self.token:
+            raise ValueError('Bearer token is required')
+
+        if not token:
+            token = self.token
+
+        assert token is not None
+
+        return {'Authorization': f'Bearer {token}'}
+
+    async def acheck_auth(self, token: str | None = None) -> bool:
+        if not token and not self.token:
+            raise ValueError('Bearer token is required')
+
+        if not token:
+            token = self.token
+
+        assert token is not None
+
+        headers = self.construct_headers(token)
+
+        masked_token = f"{token[:10]}...{token[-5:]}" if len(token) > 15 else token[:5] + "..."
+        logger.debug(f"OBP bearer validation - URL: {self.current_user_url}")
+        logger.debug(f"OBP bearer validation - Token (masked): {masked_token}")
+
+        client = await self.get_client()
+        async with client.get(self.current_user_url, headers=headers) as response:
+            if response.status == 200:
+                response_data = await response.json()
+                logger.info(f'OBP bearer check successful: {response_data.get("user_id", "unknown")}')
+                return True
+            else:
+                error_text = await response.read()
+                logger.error(f'Error checking OBP bearer token: {error_text}')
+                logger.debug(f"OBP bearer validation failed - Status: {response.status}")
+                return False
+
+    async def get_current_user(self, token: str | None = None) -> Optional[dict]:
+        if not token and not self.token:
+            raise ValueError('Bearer token is required')
+
+        if not token:
+            token = self.token
+
+        assert token is not None
+
+        headers = self.construct_headers(token)
+
+        client = await self.get_client()
+        async with client.get(self.current_user_url, headers=headers) as response:
+            if response.status == 200:
+                response_data = await response.json()
+                logger.info(f'Current user retrieved successfully via bearer token: {response_data}')
+                return response_data
+            else:
+                error_text = await response.read()
+                logger.error(f'Error retrieving current user via bearer token: {error_text}')
+                return None
+
+
 class OBPDirectLoginAuth(BaseAuth):
 
     def __init__(self, config: Optional[DirectLoginConfig] = None, *args, **kwargs):
@@ -459,18 +536,14 @@ async def create_admin_direct_login_auth(
         version = os.getenv('OBP_API_VERSION', 'v6.0.0')
         
         try:
-            response_json = await obp_client.async_obp_requests(
-                "GET", 
-                f"/obp/{version}/my/entitlements",
-                ""
+            entitlements_response = await obp_client.get(
+                f"/obp/{version}/my/entitlements"
             )
+            entitlements_data = entitlements_response.json()
             
-            if not response_json:
+            if not entitlements_data:
                 logger.warning('Failed to fetch entitlements - received empty response')
                 return admin_auth
-            
-            # Parse the JSON string response
-            entitlements_response = json.loads(response_json) if isinstance(response_json, str) else response_json
             
             # Use provided entitlements or default set
             if required_entitlements is None:
@@ -481,7 +554,7 @@ async def create_admin_direct_login_auth(
                     'CanGetSystemLevelDynamicEntities'
                 ]
             
-            all_present, missing = _check_entitlements(entitlements_response, required_entitlements)
+            all_present, missing = _check_entitlements(entitlements_data, required_entitlements)
             
             if not all_present:
                 logger.warning(
@@ -492,5 +565,8 @@ async def create_admin_direct_login_auth(
         except Exception as e:
             logger.error(f'Failed to verify admin entitlements: {e}')
             # Don't raise - auth still works, just couldn't verify entitlements
+        finally:
+            # Always close the temporary client session
+            await obp_client.close()
     
     return admin_auth

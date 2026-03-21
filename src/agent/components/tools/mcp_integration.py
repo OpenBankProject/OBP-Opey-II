@@ -26,6 +26,10 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 logger = logging.getLogger(__name__)
 
 
+class MCPConnectionError(Exception):
+    """Raised when connecting to one or more MCP servers fails."""
+
+
 @dataclass
 class MCPServerConfig:
     """Configuration for a single MCP server connection."""
@@ -36,9 +40,9 @@ class MCPServerConfig:
     url: Optional[str] = None
     headers: Dict[str, str] = field(default_factory=dict)
     
-    # Whether this server requires bearer token authentication
-    # If True, the bearer token from the session will be added to requests
-    requires_auth: bool = False
+    # Whether to forward the user's bearer token to this server
+    # If True, the bearer token from the session will be added as an Authorization header
+    forward_bearer_token: bool = False
     
     # stdio transport
     command: Optional[str] = None
@@ -60,7 +64,7 @@ class MCPToolLoader:
         Args:
             servers: List of server configurations
             bearer_token: Optional bearer token for authenticated requests.
-                         If provided, adds Authorization header to servers with requires_auth=True.
+                         If provided, adds Authorization header to servers with forward_bearer_token=True.
         """
         self.servers = servers
         self.bearer_token = bearer_token
@@ -70,23 +74,46 @@ class MCPToolLoader:
     async def load_tools(self) -> List[BaseTool]:
         """
         Connect to MCP servers and load available tools.
-        
+
         Returns:
             List of LangChain-compatible tools from all configured servers
         """
         if not self.servers:
             logger.info("No MCP servers configured")
             return []
-        
+
         client_config = self._build_client_config()
-        
-        logger.info(f"Connecting to {len(self.servers)} MCP server(s)")
-        
-        # MultiServerMCPClient manages connections internally
-        self._client = MultiServerMCPClient(client_config)
-        self._tools = await self._client.get_tools()
+        server_summary = ", ".join(
+            f"'{s.name}' ({s.url or s.command})" for s in self.servers
+        )
+
+        logger.info(f"Connecting to {len(self.servers)} MCP server(s): {server_summary}")
+
+        try:
+            self._client = MultiServerMCPClient(client_config)
+            self._tools = await self._client.get_tools()
+        except ExceptionGroup as eg:
+            failed_details = []
+            for exc in eg.exceptions:
+                failed_details.append(f"  - {type(exc).__name__}: {exc}")
+            detail_str = "\n".join(failed_details)
+            raise MCPConnectionError(
+                f"Failed to connect to MCP server(s) ({server_summary}). "
+                f"Check that the server(s) are running and reachable.\n"
+                f"Errors:\n{detail_str}"
+            ) from eg
+        except ConnectionError as e:
+            raise MCPConnectionError(
+                f"Connection refused for MCP server(s) ({server_summary}). "
+                f"Check that the server(s) are running and reachable: {e}"
+            ) from e
+        except Exception as e:
+            raise MCPConnectionError(
+                f"Failed to load tools from MCP server(s) ({server_summary}): "
+                f"{type(e).__name__}: {e}"
+            ) from e
+
         logger.info(f"Loaded {len(self._tools)} tools from MCP servers")
-        
         return self._tools
     
     def get_tool_names(self) -> List[str]:
@@ -107,11 +134,11 @@ class MCPToolLoader:
                 
                 # Build headers, injecting bearer token if needed
                 headers = dict(server.headers)  # Copy to avoid mutating config
-                if server.requires_auth and self.bearer_token:
+                if server.forward_bearer_token and self.bearer_token:
                     headers["Authorization"] = f"Bearer {self.bearer_token}"
-                    logger.debug(f"Added bearer token to '{server.name}' headers")
-                elif server.requires_auth and not self.bearer_token:
-                    logger.warning(f"MCP server '{server.name}' requires auth but no bearer token provided")
+                    logger.debug(f"Injecting bearer token for MCP server '{server.name}'")
+                elif server.forward_bearer_token and not self.bearer_token:
+                    logger.warning(f"MCP server '{server.name}' has forward_bearer_token=true but no bearer token provided")
                 
                 if headers:
                     config["headers"] = headers
@@ -155,8 +182,11 @@ async def create_mcp_tools_with_auth(
     loader = MCPToolLoader(servers=servers, bearer_token=bearer_token)
     try:
         return await loader.load_tools()
+    except MCPConnectionError as e:
+        logger.error(f"MCP connection error: {e}")
+        return []
     except Exception as e:
-        logger.error(f"Failed to load MCP tools: {e}")
+        logger.error(f"Unexpected error loading MCP tools: {type(e).__name__}: {e}")
         return []
 
 

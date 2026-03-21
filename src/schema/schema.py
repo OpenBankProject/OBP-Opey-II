@@ -1,4 +1,3 @@
-from concurrent.futures import thread
 from typing import Any, Literal, Optional, Dict
 
 from langchain_core.messages import (
@@ -228,18 +227,22 @@ class ToolCallApproval(BaseModel):
         default=None,
         description="OBP consent JWT to inject into tool retry headers"
     )
-    
+    consent_denied: bool = Field(
+        default=False,
+        description="Set to true to explicitly deny consent without providing a JWT"
+    )
+
     def is_batch(self) -> bool:
         """Check if this is a batch approval"""
         return self.batch_decisions is not None
-    
+
     def is_single(self) -> bool:
         """Check if this is a single approval"""
         return self.tool_call_id is not None
-    
+
     def is_consent_response(self) -> bool:
-        """Check if this is a consent JWT response (for retrying a consent-required tool call)"""
-        return self.consent_jwt is not None
+        """Check if this is a consent response (approval with JWT, or explicit denial)"""
+        return self.consent_jwt is not None or self.consent_denied
 
 class UserInput(BaseModel):
     """Basic user input for the agent."""
@@ -258,8 +261,8 @@ class UserInput(BaseModel):
         default=None,
         examples=["550e8400-e29b-41d4-a716-446655440000"],
     )
-    tool_call_approval: ToolCallApproval = Field(
-        description="Whether this input is a tool call approval.",
+    tool_call_approval: ToolCallApproval | bool = Field(
+        description="Tool call approval object (with consent_jwt, approval, or batch_decisions) or False if not an approval.",
         default=False,
     )
 

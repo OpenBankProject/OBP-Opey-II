@@ -2,12 +2,11 @@ from service.service import app
 from httpx import AsyncClient
 import pytest
 import pytest_asyncio
-from utils.obp_utils import sync_obp_requests
 import os
 import json
 
 
-@pytest_asyncio.fixture(loop_scope="session")
+@pytest.fixture()
 async def create_session(client: AsyncClient, get_obp_consent):
     """
     Used for creating a session in the subsequent tests. NOT for testing the session creation endpoint itself.
