@@ -1,6 +1,7 @@
 import React, {useState, useCallback, useEffect, useRef} from 'react';
 import {Box, Text, useInput, useApp, Static, Newline} from 'ink';
 import {type SseEvent, OpeyApiClient} from './api.js';
+import {createImplicitConsent} from './consent.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -22,10 +23,17 @@ type ToolStatus = {
 type ApprovalPrompt =
 	| {kind: 'single'; toolName: string; toolCallId: string; toolInput: unknown; levels: string[]}
 	| {kind: 'batch'; toolCalls: Array<{tool_call_id: string; tool_name: string; tool_args: unknown}>}
-	| {kind: 'consent'; toolName: string; operationId: string; requiredRoles: string[]};
+	| {kind: 'consent'; toolName: string; operationId: string; requiredRoles: string[]; bankId?: string};
+
+type ConsentConfig = {
+	obpBaseUrl: string;
+	opeyConsumerId: string;
+	accessToken: string;
+};
 
 type AppProps = {
 	client: OpeyApiClient;
+	consentConfig?: ConsentConfig;
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -86,9 +94,9 @@ function ToolIndicator({tool}: {tool: ToolStatus}) {
 	);
 }
 
-function ApprovalBox({prompt, inputValue}: {
+function ApprovalBox({prompt, consentCreating}: {
 	prompt: ApprovalPrompt;
-	inputValue: string;
+	consentCreating?: boolean;
 }) {
 	if (prompt.kind === 'single') {
 		return (
@@ -127,20 +135,20 @@ function ApprovalBox({prompt, inputValue}: {
 			<Text>Tool: <Text bold>{prompt.toolName}</Text></Text>
 			<Text>Operation: {prompt.operationId}</Text>
 			<Text dimColor>Roles: {prompt.requiredRoles.join(', ')}</Text>
+			{prompt.bankId && <Text dimColor>Bank: {prompt.bankId}</Text>}
 			<Newline />
-			<Text>Paste Consent-JWT (or Enter to deny):</Text>
-			<Box>
-				<Text color="gray">{'> '}</Text>
-				<Text>{inputValue}</Text>
-				<Text color="gray">█</Text>
-			</Box>
+			{consentCreating ? (
+				<Text color="yellow">Creating consent…</Text>
+			) : (
+				<Text>Create consent? <Text bold>[y]es / [n]o</Text></Text>
+			)}
 		</Box>
 	);
 }
 
 // ─── Main App ───────────────────────────────────────────────────────────────
 
-export default function App({client}: AppProps) {
+export default function App({client, consentConfig}: AppProps) {
 	const {exit} = useApp();
 
 	const [history, setHistory] = useState<ChatMessage[]>([]);
@@ -149,7 +157,7 @@ export default function App({client}: AppProps) {
 	const [approval, setApproval] = useState<ApprovalPrompt | null>(null);
 	const [input, setInput] = useState('');
 	const [busy, setBusy] = useState(false);
-	const [approvalInput, setApprovalInput] = useState('');
+	const [consentCreating, setConsentCreating] = useState(false);
 	const threadIdRef = useRef<string | undefined>(undefined);
 	const [selectingLevel, setSelectingLevel] = useState(false);
 
@@ -226,6 +234,7 @@ export default function App({client}: AppProps) {
 							toolName: (evt['tool_name'] as string) ?? '?',
 							operationId: (evt['operation_id'] as string) ?? '?',
 							requiredRoles: (evt['required_roles'] as string[]) ?? [],
+							bankId: (evt['bank_id'] as string) ?? undefined,
 						});
 						setBusy(false);
 						return;
@@ -279,6 +288,7 @@ export default function App({client}: AppProps) {
 	const sendApproval = useCallback(
 		async (data: Record<string, unknown>) => {
 			setApproval(null);
+			setConsentCreating(false);
 			setBusy(true);
 			setTools([]);
 
@@ -294,18 +304,43 @@ export default function App({client}: AppProps) {
 		[client, processStream],
 	);
 
+	const handleConsentApproval = useCallback(
+		async (prompt: ApprovalPrompt & {kind: 'consent'}) => {
+			if (!consentConfig) {
+				setHistory((h) => [...h, {id: uid(), role: 'system', text: 'Cannot create consent: OAuth not configured (missing --obp-url or --opey-consumer-id)'}]);
+				void sendApproval({consent_jwt: null});
+				return;
+			}
+
+			setConsentCreating(true);
+			try {
+				const result = await createImplicitConsent({
+					obpBaseUrl: consentConfig.obpBaseUrl,
+					accessToken: consentConfig.accessToken,
+					opeyConsumerId: consentConfig.opeyConsumerId,
+					requiredRoles: prompt.requiredRoles,
+					bankId: prompt.bankId,
+				});
+				void sendApproval({consent_jwt: result.consent_jwt});
+			} catch (error: unknown) {
+				const msg = error instanceof Error ? error.message : String(error);
+				setHistory((h) => [...h, {id: uid(), role: 'system', text: `Consent creation failed: ${msg}`}]);
+				setConsentCreating(false);
+				void sendApproval({consent_jwt: null});
+			}
+		},
+		[consentConfig, sendApproval],
+	);
+
 	useInput((ch, key) => {
 		// Approval prompts
 		if (approval) {
 			if (approval.kind === 'consent') {
-				if (key.return) {
-					const jwt = approvalInput.trim();
-					setApprovalInput('');
-					void sendApproval(jwt ? {consent_jwt: jwt} : {consent_jwt: null});
-				} else if (key.backspace || key.delete) {
-					setApprovalInput((v) => v.slice(0, -1));
-				} else if (ch && !key.ctrl && !key.meta) {
-					setApprovalInput((v) => v + ch);
+				if (consentCreating) return; // Ignore input while creating consent
+				if (ch === 'y' || ch === 'Y') {
+					void handleConsentApproval(approval);
+				} else if (ch === 'n' || ch === 'N') {
+					void sendApproval({consent_jwt: null});
 				}
 
 				return;
@@ -422,7 +457,7 @@ export default function App({client}: AppProps) {
 
 			{approval && (
 				<Box marginY={1} flexDirection="column">
-					<ApprovalBox prompt={approval} inputValue={approvalInput} />
+					<ApprovalBox prompt={approval} consentCreating={consentCreating} />
 					{selectingLevel && approval.kind === 'single' && (
 						<Box flexDirection="column" marginLeft={2}>
 							<Text bold>Select level:</Text>
