@@ -17,6 +17,7 @@ type ToolStatus = {
 	id: string;
 	name: string;
 	status: 'running' | 'done' | 'error';
+	input?: unknown;
 	result?: string;
 };
 
@@ -82,15 +83,43 @@ function Message({msg}: {msg: ChatMessage}) {
 	);
 }
 
-function ToolIndicator({tool}: {tool: ToolStatus}) {
+function truncate(s: string, max: number): string {
+	return s.length > max ? s.slice(0, max) + '…' : s;
+}
+
+function ToolIndicator({tool, expanded}: {tool: ToolStatus; expanded: boolean}) {
 	const icon = tool.status === 'running' ? '⟳' : tool.status === 'done' ? '✓' : '✗';
 	const color = tool.status === 'running' ? 'yellow' : tool.status === 'done' ? 'green' : 'red';
+
+	if (!expanded) {
+		return (
+			<Text>
+				<Text color={color}> {icon} </Text>
+				<Text dimColor>{tool.name}</Text>
+				{tool.status !== 'running' && tool.result ? <Text dimColor>{` → ${truncate(tool.result, 80)}`}</Text> : null}
+			</Text>
+		);
+	}
+
 	return (
-		<Text>
-			<Text color={color}> {icon} </Text>
-			<Text dimColor>{tool.name}</Text>
-			{tool.status !== 'running' && tool.result ? <Text dimColor>{` → ${tool.result}`}</Text> : null}
-		</Text>
+		<Box flexDirection="column" marginLeft={1}>
+			<Text>
+				<Text color={color}>{icon} </Text>
+				<Text bold>{tool.name}</Text>
+			</Text>
+			{tool.input != null && (
+				<Box flexDirection="column" marginLeft={2}>
+					<Text dimColor>Input:</Text>
+					<Text dimColor>{typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}</Text>
+				</Box>
+			)}
+			{tool.status !== 'running' && tool.result != null && (
+				<Box flexDirection="column" marginLeft={2}>
+					<Text dimColor>Output:</Text>
+					<Text dimColor>{tool.result}</Text>
+				</Box>
+			)}
+		</Box>
 	);
 }
 
@@ -158,6 +187,7 @@ export default function App({client, consentConfig}: AppProps) {
 	const [input, setInput] = useState('');
 	const [busy, setBusy] = useState(false);
 	const [consentCreating, setConsentCreating] = useState(false);
+	const [expandedTools, setExpandedTools] = useState(false);
 	const threadIdRef = useRef<string | undefined>(undefined);
 	const [selectingLevel, setSelectingLevel] = useState(false);
 
@@ -196,14 +226,16 @@ export default function App({client, consentConfig}: AppProps) {
 					case 'tool_start': {
 						const name = (evt['tool_name'] as string) ?? '?';
 						const tcId = (evt['tool_call_id'] as string) ?? uid();
-						setTools((t) => [...t, {id: tcId, name, status: 'running'}]);
+						const toolInput = evt['tool_input'] ?? undefined;
+						setTools((t) => [...t, {id: tcId, name, status: 'running', input: toolInput}]);
 						break;
 					}
 
 					case 'tool_complete': {
 						const tcId = (evt['tool_call_id'] as string) ?? '';
 						const status = (evt['status'] as string) === 'error' ? 'error' : 'done';
-						const result = (evt['result'] as string) ?? (evt['status'] as string) ?? '';
+						const output = evt['tool_output'];
+						const result = typeof output === 'string' ? output : output != null ? JSON.stringify(output, null, 2) : (evt['status'] as string) ?? '';
 						setTools((t) =>
 							t.map((tool) => (tool.id === tcId ? {...tool, status, result} : tool)),
 						);
@@ -400,6 +432,12 @@ export default function App({client, consentConfig}: AppProps) {
 			return;
 		}
 
+		// Ctrl+O toggles expanded tool view
+		if (key.ctrl && ch === 'o') {
+			setExpandedTools((v) => !v);
+			return;
+		}
+
 		// Normal chat input
 		if (busy) return;
 
@@ -407,6 +445,7 @@ export default function App({client, consentConfig}: AppProps) {
 			const text = input.trim();
 			if (text.toLowerCase() === 'quit' || text.toLowerCase() === 'exit') {
 				exit();
+				process.exit(0);
 				return;
 			}
 
@@ -416,6 +455,7 @@ export default function App({client, consentConfig}: AppProps) {
 			setInput((v) => v.slice(0, -1));
 		} else if (key.ctrl && ch === 'c') {
 			exit();
+			process.exit(0);
 		} else if (ch && !key.ctrl && !key.meta && !key.escape) {
 			setInput((v) => v + ch);
 		}
@@ -425,7 +465,7 @@ export default function App({client, consentConfig}: AppProps) {
 		<Box flexDirection="column" paddingX={1}>
 			<Box marginBottom={1}>
 				<Text bold color="blueBright">🤖 Opey Chat</Text>
-				<Text dimColor>{' — type a message, "quit" to exit'}</Text>
+				<Text dimColor>{' — "quit" to exit, Ctrl+O toggle tool details'}</Text>
 			</Box>
 
 			<Static items={history}>
@@ -439,7 +479,7 @@ export default function App({client, consentConfig}: AppProps) {
 			{tools.length > 0 && (
 				<Box flexDirection="column">
 					{tools.map((t) => (
-						<ToolIndicator key={t.id} tool={t} />
+						<ToolIndicator key={t.id} tool={t} expanded={expandedTools} />
 					))}
 				</Box>
 			)}
