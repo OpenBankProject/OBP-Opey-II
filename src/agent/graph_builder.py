@@ -12,7 +12,7 @@ from langchain_core.runnables import RunnableConfig
 
 from agent.components.states import OpeyGraphState
 from agent.components.chains import opey_system_prompt_template
-from agent.components.nodes import human_review_node, run_summary_chain, sanitize_tool_responses, consent_check_node
+from agent.components.nodes import human_review_node, run_summary_chain, sanitize_tool_responses, consent_check_node, preflight_safety_check
 from agent.components.edges import should_summarize, needs_human_review
 from agent.utils.model_factory import get_model
 from agent.utils.decorators import cancellable
@@ -174,7 +174,8 @@ class OpeyAgentGraphBuilder:
         # Create nodes
         opey_node = self._create_opey_node()
         opey_workflow.add_node("opey", opey_node)
-        
+        opey_workflow.add_node("preflight_safety_check", preflight_safety_check)
+
         if self._tools:
             all_tools = ToolNode(self._tools)
             opey_workflow.add_node("tools", all_tools)
@@ -182,7 +183,7 @@ class OpeyAgentGraphBuilder:
             opey_workflow.add_node("consent_check", consent_check_node)
             opey_workflow.add_edge("tools", "sanitize_tool_responses")
             opey_workflow.add_edge("sanitize_tool_responses", "consent_check")
-            opey_workflow.add_edge("consent_check", "opey")
+            opey_workflow.add_edge("consent_check", "preflight_safety_check")
         
         if self._enable_human_review:
             opey_workflow.add_node("human_review", human_review_node)
@@ -191,7 +192,8 @@ class OpeyAgentGraphBuilder:
             opey_workflow.add_node("summarize_conversation", run_summary_chain)
         
         # Add edges
-        opey_workflow.add_edge(START, "opey")
+        opey_workflow.add_edge(START, "preflight_safety_check")
+        opey_workflow.add_edge("preflight_safety_check", "opey")
         
         if self._enable_human_review:
             # Human review workflow

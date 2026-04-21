@@ -7,6 +7,7 @@ from langchain_openai import ChatOpenAI
 from agent.utils.model_factory import get_model
 
 from pydantic import BaseModel, Field
+import os
 import yaml
 from pathlib import Path
 import logging
@@ -215,5 +216,5 @@ such as a relevant bank ID user ID, or some other peice of data that is importan
     ]
 )
 
-conversation_summarizer_llm = get_model(model_name='medium', temperature=0)
+conversation_summarizer_llm = get_model(model_name=os.getenv("MODEL_NAME", "medium"), temperature=0)
 conversation_summarizer_chain = conversation_summarizer_system_prompt_template | conversation_summarizer_llm | StrOutputParser()

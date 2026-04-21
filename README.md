@@ -75,6 +75,12 @@ Activate the poetry venv using `poetry shell` in the current directory
 
 Run the backend agent with `python src/run_service.py`
 
+Alternatively, use the `run_dev.sh` helper to run the backend via `poetry run` and tee output to `/tmp/opey.log`:
+
+```bash
+./run_dev.sh
+```
+
 In a separate terminal run the frontend streamlit app (within another poetry shell) with `streamlit run src/streamlit_app.py`
 
 The best way to interact with the agent is through the streamlit app, but it also functions as a rest API whose docs can be found at `http://127.0.0.1:8000/docs`

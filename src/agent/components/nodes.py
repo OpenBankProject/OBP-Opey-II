@@ -16,12 +16,60 @@ from agent.utils.model_factory import get_llm
 
 logger = logging.getLogger("uvicorn.error")
 
+# Per-ToolMessage content cap. Any single tool result longer than this
+# is truncated in state, so one giant response can't blow past the model's
+# context window on its own.
+MAX_TOOL_CONTENT_CHARS = int(os.getenv("MAX_TOOL_CONTENT_CHARS", "20000"))
+
+
+def _truncate_tool_content(content, max_chars: int):
+    """Truncate tool message content (string or Anthropic content-blocks list).
+
+    Returns (new_content, was_truncated).
+    """
+    if isinstance(content, str):
+        if len(content) <= max_chars:
+            return content, False
+        return content[:max_chars] + "\n\n[TRUNCATED TOOL RESPONSE]", True
+
+    if isinstance(content, list):
+        total = sum(
+            len(item.get("text", "")) for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+        if total <= max_chars:
+            return content, False
+        combined = "".join(
+            item.get("text", "") for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+        truncated = [{"type": "text", "text": combined[:max_chars] + "\n\n[TRUNCATED TOOL RESPONSE]"}]
+        return truncated, True
+
+    return content, False
+
+
+def _truncate_oversized_tool_messages(messages, max_chars: int) -> List[ToolMessage]:
+    """Return replacement ToolMessages for any in `messages` whose content exceeds max_chars.
+
+    Returned messages share the same id as the originals, so the add_messages
+    reducer will replace them in-place.
+    """
+    replacements: List[ToolMessage] = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            new_content, was_truncated = _truncate_tool_content(msg.content, max_chars)
+            if was_truncated:
+                replacements.append(msg.model_copy(update={"content": new_content}))
+    return replacements
+
+
 async def run_summary_chain(state: OpeyGraphState):
     logger.info("----- SUMMARIZING CONVERSATION -----")
     state["current_state"] = "summarize_conversation"
-    total_tokens = state["total_tokens"]
+    total_tokens = state.get("total_tokens", 0)
     if not total_tokens:
-        raise ValueError("Total tokens not found in state")
+        logger.warning("Total tokens missing from state; summarizing anyway")
 
     summary = state.get("conversation_summary", "")
     if summary:
@@ -34,8 +82,21 @@ async def run_summary_chain(state: OpeyGraphState):
 
     messages = state["messages"]
 
+    # Build a copy of messages with oversized ToolMessage content truncated, so the
+    # summarizer can't blow past the model's context window on a single huge tool result.
+    # The original `messages` in state is unchanged; only the copy sent to the summarizer
+    # is truncated. Summarization is compression, so truncated tool output is acceptable.
+    MAX_TOOL_CONTENT_CHARS = 30000
+    messages_for_summary = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage) and isinstance(msg.content, str) and len(msg.content) > MAX_TOOL_CONTENT_CHARS:
+            truncated = msg.content[:MAX_TOOL_CONTENT_CHARS] + "\n\n[TRUNCATED TOOL RESPONSE FOR SUMMARIZATION]"
+            messages_for_summary.append(msg.model_copy(update={"content": truncated}))
+        else:
+            messages_for_summary.append(msg)
+
     # After we summarize we reset the token_count to zero, this will be updated when Opey is next called
-    summary = await conversation_summarizer_chain.ainvoke({"messages": messages, "existing_summary_message": summary_system_message})
+    summary = await conversation_summarizer_chain.ainvoke({"messages": messages_for_summary, "existing_summary_message": summary_system_message})
 
     logger.debug(f"\nSummary: {summary}\n")
 
@@ -297,55 +358,78 @@ async def human_review_node(state: OpeyGraphState, config: RunnableConfig):
     
 async def sanitize_tool_responses(state: OpeyGraphState, config: RunnableConfig):
     """
-    Sanitize tool responses in case they contain too much data. I.e. too many tokens.
-    
-    Args:
-        state: Graph state containing messages
-        config: RunnableConfig (not used here)
+    Truncate any ToolMessage whose content exceeds MAX_TOOL_CONTENT_CHARS.
+
+    Runs after the tools node and before Opey. Bounds every individual tool
+    result so accumulated history can't balloon past the model's context
+    window from a single huge response. The aggregate check (and
+    summarization fallback) lives in preflight_safety_check.
     """
-    
-    from agent.utils.token_counter import count_tokens, count_tokens_from_messages
-    from agent.utils.model_factory import get_max_input_tokens
-    
     messages = state["messages"]
     if not messages:
         return {}
-    
-    if not isinstance(messages[-1], ToolMessage):
-        logger.warning("Last message is not a ToolMessage")
+
+    replacements = _truncate_oversized_tool_messages(messages, MAX_TOOL_CONTENT_CHARS)
+    if not replacements:
         return {}
-    
-    # Extract model configuration from RunnableConfig
+
+    logger.info(
+        f"sanitize_tool_responses: truncating {len(replacements)} oversized "
+        f"ToolMessage(s) to {MAX_TOOL_CONTENT_CHARS} chars"
+    )
+    return {"messages": replacements}
+
+
+async def preflight_safety_check(state: OpeyGraphState, config: RunnableConfig):
+    """
+    Pre-Opey safety net against the model's hard context-window limit.
+
+    Runs before every Opey LLM call. Counts tokens in current state; if
+    above the safety threshold (max_input - margin), forces summarization
+    inline so the next Opey call stays within limits. Without this, a
+    single huge tool hop could push state past 200k and deadlock the
+    conversation — post-flight summarization never gets to run because
+    the failing turn crashes before reaching its outbound edge.
+    """
+    from agent.utils.token_counter import count_tokens_from_messages
+    from agent.utils.model_factory import get_max_input_tokens
+
+    messages = state["messages"]
+    if not messages:
+        return {}
+
     configurable = config.get("configurable", {}) if config else {}
     model_name = configurable.get("model_name")
     model_kwargs = configurable.get("model_kwargs", {})
-    
+
     if not model_name:
-        logger.error("No model_name in config for token counting")
+        logger.debug("preflight: no model_name in config, skipping token check")
         return {}
-    
-    # Check if total messages exceed token limit
-    total_tokens = count_tokens_from_messages(
-        messages=messages,
-        model_name=model_name,
-        model_kwargs=model_kwargs
+
+    try:
+        max_input = get_max_input_tokens(model_name)
+    except ValueError:
+        logger.warning(f"preflight: unknown model '{model_name}', skipping token check")
+        return {}
+
+    # Headroom for system prompt, tool schemas, and this turn's LLM output.
+    safety_margin = int(os.getenv("PREFLIGHT_SAFETY_MARGIN", "30000"))
+    threshold = max_input - safety_margin
+
+    total_tokens = count_tokens_from_messages(messages, model_name, model_kwargs)
+    logger.debug(
+        f"preflight: {total_tokens} tokens vs threshold {threshold} (max_input={max_input})"
     )
-    
-    max_input_tokens = get_max_input_tokens(model_name)
-    
-    logger.info(f"Total tokens in messages: {total_tokens}, Max input tokens for model '{model_name}': {max_input_tokens}")
-    if total_tokens <= max_input_tokens:
-        logger.info("No sanitization needed, token count within limits")
-        return {}
-    
-    # Sanitize the last ToolMessage's content
-    tool_message: ToolMessage = messages[-1]
-    original_content = tool_message.content
-    sanitized_content = original_content[:1000] + "\n\n[TRUNCATED TOOL RESPONSE DUE TO EXCESSIVE LENGTH]"
-    
-    tool_message.content = sanitized_content
-    logger.info("Sanitized ToolMessage content due to excessive token count")
-    return {"messages": [tool_message]}
+
+    if total_tokens < threshold:
+        return {"total_tokens": total_tokens}
+
+    logger.warning(
+        f"preflight: state at {total_tokens} tokens exceeds safety threshold "
+        f"{threshold} (max_input={max_input}) — forcing summarization before Opey call"
+    )
+
+    return await run_summary_chain({**state, "total_tokens": total_tokens})
 
 
 # ============================================================================
