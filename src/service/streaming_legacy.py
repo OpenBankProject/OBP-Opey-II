@@ -8,6 +8,7 @@ from schema import (
     ToolCallApproval,
 )
 from typing import Any, AsyncGenerator
+import os
 import uuid
 import json
 from langchain_core.runnables import RunnableConfig
@@ -26,7 +27,9 @@ def _parse_input(user_input: UserInput, session_id: str = None) -> tuple[dict[st
     kwargs = {
         "input": _input,
         "config": RunnableConfig(
-            configurable={"thread_id": thread_id}, run_id=run_id
+            configurable={"thread_id": thread_id},
+            run_id=run_id,
+            recursion_limit=int(os.getenv("OPEY_RECURSION_LIMIT", "100")),
         ),
     }
     return kwargs, run_id

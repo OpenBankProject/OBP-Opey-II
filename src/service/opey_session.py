@@ -261,8 +261,12 @@ class OpeySession:
             **session_configurable,
             **base_config.get("configurable", {})
         }
-        
+
+        # LangGraph caps graph execution at `recursion_limit` super-steps (default 25).
+        # Opey's tool-call cycle is ~5 super-steps per round, so 25 gives ~5 tool
+        # calls per turn. Override via OPEY_RECURSION_LIMIT env var.
         return {
+            "recursion_limit": int(os.getenv("OPEY_RECURSION_LIMIT", "100")),
             **base_config,
             "configurable": merged_configurable
         }
