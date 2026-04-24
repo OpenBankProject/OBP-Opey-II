@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi import HTTPException
 from langsmith import Client as LangsmithClient
 from pathlib import Path
@@ -7,6 +7,7 @@ from schema import Feedback, FeedbackResponse, UsageInfoResponse
 from typing import Any, Annotated
 from ..opey_session import OpeySession
 from ..dependencies import get_opey_session
+from ..status_probes import get_cached_status, render_status_html
 from auth.session import session_cookie
 import logging
 
@@ -14,15 +15,23 @@ logger = logging.getLogger('opey.service.routers.misc')
 
 router = APIRouter()
 
+@router.get("/health")
+async def get_health() -> dict[str, Any]:
+    """Minimal liveness check. No dependency probes — safe for load-balancer polling."""
+    return {"status": "ok"}
+
+
 @router.get("/status")
-async def get_status() -> dict[str, Any]:
-    """Health check endpoint with usage information."""
+async def get_status(request: Request) -> Response:
+    """Public status page: reports component health. Cached to prevent DoS amplification.
 
-    status_info = {
-        "status": "ok",
-    }
-
-    return status_info
+    Content-negotiates on Accept: returns HTML for browsers, JSON otherwise.
+    """
+    status = await get_cached_status()
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept and "application/json" not in accept:
+        return HTMLResponse(render_status_html(status))
+    return JSONResponse(status)
 
 @router.get("/mermaid_diagram", dependencies=[Depends(session_cookie)])
 async def get_mermaid_diagram(opey_session: Annotated[OpeySession, Depends(get_opey_session)]) -> FileResponse:

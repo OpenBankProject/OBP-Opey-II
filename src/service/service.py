@@ -76,5 +76,6 @@ limiter: Limiter = app.state.limiter
 limiter.exempt(session.create_session)
 limiter.exempt(chat.stop_stream)
 limiter.exempt(misc.get_status)
+limiter.exempt(misc.get_health)
 limiter.exempt(misc.get_mermaid_diagram)
 limiter.exempt(misc.feedback)
