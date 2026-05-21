@@ -81,35 +81,11 @@ Alternatively, use the `run_dev.sh` helper to run the backend via `poetry run` a
 ./run_dev.sh
 ```
 
-In a separate terminal run the frontend streamlit app (within another poetry shell) with `streamlit run src/streamlit_app.py`
+Opey exposes a REST API; the interactive docs are at `http://127.0.0.1:8000/docs`. For an end-user UI, run [OBP-Portal](https://github.com/OpenBankProject/OBP-Frontend), which talks to Opey over SSE and renders chat, consent prompts, and approval cards.
 
-The best way to interact with the agent is through the streamlit app, but it also functions as a rest API whose docs can be found at `http://127.0.0.1:8000/docs`
+## Experimental Evaluation
 
-## Experimental Evaluation System
-
-Opey II includes a comprehensive evaluation system for testing and optimizing the retrieval component. This allows you to:
-- Run parameter sweeps (batch size, k-value, retry thresholds)
-- Export results to CSV for analysis
-- Generate visualizations to find optimal configurations
-- Test retrieval end-to-end with simple metrics
-
-### Quick Evaluation
-
-Test if your retrieval system is working correctly:
-```bash
-python scripts/run_retrieval_eval.py quick
-```
-
-### Find Optimal Batch Size
-
-Run experiments to find the best batch size for your needs:
-```bash
-python src/evals/retrieval/experiment_runner.py --experiment batch_size
-```
-
-This generates CSV data and plots showing latency vs batch size, recall vs batch size, and helps identify the sweet spot.
-
-See [docs/EXPERIMENTAL_EVALUATION.md](docs/EXPERIMENTAL_EVALUATION.md) for complete documentation.
+Design notes for evaluating the retrieval component (parameter sweeps, CSV export, plots) are kept in [docs/EXPERIMENTAL_EVALUATION.md](docs/EXPERIMENTAL_EVALUATION.md). The runner scripts described there are not currently checked in.
 
 ## Langchain Tracing with Langsmith
 If you want to have metrics and tracing for the agent from LangSmith. Obtain a [Langchain tracing API key](https://smith.langchain.com/) and set:
@@ -179,66 +155,6 @@ The admin client:
 - Handles authentication and token refresh centrally
 
 
-## Logging Configuration
-
-### Username Logging for OBP API Requests
-
-Opey II automatically logs the username from consent JWTs when making requests to the OBP-API. This feature helps with monitoring and debugging by showing which user is making each API request.
-
-The logging includes:
-- Function name that created the log entry
-- Username extracted from the consent JWT token (with explicit field identification)
-- HTTP method (GET, POST, etc.)
-- Full request URL
-
-Example log output:
-```
-INFO - _extract_username_from_jwt says: User identifier extracted from JWT field 'email': john.doe@example.com
-INFO - _async_request says: Making OBP API request - User identifier is: john.doe@example.com, Method: GET, URL: https://test.openbankproject.com/obp/v4.0.0/users/current
-INFO - async_obp_get_requests says: OBP request successful (status: 200)
-```
-
-### Log Levels
-
-- **INFO**: Shows function name, user identifier extraction details, and request details for each OBP API call
-- **WARNING**: Shows available JWT fields when no user identifier can be found
-
-### JWT User Identification Fields
-
-The system attempts to extract user identifiers from these JWT fields in order (prioritizing human-readable identifiers):
-1. `email`
-2. `name`
-3. `preferred_username`
-4. `username`
-5. `user_name` 
-6. `login`
-7. `sub`
-8. `user_id`
-
-The system will log which field was used for user identification:
-```
-INFO - _extract_username_from_jwt says: User identifier extracted from JWT field 'email': john.doe@example.com
-INFO - _extract_username_from_jwt says: User identifier extracted from JWT field 'sub': 91be7e0b-bf6b-4476-8a89-75850a11313b
-```
-
-If none of these fields are found, the user identifier will be logged as 'unknown':
-```
-WARNING - _extract_username_from_jwt says: No user identifier found in JWT fields, using 'unknown'
-```
-
-### Debugging JWT Structure
-
-When no user identifier can be found in the JWT, the system will log all available JWT fields to help with debugging. The system prioritizes human-readable identifiers like email addresses and display names over system identifiers like UUIDs.
-
-### Function Name Prefixes
-
-All log messages now include the function name that generated the log for easier debugging:
-
-- `_extract_username_from_jwt says:` - JWT user identifier extraction logs
-- `_async_request says:` - HTTP request execution logs  
-- `async_obp_get_requests says:` - GET request specific logs
-- `async_obp_requests says:` - General request method logs
-
 ## Service Configuration
 
 ### MCP Server Configuration
@@ -253,9 +169,10 @@ Create a `mcp_servers.json` file in the project root (or `src/` directory):
 {
   "servers": [
     {
-      "name": "obp",
-      "url": "http://localhost:8001/sse",
-      "transport": "sse"
+      "name": "obp-mcp",
+      "url": "http://localhost:9100/mcp",
+      "transport": "streamable_http",
+      "forward_bearer_token": true
     },
     {
       "name": "filesystem",
@@ -401,9 +318,10 @@ If not installed, OAuth servers will be skipped with a warning.
 {
   "servers": [
     {
-      "name": "obp",
-      "url": "http://localhost:8001/sse",
-      "transport": "sse"
+      "name": "obp-mcp",
+      "url": "http://localhost:9100/mcp",
+      "transport": "streamable_http",
+      "forward_bearer_token": true
     },
     {
       "name": "weather",
