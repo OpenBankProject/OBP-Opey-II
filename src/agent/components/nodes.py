@@ -46,7 +46,13 @@ def _truncate_tool_content(content, max_chars: int):
         truncated = [{"type": "text", "text": combined[:max_chars] + "\n\n[TRUNCATED TOOL RESPONSE]"}]
         return truncated, True
 
-    return content, False
+    # Unknown shape (dict, bytes, custom object, …). Coerce to string so the
+    # cap still applies — without this an exotic content type bypasses
+    # truncation entirely and can blow past the model's context window.
+    coerced = str(content)
+    if len(coerced) <= max_chars:
+        return coerced, True  # type changed, callers should treat this as a replacement
+    return coerced[:max_chars] + "\n\n[TRUNCATED TOOL RESPONSE]", True
 
 
 def _truncate_oversized_tool_messages(messages, max_chars: int) -> List[ToolMessage]:

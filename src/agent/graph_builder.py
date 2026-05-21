@@ -13,13 +13,106 @@ from langchain_core.runnables import RunnableConfig
 from agent.components.states import OpeyGraphState
 from agent.components.chains import opey_system_prompt_template
 from agent.components.nodes import human_review_node, run_summary_chain, sanitize_tool_responses, consent_check_node, preflight_safety_check
+from agent.components.recovery import (
+    _is_context_overflow,
+    drop_largest_tool_message,
+    force_summarize,
+    graceful_failure_message,
+    hard_recap_tool_messages,
+)
 from agent.components.edges import should_summarize, needs_human_review
 from agent.utils.model_factory import get_model
 from agent.utils.decorators import cancellable
 from agent.utils.token_counter import count_tokens_from_messages
 
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any, Literal, Tuple
+import logging
 import os
+
+from langchain_core.messages import AIMessage, BaseMessage
+
+logger = logging.getLogger("uvicorn.error")
+
+
+async def _invoke_with_recovery(
+    opey_agent: Runnable,
+    messages: List[BaseMessage],
+    state: "OpeyGraphState",
+    config: RunnableConfig,
+) -> Tuple[AIMessage, Dict[str, Any], List[BaseMessage]]:
+    """Invoke the LLM and recover from context-window overflow.
+
+    Cascade (each step retries the LLM with a smaller payload):
+      1. Hard re-cap every ToolMessage to ~1000 chars.
+      2. Force-summarize the conversation.
+      3. Drop the largest ToolMessage (replace body with a stub).
+      4. Graceful degrade: synthesize an AIMessage telling the user we
+         dropped context and to ask more specifically.
+
+    Returns:
+      (response, state_updates, final_messages)
+      - response: AIMessage to emit (real or synthetic).
+      - state_updates: dict to merge into the node's return so the shrinking
+        persists. May contain `messages` (replacements/removes),
+        `conversation_summary`, `total_tokens`.
+      - final_messages: the actual list invoked against the LLM, for token
+        accounting.
+    """
+    try:
+        response = await opey_agent.ainvoke({"messages": messages}, config)
+        return response, {}, messages
+    except Exception as exc:
+        if not _is_context_overflow(exc):
+            raise
+        logger.warning(f"opey: context overflow on first call: {exc!r}; entering recovery cascade")
+
+    state_updates: Dict[str, Any] = {}
+    accumulated_replacements: List[BaseMessage] = []
+
+    # Step 1: hard re-cap all ToolMessages
+    messages, reps = hard_recap_tool_messages(messages)
+    accumulated_replacements.extend(reps)
+    try:
+        response = await opey_agent.ainvoke({"messages": messages}, config)
+        state_updates["messages"] = accumulated_replacements
+        return response, state_updates, messages
+    except Exception as exc:
+        if not _is_context_overflow(exc):
+            raise
+        logger.warning(f"opey: step 1 (hard re-cap) did not fit: {exc!r}; trying step 2")
+
+    # Step 2: force-summarize
+    messages, summary_updates = await force_summarize(messages, state)
+    # Merge: RemoveMessages from summarization + tool-message replacements
+    # from step 1 both go into `messages`. Order: replacements first so
+    # add_messages updates content, then RemoveMessages drop what's left.
+    summary_msg_updates = list(summary_updates.get("messages", []))
+    state_updates = {
+        **summary_updates,
+        "messages": accumulated_replacements + summary_msg_updates,
+    }
+    try:
+        response = await opey_agent.ainvoke({"messages": messages}, config)
+        return response, state_updates, messages
+    except Exception as exc:
+        if not _is_context_overflow(exc):
+            raise
+        logger.warning(f"opey: step 2 (summarize) did not fit: {exc!r}; trying step 3")
+
+    # Step 3: drop the largest remaining ToolMessage
+    messages, drop_reps = drop_largest_tool_message(messages)
+    state_updates["messages"] = accumulated_replacements + summary_msg_updates + drop_reps
+    try:
+        response = await opey_agent.ainvoke({"messages": messages}, config)
+        return response, state_updates, messages
+    except Exception as exc:
+        if not _is_context_overflow(exc):
+            raise
+        logger.error(f"opey: step 3 (drop largest) did not fit: {exc!r}; graceful degrade")
+
+    # Step 4: graceful degrade — no LLM call, return synthetic message
+    response = graceful_failure_message()
+    return response, state_updates, messages
 
 class OpeyAgentGraphBuilder:
     """
@@ -153,17 +246,25 @@ class OpeyAgentGraphBuilder:
             else:
                 messages = state["messages"]
 
-            response = await opey_agent.ainvoke({"messages": messages}, config)
+            response, extra_updates, messages = await _invoke_with_recovery(
+                opey_agent, messages, state, config
+            )
 
             # Count the tokens in the messages
             total_tokens = state.get("total_tokens", 0)
-            # Use the same LLM for token counting, but without tools binding
-            # Use the same model for token counting, but without tools binding
             token_count = count_tokens_from_messages(messages, self._model_name, self._model_kwargs)
-
             total_tokens += token_count
-            return {"messages": response, "total_tokens": total_tokens}
-        
+
+            # Merge any state updates produced by the recovery cascade
+            # (capped ToolMessage replacements, RemoveMessages from
+            # summarization, updated conversation_summary, …) with the
+            # assistant response. The add_messages reducer keys on .id, so
+            # replacements update in place and removes drop in place.
+            result: dict = {**extra_updates, "total_tokens": total_tokens}
+            existing_msgs = extra_updates.get("messages", [])
+            result["messages"] = list(existing_msgs) + [response] if existing_msgs else response
+            return result
+
         return run_opey
     
 

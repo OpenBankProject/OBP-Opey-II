@@ -32,6 +32,8 @@ class ModelConfig:
     default_max_tokens: int = 4096
     context_window: int = 4096  # Total context window in tokens
     supports_tools: bool = True
+    extra_headers: Optional[Dict[str, str]] = None  # Passed as default_headers to the client
+    betas: Optional[List[str]] = None  # Anthropic beta flags (e.g. ["context-1m-2025-08-07"])
 
 # Define available models with their configurations
 MODEL_CONFIGS = {
@@ -74,11 +76,19 @@ MODEL_CONFIGS = {
         default_max_tokens=8192
     ),
     "claude-sonnet-4.5": ModelConfig(
-        "claude-sonnet-4-5-20250929", 
-        LLMProviders.ANTHROPIC, 
+        "claude-sonnet-4-5-20250929",
+        LLMProviders.ANTHROPIC,
         "ANTHROPIC_API_KEY",
         context_window=200000,
         default_max_tokens=8192
+    ),
+    "claude-sonnet-4.5-1m": ModelConfig(
+        "claude-sonnet-4-5-20250929",
+        LLMProviders.ANTHROPIC,
+        "ANTHROPIC_API_KEY",
+        context_window=1000000,
+        default_max_tokens=8192,
+        betas=["context-1m-2025-08-07"],
     ),
     "claude-haiku-4.5": ModelConfig(
         "claude-haiku-4-5-20251001",
@@ -245,10 +255,22 @@ class ModelFactory:
                 **model_kwargs
             )
         elif config.provider == LLMProviders.ANTHROPIC:
+            anthropic_kwargs = dict(model_kwargs)
+            if config.extra_headers:
+                merged_headers = {**config.extra_headers, **anthropic_kwargs.get("default_headers", {})}
+                anthropic_kwargs["default_headers"] = merged_headers
+            if config.betas:
+                # Merge config betas with any caller-provided ones, preserving order, de-duped.
+                caller_betas = anthropic_kwargs.get("betas") or []
+                merged_betas = list(dict.fromkeys([*config.betas, *caller_betas]))
+                anthropic_kwargs["betas"] = merged_betas
+            logger.info(
+                f"Creating ChatAnthropic for {config.model_id} with betas={anthropic_kwargs.get('betas')} default_headers={anthropic_kwargs.get('default_headers')}"
+            )
             return ChatAnthropic(
                 model_name=config.model_id,
                 api_key=os.getenv(config.api_key_env),
-                **model_kwargs
+                **anthropic_kwargs
             )
         elif config.provider == LLMProviders.OLLAMA:
             base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")

@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import aiohttp
+from urllib.parse import urlsplit, urlunsplit
 
 from .checkpointer import checkpointers
-from .mcp_tools_cache import get_mcp_tools
+from .mcp_tools_cache import get_mcp_tools, get_server_configs
 from .redis_client import get_redis_client
 
 logger = logging.getLogger("opey.service.status")
@@ -59,12 +60,45 @@ async def _probe_checkpointer() -> dict[str, Any]:
     return {"up": "aiosql" in checkpointers and checkpointers["aiosql"] is not None}
 
 
+_OBP_MCP_SERVER_NAMES = ("obp", "obp-mcp")
+
+
+def _obp_mcp_status_url() -> str | None:
+    """Derive the OBP-MCP /status URL from its configured MCP endpoint URL."""
+    for cfg in get_server_configs():
+        if cfg.name in _OBP_MCP_SERVER_NAMES and cfg.url:
+            parts = urlsplit(cfg.url)
+            if not parts.scheme or not parts.netloc:
+                return None
+            return urlunsplit((parts.scheme, parts.netloc, "/status", "format=json", ""))
+    return None
+
+
 async def _probe_mcp() -> dict[str, Any]:
     try:
         tools = get_mcp_tools()
-        return {"up": True, "tool_count": len(tools)}
+        result: dict[str, Any] = {"up": True, "tool_count": len(tools)}
     except Exception:
-        return {"up": False, "tool_count": 0}
+        result = {"up": False, "tool_count": 0}
+
+    # Best-effort fetch of OBP-MCP's outbound auth mode. Failures here must not
+    # demote the overall MCP component — the tools cache is the source of truth
+    # for "up", and the auth mode is informational.
+    url = _obp_mcp_status_url()
+    if url:
+        try:
+            timeout = aiohttp.ClientTimeout(total=_PROBE_TIMEOUT_SEC)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers={"Accept": "application/json"}) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        mode = (data.get("auth") or {}).get("outbound_auth_via")
+                        if mode:
+                            result["obp_mcp_outbound_auth_via"] = mode
+        except Exception:
+            pass
+
+    return result
 
 
 async def _probe_llm() -> dict[str, Any]:
@@ -138,6 +172,8 @@ def render_status_html(status: dict[str, Any]) -> str:
             extras.append(f"{int(data['latency_ms'])} ms")
         if "tool_count" in data:
             extras.append(f"{int(data['tool_count'])} tools")
+        if "obp_mcp_outbound_auth_via" in data:
+            extras.append(f"OBP-MCP auth: {data['obp_mcp_outbound_auth_via']}")
         extra_text = html.escape(" · ".join(extras)) if extras else ""
         rows.append(
             f'<tr><td><span class="dot {dot}"></span>{html.escape(name)}</td>'
