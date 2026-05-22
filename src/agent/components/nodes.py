@@ -88,16 +88,20 @@ async def run_summary_chain(state: OpeyGraphState):
 
     messages = state["messages"]
 
-    # Build a copy of messages with oversized ToolMessage content truncated, so the
-    # summarizer can't blow past the model's context window on a single huge tool result.
-    # The original `messages` in state is unchanged; only the copy sent to the summarizer
-    # is truncated. Summarization is compression, so truncated tool output is acceptable.
-    MAX_TOOL_CONTENT_CHARS = 30000
+    # The summarizer is the recovery path for an oversized conversation, so its OWN
+    # input must be hard-bounded — otherwise summarizing a 375k-token thread sends
+    # 375k tokens to the LLM and overflows (the failure this fixes). Truncate EVERY
+    # message's content with a per-message cap that scales down as the message count
+    # grows, bounding the total to ~SUMMARY_TOTAL_CHAR_BUDGET regardless of thread
+    # size. No messages are dropped, so tool_use/tool_result pairing stays valid.
+    # The original `messages` in state is unchanged; only this copy is truncated.
+    SUMMARY_TOTAL_CHAR_BUDGET = 400_000  # ~100k tokens
+    per_message_cap = max(200, SUMMARY_TOTAL_CHAR_BUDGET // max(len(messages), 1))
     messages_for_summary = []
     for msg in messages:
-        if isinstance(msg, ToolMessage) and isinstance(msg.content, str) and len(msg.content) > MAX_TOOL_CONTENT_CHARS:
-            truncated = msg.content[:MAX_TOOL_CONTENT_CHARS] + "\n\n[TRUNCATED TOOL RESPONSE FOR SUMMARIZATION]"
-            messages_for_summary.append(msg.model_copy(update={"content": truncated}))
+        new_content, was_truncated = _truncate_tool_content(msg.content, per_message_cap)
+        if was_truncated:
+            messages_for_summary.append(msg.model_copy(update={"content": new_content}))
         else:
             messages_for_summary.append(msg)
 
@@ -114,6 +118,16 @@ async def run_summary_chain(state: OpeyGraphState):
         strategy="last",
         include_system=True
     )
+
+    # trim_messages returns an empty list when even the single most-recent message
+    # exceeds max_tokens. That would delete the entire conversation — including the
+    # user's current question — leaving the next Opey call with only the summary
+    # SystemMessage, which Anthropic rejects ("at least one message is required").
+    # Always keep at least the last message; the repair logic below pulls in its
+    # tool_use/tool_result siblings so the kept set stays valid.
+    if not trimmed_messages and messages:
+        logger.warning("trim_messages returned empty; keeping the last message to avoid an empty Opey call")
+        trimmed_messages = messages[-1:]
 
     # Build an index: tool_call_id -> parent AIMessage (from full conversation)
     tool_call_id_to_ai_msg: Dict[str, AIMessage] = {}

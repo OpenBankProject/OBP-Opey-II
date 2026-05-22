@@ -50,6 +50,10 @@ class AssistantCompleteEvent(BaseStreamEvent):
     run_id: str = Field(description="Unique identifier for this run")
     content: str = Field(description="The complete response content")
     tool_calls: Optional[list] = Field(default=[], description="Any tool calls made by the assistant")
+    usage: Optional[dict] = Field(
+        default=None,
+        description="Token usage for this LLM call (input_tokens, output_tokens, total_tokens)."
+    )
 
     def to_sse_data(self) -> str:
         return f"data: {self.model_dump_json()}\n\n"
@@ -323,16 +327,17 @@ class StreamEventFactory:
         return event
 
     @staticmethod
-    def assistant_complete(content: str, message_id: str, run_id: str, tool_calls: Optional[list] = None) -> AssistantCompleteEvent:
-        event = AssistantCompleteEvent(content=content, message_id=message_id, run_id=run_id, tool_calls=tool_calls or [])
+    def assistant_complete(content: str, message_id: str, run_id: str, tool_calls: Optional[list] = None, usage: Optional[dict] = None) -> AssistantCompleteEvent:
+        event = AssistantCompleteEvent(content=content, message_id=message_id, run_id=run_id, tool_calls=tool_calls or [], usage=usage)
         StreamEventFactory._log_event(
-            event, 
-            "ASSISTANT_COMPLETE", 
+            event,
+            "ASSISTANT_COMPLETE",
             {
                 "message_id": message_id,
                 "run_id": run_id,
                 "content_length": len(content),
-                "tool_calls": len(tool_calls or [])
+                "tool_calls": len(tool_calls or []),
+                "usage": usage
             }
         )
         return event

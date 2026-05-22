@@ -5,7 +5,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_core.tools import BaseTool
 from langchain_core.prompts import SystemMessagePromptTemplate, ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import Runnable
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables import RunnableConfig
@@ -63,6 +63,16 @@ async def _invoke_with_recovery(
         return response, {}, messages
     except Exception as exc:
         if not _is_context_overflow(exc):
+            # Log the full exception chain so we can tell whether overflow is
+            # being wrapped in a way the predicate doesn't recognise.
+            chain = []
+            cur: BaseException | None = exc
+            while cur is not None and len(chain) < 6:
+                chain.append(f"{type(cur).__name__}: {str(cur)[:200]}")
+                cur = cur.__cause__ or cur.__context__
+            logger.error(
+                f"opey: ainvoke raised non-overflow exception: {' <- '.join(chain)}"
+            )
             raise
         logger.warning(f"opey: context overflow on first call: {exc!r}; entering recovery cascade")
 
@@ -111,7 +121,9 @@ async def _invoke_with_recovery(
         logger.error(f"opey: step 3 (drop largest) did not fit: {exc!r}; graceful degrade")
 
     # Step 4: graceful degrade — no LLM call, return synthetic message
-    response = graceful_failure_message()
+    # Pass current state messages so the message can report what data
+    # was actually retrieved (the bank call succeeded; only summarization failed).
+    response = graceful_failure_message(messages=state.get("messages", []))
     return response, state_updates, messages
 
 class OpeyAgentGraphBuilder:
@@ -217,6 +229,20 @@ class OpeyAgentGraphBuilder:
     
     def _get_llm(self) -> Runnable:
         """Get the configured LLM"""
+        # DIAGNOSTIC (temporary): log the size of every bound tool schema. The sum is the
+        # fixed per-request overhead sent to the LLM on every call. Remove once resolved.
+        try:
+            from langchain_core.utils.function_calling import convert_to_openai_tool
+            import json as _json
+            _total = 0
+            for _t in self._tools:
+                _sz = len(_json.dumps(convert_to_openai_tool(_t)))
+                _total += _sz
+                logger.warning(f"[TOOL DIAG] {getattr(_t, 'name', _t)}: {_sz} chars")
+            logger.warning(f"[TOOL DIAG] {len(self._tools)} tools, total schema {_total} chars (~{_total // 4} tokens)")
+        except Exception as _diag_err:
+            logger.warning(f"[TOOL DIAG] failed: {_diag_err}")
+
         return get_model(
             self._model_name,
             temperature=self._temperature,
@@ -238,13 +264,44 @@ class OpeyAgentGraphBuilder:
         
         @cancellable(preserve_state_keys=["total_tokens"])
         async def run_opey(state: OpeyGraphState, config: RunnableConfig):
-            # Check if we have a conversation summary
+            # Ephemeral per-turn system context, prepended only for this LLM call (never
+            # persisted to message history, so it always reflects the latest values).
+            prepend: list[SystemMessage] = []
+
             summary = state.get("conversation_summary", "")
             if summary:
-                summary_system_message = f"Summary of earlier conversation: {summary}"
-                messages = [SystemMessage(content=summary_system_message)] + state["messages"]
-            else:
-                messages = state["messages"]
+                prepend.append(SystemMessage(content=f"Summary of earlier conversation: {summary}"))
+
+            current_bank_id = (config.get("configurable", {}) or {}).get("current_bank_id")
+            if current_bank_id:
+                prepend.append(SystemMessage(content=(
+                    f"The user currently has OBP bank '{current_bank_id}' selected in the UI. "
+                    f"When a request does not name a bank, use this bank_id."
+                )))
+
+            messages = prepend + state["messages"]
+
+            # DIAGNOSTIC (temporary): locate context bloat. Logs message count, total
+            # content size, and the 8 biggest messages. Remove once context issue is fixed.
+            try:
+                _sizes = sorted(
+                    ((type(m).__name__, len(str(getattr(m, "content", "") or ""))) for m in messages),
+                    key=lambda x: x[1], reverse=True,
+                )
+                logger.warning(
+                    f"[CTX DIAG] {len(messages)} messages, "
+                    f"~{sum(s for _, s in _sizes)} content chars (~{sum(s for _, s in _sizes) // 4} tokens); "
+                    f"biggest 8: {_sizes[:8]}"
+                )
+            except Exception as _diag_err:
+                logger.warning(f"[CTX DIAG] failed: {_diag_err}")
+
+            # Anthropic rejects a request whose messages are all system content
+            # ("at least one message is required"). If summarisation/trimming left
+            # nothing to respond to, add a minimal user turn so the call is valid.
+            if not any(not isinstance(m, SystemMessage) for m in messages):
+                logger.warning("run_opey: only system messages present — appending a continuation HumanMessage")
+                messages = messages + [HumanMessage(content="Please continue, based on the summary above.")]
 
             response, extra_updates, messages = await _invoke_with_recovery(
                 opey_agent, messages, state, config

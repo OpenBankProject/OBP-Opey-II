@@ -265,6 +265,12 @@ class UserInput(BaseModel):
         description="Tool call approval object (with consent_jwt, approval, or batch_decisions) or False if not an approval.",
         default=False,
     )
+    current_bank_id: str | None = Field(
+        description="Bank the user currently has selected in the UI. Used as the default bank "
+                    "for requests that don't name one.",
+        default=None,
+        examples=["gh.29.uk"],
+    )
 
 
 class StreamInput(UserInput):

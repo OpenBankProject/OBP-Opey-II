@@ -40,6 +40,12 @@ class StreamManager:
         """
 
         thread_id = config.get("configurable", {}).get("thread_id")
+
+        # Carry the UI-selected bank into the graph config so the agent node can inject it
+        # as ephemeral context each turn. Kept out of message history so it never goes stale.
+        if stream_input.current_bank_id:
+            config.setdefault("configurable", {})["current_bank_id"] = stream_input.current_bank_id
+
         logger.info("Starting stream response", extra={
             "event_type": "stream_start",
             "thread_id": thread_id,

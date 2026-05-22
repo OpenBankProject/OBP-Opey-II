@@ -124,11 +124,17 @@ class AssistantEventProcessor(BaseEventProcessor):
                         # This ensures each assistant response gets a fresh state
                         self._reset_streaming_state()
 
+                        # usage_metadata carries Anthropic's real token counts for this
+                        # call — input_tokens is the actual prompt size (tools + system +
+                        # history), the number that hits the 200k limit.
+                        usage = getattr(message, 'usage_metadata', None)
+
                         yield StreamEventFactory.assistant_complete(
                             content=content,
                             message_id=message_id,
                             run_id=run_id,
-                            tool_calls=tool_calls
+                            tool_calls=tool_calls,
+                            usage=usage
                         )
                     except Exception as e:
                         error_msg = f"Error processing assistant message completion: {str(e)}"

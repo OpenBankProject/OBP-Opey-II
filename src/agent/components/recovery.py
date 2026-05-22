@@ -43,19 +43,36 @@ logger = logging.getLogger("uvicorn.error")
 HARD_RECAP_CHARS = 1000
 
 
-def _is_context_overflow(exc: BaseException) -> bool:
-    """True if `exc` looks like an LLM context-window-exceeded error.
+_OVERFLOW_PHRASES = (
+    "prompt is too long",        # Anthropic
+    "context_length_exceeded",   # OpenAI
+    "maximum context length",    # OpenAI (alt phrasing)
+    "context window",            # Generic / Bedrock
+    "too many tokens",           # Generic fallback
+)
 
-    Provider-agnostic by string-matching the canonical error phrasings.
+
+def _is_context_overflow(exc: BaseException) -> bool:
+    """True if `exc` (or anything it wraps) looks like a context-window error.
+
+    Walks the cause/context chain so we catch wrapped errors raised from
+    inside LangGraph / LangChain / Anthropic SDK layers.
     """
-    msg = str(exc).lower()
-    return (
-        "prompt is too long" in msg                # Anthropic
-        or "context_length_exceeded" in msg        # OpenAI
-        or "maximum context length" in msg         # OpenAI (alt phrasing)
-        or "context window" in msg                 # Generic / Bedrock
-        or "too many tokens" in msg                # Generic fallback
-    )
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        msg = str(current).lower()
+        if any(phrase in msg for phrase in _OVERFLOW_PHRASES):
+            return True
+        # Anthropic SDK BadRequestError exposes the API body in .body or .response
+        body = getattr(current, "body", None)
+        if isinstance(body, dict):
+            body_text = str(body).lower()
+            if any(phrase in body_text for phrase in _OVERFLOW_PHRASES):
+                return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _content_length(content: Any) -> int:
@@ -228,23 +245,88 @@ def drop_largest_tool_message(
 # ---------------------------------------------------------------------------
 
 
-GRACEFUL_DEGRADE_TEXT = (
-    "I had to shorten this conversation to keep it within the model's "
-    "context window. Some earlier tool responses were dropped or "
-    "summarized. If your last question depended on data I just dropped, "
-    "please rephrase it more specifically — for example, ask for a single "
-    "record by id rather than a list, or narrow the time range."
-)
+def _content_to_text(content: Any) -> str:
+    """Best-effort flatten of message content to a plain string for inspection."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(item.get("text", "") or str(item))
+            else:
+                parts.append(str(item))
+        return "".join(parts)
+    return str(content)
 
 
-def graceful_failure_message() -> AIMessage:
+def _summarize_last_tool_result(messages: List[BaseMessage]) -> str | None:
+    """Inspect the last ToolMessage and produce a one-line human summary.
+
+    Goal: tell the user *what came back* from the bank, so a failed LLM call
+    doesn't look like "Opey did nothing". Best-effort and safe — returns
+    None if we can't extract anything useful.
+    """
+    last_tool: ToolMessage | None = None
+    for msg in reversed(messages):
+        if isinstance(msg, ToolMessage):
+            last_tool = msg
+            break
+    if last_tool is None:
+        return None
+
+    text = _content_to_text(last_tool.content)
+    if not text:
+        return None
+
+    # Heuristic: parse JSON, look for an obvious list of records.
+    try:
+        import json
+        parsed = json.loads(text)
+    except (ValueError, TypeError):
+        return f"the last tool call returned {len(text):,} characters of data"
+
+    response = parsed.get("response", parsed) if isinstance(parsed, dict) else parsed
+    if isinstance(response, dict):
+        for key, value in response.items():
+            if isinstance(value, list):
+                return f"the OBP API returned {len(value)} `{key}` (≈ {len(text):,} chars)"
+        return f"the OBP API returned an object with keys: {', '.join(list(response.keys())[:6])}"
+    if isinstance(response, list):
+        return f"the OBP API returned {len(response)} items (≈ {len(text):,} chars)"
+    return f"the OBP API returned {len(text):,} characters of data"
+
+
+def graceful_failure_message(messages: List[BaseMessage] | None = None) -> AIMessage:
     """Synthetic AIMessage used when every recovery step has failed.
 
     Returning this to state lets the stream end cleanly with a useful
     next-action for the user instead of bubbling a 400 to the portal.
+
+    If `messages` is provided, inspects the most recent ToolMessage and
+    reports what data was actually retrieved — so the user knows the bank
+    call succeeded, only the summarization step failed.
     """
     logger.error(
         "recovery step 4: all recovery steps exhausted — emitting graceful "
         "degrade message to caller"
     )
-    return AIMessage(content=GRACEFUL_DEGRADE_TEXT)
+
+    retrieved_line = ""
+    if messages:
+        summary = _summarize_last_tool_result(messages)
+        if summary:
+            retrieved_line = (
+                f"\n\n**Good news — the bank call succeeded:** "
+                f"{summary}.\n"
+                f"It was too large for me to summarize in one go."
+            )
+
+    text = (
+        "I couldn't fit the result of this turn into my context window."
+        + retrieved_line
+        + "\n\nPlease try a more specific question — for example, ask for "
+        "a single record by id, narrow the time range, or filter by a "
+        "specific bank or account."
+    )
+    return AIMessage(content=text)
