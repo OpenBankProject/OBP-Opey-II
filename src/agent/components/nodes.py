@@ -1,9 +1,11 @@
 import json
 import uuid
 import os
+import time
+import base64
 import logging
 
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from langchain_core.messages import ToolMessage, SystemMessage, RemoveMessage, AIMessage, trim_messages
 from langchain_core.runnables import RunnableConfig
@@ -507,14 +509,70 @@ def _find_tool_call_for_message(messages: List, tool_call_id: str) -> Dict | Non
     return None
 
 
+def _jwt_exp(jwt: str) -> Optional[int]:
+    """Decode the `exp` claim from a JWT (Unix seconds). Returns None on any failure.
+    Used to cache a Consent-JWT for its real lifetime instead of a fixed safety TTL."""
+    try:
+        parts = jwt.split(".")
+        if len(parts) < 2:
+            return None
+        payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        exp = payload.get("exp")
+        return int(exp) if exp is not None else None
+    except Exception:
+        return None
+
+
+def _consent_cache_key(required_roles: list, bank_id: Optional[str]) -> str:
+    """Stable, order-independent cache key from the SET of required entitlements.
+
+    OBP consents are scoped to roles/entitlements, not operations — so two different
+    operations needing the same role(s) can share one Consent-JWT. Keying by the set
+    of `(role, bank?)` pairs lets the cache reuse the JWT across distinct operations.
+    Bank scope is attached only to roles that declare `requires_bank_id`; system-level
+    roles ignore the per-call bank.
+    """
+    if not required_roles:
+        return f"@{bank_id or ''}"
+    parts = sorted({
+        f"{r.get('role', '')}::{(bank_id or '') if r.get('requires_bank_id') else '-'}"
+        for r in required_roles
+        if r.get("role")
+    })
+    return ",".join(parts) if parts else f"@{bank_id or ''}"
+
+
+def _consent_retry_ok(result) -> bool:
+    """Best-effort check that a consent retry actually succeeded — i.e. the Consent-JWT
+    was accepted. Returns False on a fresh consent_required or a 401/403, which means a
+    (cached) JWT no longer works and should be evicted."""
+    try:
+        parsed = json.loads(result) if isinstance(result, str) else result
+    except Exception:
+        return True  # non-JSON output — assume the call went through
+    if not isinstance(parsed, dict):
+        return True
+    if parsed.get("error") == "consent_required":
+        return False
+    status_code = parsed.get("status_code")
+    if isinstance(status_code, int) and status_code in (401, 403):
+        return False
+    return True
+
+
 async def _retry_tool_with_consent(
     tool_call_id: str,
     error_msg_id: str,
     original_tc: Dict,
     consent_jwt: str,
     tools_by_name: Dict,
-) -> ToolMessage:
-    """Retry a single tool call with an injected Consent-JWT. Returns a replacement ToolMessage."""
+) -> tuple[ToolMessage, bool]:
+    """Retry a single tool call with an injected Consent-JWT.
+
+    Returns (replacement ToolMessage, ok) — ok is False if the retry still looks like
+    an auth/consent failure, so the caller can evict a stale cached JWT.
+    """
     tool_name = original_tc["name"]
     tool_fn = tools_by_name.get(tool_name)
     if not tool_fn:
@@ -524,7 +582,7 @@ async def _retry_tool_with_consent(
             tool_call_id=tool_call_id,
             id=error_msg_id,
             status="error",
-        )
+        ), False
 
     original_args = dict(original_tc.get("args", {}))
     existing_headers = original_args.get("headers", {}) or {}
@@ -538,7 +596,7 @@ async def _retry_tool_with_consent(
             tool_call_id=tool_call_id,
             id=error_msg_id,
             status="success",
-        )
+        ), _consent_retry_ok(result)
     except Exception as e:
         logger.error(f"🔐 CONSENT_FLOW: Consent retry failed for '{tool_name}': {e}", exc_info=True)
         return ToolMessage(
@@ -546,7 +604,7 @@ async def _retry_tool_with_consent(
             tool_call_id=tool_call_id,
             id=error_msg_id,
             status="error",
-        )
+        ), False
 
 
 async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
@@ -627,38 +685,84 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
     configurable = config.get("configurable", {}) if config else {}
     tools_by_name = configurable.get("tools_by_name", {})
 
+    # Consent-JWT cache, keyed by "operation_id::bank_id". Reusing a still-valid JWT
+    # lets a repeated operation skip the consent prompt entirely.
+    consent_cache: Dict[str, dict] = dict(state.get("consent_jwts") or {})
+    now = time.time()
+    # Fallback safety TTL — only used if the JWT's own `exp` claim can't be decoded.
+    # Real consent lifetime comes from the JWT itself, so this is purely a guard rail.
+    CONSENT_JWT_FALLBACK_TTL_SECONDS = 3300
+
     all_replacements = []
 
     for op_id, group in groups.items():
         first = group[0]
         required_roles = first["consent_info"].get("required_roles", [])
+        bank_id = first["consent_info"].get("bank_id")
         tool_call_ids = [ce["error_msg"].tool_call_id for ce in group]
 
-        # Build the interrupt payload — one per distinct operation
-        consent_payload = {
-            "consent_type": "consent_required",
-            # Primary fields (used by stream_manager to emit ConsentRequestEvent)
-            "tool_call_id": first["error_msg"].tool_call_id,
-            "tool_name": first["original_tc"]["name"],
-            "operation_id": op_id if op_id != "__unknown__" else None,
-            "required_roles": required_roles,
-            "bank_id": first["consent_info"].get("bank_id"),
-            # Batch context so the frontend can show "N tool calls need this consent"
-            "tool_call_count": len(group),
-            "tool_call_ids": tool_call_ids,
-        }
+        # Only cache real operations — an unknown operation_id can't be keyed safely.
+        # Key by the SET of required entitlements (not operation_id) so two different
+        # operations that need the same role(s) reuse one consent. Skip caching only if
+        # there are no roles AND no bank scope — that key would be too generic.
+        cache_key = _consent_cache_key(required_roles, bank_id)
+        if cache_key == "@":
+            cache_key = None
 
-        logger.info(
-            f"🔐 CONSENT_FLOW: Interrupting for operation '{op_id}' "
-            f"({len(group)} tool call(s): {tool_call_ids})"
-        )
-        user_response = interrupt(consent_payload)
-        logger.info(
-            f"🔐 CONSENT_FLOW: Resumed for operation '{op_id}', "
-            f"response keys: {list(user_response.keys()) if isinstance(user_response, dict) else type(user_response)}"
-        )
+        # Reuse a cached, still-valid Consent-JWT for this operation if we have one.
+        consent_jwt = None
+        used_cached_jwt = False
+        if cache_key:
+            cached = consent_cache.get(cache_key)
+            if cached:
+                expires_at = cached.get("expires_at")
+                cache_valid = False
+                if expires_at:
+                    # Use the JWT's real expiry (decoded `exp` claim) with a 60s margin.
+                    cache_valid = expires_at > now + 60
+                else:
+                    # JWT exp unknown — fall back to a conservative safety TTL.
+                    cache_valid = (now - cached.get("created_at", 0)) < CONSENT_JWT_FALLBACK_TTL_SECONDS
+                if cache_valid:
+                    consent_jwt = cached.get("jwt")
+                    used_cached_jwt = True
+                    logger.info(
+                        f"🔐 CONSENT_FLOW: Reusing cached Consent-JWT for operation '{op_id}' "
+                        f"(cache_key={cache_key}) — skipping consent prompt"
+                    )
 
-        consent_jwt = user_response.get("consent_jwt")
+        # No usable cached JWT → prompt the user (interrupt → consent card → resume).
+        if not consent_jwt:
+            consent_payload = {
+                "consent_type": "consent_required",
+                # Primary fields (used by stream_manager to emit ConsentRequestEvent)
+                "tool_call_id": first["error_msg"].tool_call_id,
+                "tool_name": first["original_tc"]["name"],
+                "operation_id": op_id if op_id != "__unknown__" else None,
+                "required_roles": required_roles,
+                "bank_id": bank_id,
+                # Batch context so the frontend can show "N tool calls need this consent"
+                "tool_call_count": len(group),
+                "tool_call_ids": tool_call_ids,
+            }
+
+            logger.info(
+                f"🔐 CONSENT_FLOW: Interrupting for operation '{op_id}' "
+                f"({len(group)} tool call(s): {tool_call_ids})"
+            )
+            user_response = interrupt(consent_payload)
+            logger.info(
+                f"🔐 CONSENT_FLOW: Resumed for operation '{op_id}', "
+                f"response keys: {list(user_response.keys()) if isinstance(user_response, dict) else type(user_response)}"
+            )
+
+            consent_jwt = user_response.get("consent_jwt")
+            if consent_jwt and cache_key:
+                consent_cache[cache_key] = {
+                    "jwt": consent_jwt,
+                    "created_at": now,
+                    "expires_at": _jwt_exp(consent_jwt),
+                }
 
         if not consent_jwt:
             logger.warning(f"🔐 CONSENT_FLOW: Consent denied for operation '{op_id}' — denying {len(group)} tool call(s)")
@@ -672,11 +776,12 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
         else:
             jwt_preview = consent_jwt[:50] + "..." if len(consent_jwt) > 50 else consent_jwt
             logger.info(
-                f"🔐 CONSENT_FLOW: Consent approved for operation '{op_id}' (JWT preview: {jwt_preview}) "
-                f"— retrying {len(group)} tool call(s)"
+                f"🔐 CONSENT_FLOW: Consent {'(cached) ' if used_cached_jwt else ''}available for operation "
+                f"'{op_id}' (JWT preview: {jwt_preview}) — retrying {len(group)} tool call(s)"
             )
+            op_retry_failed = False
             for ce in group:
-                replacement = await _retry_tool_with_consent(
+                replacement, ok = await _retry_tool_with_consent(
                     tool_call_id=ce["error_msg"].tool_call_id,
                     error_msg_id=ce["error_msg"].id,
                     original_tc=ce["original_tc"],
@@ -684,6 +789,16 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
                     tools_by_name=tools_by_name,
                 )
                 all_replacements.append(replacement)
+                if not ok:
+                    op_retry_failed = True
 
-    return {"messages": all_replacements}
+            # A cached JWT that no longer works (expired/revoked server-side) must be
+            # evicted so the next attempt re-prompts instead of looping on a dead JWT.
+            if used_cached_jwt and op_retry_failed and cache_key:
+                logger.warning(
+                    f"🔐 CONSENT_FLOW: Cached Consent-JWT for '{op_id}' failed on retry — evicting from cache"
+                )
+                consent_cache.pop(cache_key, None)
+
+    return {"messages": all_replacements, "consent_jwts": consent_cache}
 

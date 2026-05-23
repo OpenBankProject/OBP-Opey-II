@@ -24,7 +24,13 @@ class OpeyGraphState(MessagesState):
     current_state: str
     aggregated_context: str
     total_tokens: int
-    
+
     # Session-level approvals: set of approved tool names
     # These are synced from ApprovalStore after each approval
     session_approvals: Annotated[Set[str], merge_sets]
+
+    # Granted Consent-JWTs cached for reuse, keyed by "operation_id::bank_id" →
+    # {"jwt": str, "created_at": float}. Lets a repeated operation reuse a still-valid
+    # consent instead of re-prompting the user. Written only by consent_check_node,
+    # which reads, updates and returns the whole dict (plain last-write-wins field).
+    consent_jwts: Dict[str, dict]
