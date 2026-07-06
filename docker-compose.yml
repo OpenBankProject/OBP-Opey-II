@@ -7,6 +7,11 @@ services:
       - "5000:5000"
     env_file:
       - .env
+    volumes:
+      # mcp_servers.json is gitignored (deployment-specific) and not baked into
+      # the image — without this mount, Opey loads no MCP tools and the agent
+      # knows nothing about OBP (/status will show "mcp down · no MCP servers configured").
+      - ./mcp_servers.json:/app/mcp_servers.json:ro
 #     depends_on:
 #       - weaviate
 

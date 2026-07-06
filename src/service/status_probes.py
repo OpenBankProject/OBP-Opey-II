@@ -82,6 +82,13 @@ def _obp_mcp_status_url() -> str | None:
 
 
 async def _probe_mcp() -> dict[str, Any]:
+    # No MCP servers configured means the agent has no OBP tools at all (e.g.
+    # mcp_servers.json missing from the deployment) — surface that as down
+    # rather than a green "up · 0 tools".
+    configs = get_server_configs()
+    if not configs:
+        return {"up": False, "tool_count": 0, "detail": "no MCP servers configured"}
+
     try:
         tools = get_mcp_tools()
         result: dict[str, Any] = {"up": True, "tool_count": len(tools)}
@@ -121,7 +128,6 @@ async def _probe_mcp() -> dict[str, Any]:
     # empty list). Unauthenticated — succeeds when the server's inbound auth is
     # disabled (e.g. consent-based OBP-MCP setups); with inbound auth enabled it
     # may fail, so a failure is reported but does not demote "up".
-    configs = get_server_configs()
     if configs:
         try:
             loader = MCPToolLoader(servers=configs)
@@ -212,6 +218,8 @@ def render_status_html(status: dict[str, Any]) -> str:
             extras.append(f"test call: {data['test_call']}")
         if "obp_mcp_outbound_auth_via" in data:
             extras.append(f"OBP-MCP auth: {data['obp_mcp_outbound_auth_via']}")
+        if "detail" in data:
+            extras.append(str(data["detail"]))
         extra_text = html.escape(" · ".join(extras)) if extras else ""
         rows.append(
             f'<tr><td><span class="dot {dot}"></span>{html.escape(name)}</td>'

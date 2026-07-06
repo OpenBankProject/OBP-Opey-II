@@ -19,9 +19,15 @@ FROM python:3.12.7-slim-bookworm AS runtime
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
 
+WORKDIR /app
+
 COPY --from=builder ${VIRTUAL_ENV} ${VIRTUAL_ENV}
 
 COPY src ./src
+
+# mcp_servers.json is gitignored (deployment-specific) so it is not baked into
+# the image — mount it at /app/mcp_servers.json (see docker-compose.yml) or set
+# MCP_SERVERS_FILE to a mounted path. Without it, Opey loads no MCP tools.
 
 EXPOSE 5000
 
