@@ -4,6 +4,43 @@
 
 An agentic version of the Opey chatbot for Open Bank Project that uses the [LangGraph](https://www.langchain.com/langgraph) framework
 
+## Architecture: How Opey reaches the OBP API
+
+There are **two distinct paths** from Opey to the Open Bank Project (OBP) API, used for different purposes:
+
+**1. The agent's banking tools → via OBP-MCP (not direct)**
+
+When the LLM agent needs to answer a user's banking question (list banks, accounts, transactions, etc.), it does **not** call the OBP API directly. It calls tools loaded from the [OBP-MCP](https://github.com/OpenBankProject/OBP-MCP) server, and **OBP-MCP** is what calls the OBP API.
+
+- Tools are loaded over MCP via `MultiServerMCPClient` (`src/agent/components/tools/mcp_integration.py`).
+- The MCP server is configured in `mcp_servers.json` (see [MCP Server Configuration](#mcp-server-configuration)).
+- When a server is marked `forward_bearer_token: true` (a.k.a. legacy `requires_auth`), Opey forwards the user's bearer token as an `Authorization: Bearer` header to OBP-MCP, so OBP-MCP calls the OBP API **as that user**.
+
+```
+User → Opey (agent) → OBP-MCP → OBP API
+```
+
+**2. Opey's own infrastructure → calls the OBP API directly**
+
+Opey also has a direct `aiohttp`-based `OBPClient` (`src/client/obp_client.py`) used **outside the agent loop**, not for answering user questions:
+
+- **Auth / validation** — validating bearer tokens & consent, fetching user roles/entitlements (`src/auth/auth.py`, session router `/users/current`).
+- **Admin operations** — the admin client singleton (`src/auth/admin_client.py`).
+- **Checkpointer** — persisting agent conversation state into OBP (`src/checkpointer/obp_checkpoint_saver.py`).
+- **Status probes** — health checks against `/obp/v5.1.0/root` (`src/service/status_probes.py`).
+
+```
+Opey (auth / admin / checkpointer / health) → OBP API
+```
+
+| Purpose | Who calls the OBP API |
+|---|---|
+| Agent answering banking questions (accounts, transactions…) | **OBP-MCP** (Opey forwards the user's token to it) |
+| Token/consent validation, roles/entitlements | Opey directly (`OBPClient`) |
+| Admin operations, checkpoint persistence, health probes | Opey directly (`OBPClient`) |
+
+> **Note:** an `obp_requests` tool is defined inside `src/client/obp_client.py` for direct agent-driven OBP calls, but it is **not currently wired into the agent** — the agent's banking tools come entirely from OBP-MCP. It is a legacy/alternative path superseded by MCP.
+
 ### Installing Locally
 ### 1. Installing the dependencies
 The easiest way to do this is using _poetry_. Install using the [reccomended method](https://python-poetry.org/docs/) rather than trying to manually install.
