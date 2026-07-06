@@ -11,6 +11,8 @@ from typing import Any
 import aiohttp
 from urllib.parse import urlsplit, urlunsplit
 
+from agent.components.tools import MCPToolLoader
+
 from .checkpointer import checkpointers
 from .mcp_tools_cache import get_mcp_tools, get_server_configs
 from .redis_client import get_redis_client
@@ -18,6 +20,7 @@ from .redis_client import get_redis_client
 logger = logging.getLogger("opey.service.status")
 
 _PROBE_TIMEOUT_SEC = 2.0
+_MCP_TEST_CALL_TIMEOUT_SEC = 5.0  # full MCP handshake + tools/list is heavier than an HTTP ping
 _CACHE_TTL_SEC = 15.0
 
 _start_time_monotonic = time.monotonic()
@@ -70,7 +73,11 @@ def _obp_mcp_status_url() -> str | None:
             parts = urlsplit(cfg.url)
             if not parts.scheme or not parts.netloc:
                 return None
-            return urlunsplit((parts.scheme, parts.netloc, "/status", "format=json", ""))
+            netloc = parts.netloc
+            # 0.0.0.0 is a bind-any address, not a valid connect target — map to loopback.
+            if parts.hostname == "0.0.0.0":
+                netloc = netloc.replace("0.0.0.0", "127.0.0.1", 1)
+            return urlunsplit((parts.scheme, netloc, "/status", "format=json", ""))
     return None
 
 
@@ -81,22 +88,51 @@ async def _probe_mcp() -> dict[str, Any]:
     except Exception:
         result = {"up": False, "tool_count": 0}
 
-    # Best-effort fetch of OBP-MCP's outbound auth mode. Failures here must not
-    # demote the overall MCP component — the tools cache is the source of truth
-    # for "up", and the auth mode is informational.
+    # Auth-required OBP-MCP servers are never connected at startup (tools are
+    # loaded per-request with the user's bearer token), so the tools cache says
+    # nothing about reachability. When an OBP-MCP server is configured, probe
+    # its /status endpoint directly: reachability drives "up", and the outbound
+    # auth mode is included when the response parses.
     url = _obp_mcp_status_url()
     if url:
+        start = time.monotonic()
+        reachable = False
         try:
             timeout = aiohttp.ClientTimeout(total=_PROBE_TIMEOUT_SEC)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url, headers={"Accept": "application/json"}) as resp:
+                    reachable = resp.status < 500
                     if resp.status == 200:
-                        data = await resp.json()
-                        mode = (data.get("auth") or {}).get("outbound_auth_via")
-                        if mode:
-                            result["obp_mcp_outbound_auth_via"] = mode
+                        try:
+                            data = await resp.json()
+                            mode = (data.get("auth") or {}).get("outbound_auth_via")
+                            if mode:
+                                result["obp_mcp_outbound_auth_via"] = mode
+                        except Exception:
+                            pass  # auth mode is informational only
         except Exception:
-            pass
+            reachable = False
+        result["up"] = reachable
+        result["latency_ms"] = int((time.monotonic() - start) * 1000)
+
+    # Protocol-level test call: perform a real MCP handshake + tools/list over the
+    # same loader the agent uses. MCPToolLoader is used directly (not the
+    # create_mcp_tools_with_auth wrapper, which swallows connection errors into an
+    # empty list). Unauthenticated — succeeds when the server's inbound auth is
+    # disabled (e.g. consent-based OBP-MCP setups); with inbound auth enabled it
+    # may fail, so a failure is reported but does not demote "up".
+    configs = get_server_configs()
+    if configs:
+        try:
+            loader = MCPToolLoader(servers=configs)
+            tools = await asyncio.wait_for(
+                loader.load_tools(), timeout=_MCP_TEST_CALL_TIMEOUT_SEC
+            )
+            result["test_call"] = "ok"
+            result["tool_count"] = len(tools)
+        except Exception as e:
+            logger.warning(f"MCP test call failed: {type(e).__name__}: {e}")
+            result["test_call"] = "failed"
 
     return result
 
@@ -172,6 +208,8 @@ def render_status_html(status: dict[str, Any]) -> str:
             extras.append(f"{int(data['latency_ms'])} ms")
         if "tool_count" in data:
             extras.append(f"{int(data['tool_count'])} tools")
+        if "test_call" in data:
+            extras.append(f"test call: {data['test_call']}")
         if "obp_mcp_outbound_auth_via" in data:
             extras.append(f"OBP-MCP auth: {data['obp_mcp_outbound_auth_via']}")
         extra_text = html.escape(" · ".join(extras)) if extras else ""
