@@ -11,6 +11,9 @@ evals/results
 src/evals/retrieval/results/
 .obp_data_hashes.json
 mcp_servers.json
+# Deployment-specific prompt files (copy from opey_supplementary_prompt.example.md)
+opey_system_prompt.local.md
+opey_supplementary_prompt.local.md
 # Byte-compiled / optimized / DLL files
 *.py[cod]
 *$py.class

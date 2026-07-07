@@ -26,6 +26,7 @@ from agent.utils.decorators import cancellable
 from agent.utils.token_counter import count_tokens_from_messages
 
 from typing import List, Optional, Dict, Any, Literal, Tuple
+from pathlib import Path
 import logging
 import os
 
@@ -126,6 +127,23 @@ async def _invoke_with_recovery(
     response = graceful_failure_message(messages=state.get("messages", []))
     return response, state_updates, messages
 
+def _prompt_from_env(file_var: str, inline_var: str) -> Optional[str]:
+    """Resolve a prompt from env: <file_var> names a text file (wins if readable and
+    non-empty, e.g. a mounted Kubernetes ConfigMap), else fall back to the literal
+    content of <inline_var>. Returns None if neither is set."""
+    path = os.getenv(file_var)
+    if path:
+        try:
+            content = Path(path).read_text().strip()
+            if content:
+                logger.info(f"Loaded prompt from {file_var}={path} ({len(content)} chars)")
+                return content
+            logger.warning(f"{file_var}={path} is empty, falling back to {inline_var}")
+        except OSError as e:
+            logger.warning(f"Could not read {file_var}={path} ({e}), falling back to {inline_var}")
+    return os.getenv(inline_var)
+
+
 class OpeyAgentGraphBuilder:
     """
     Builder pattern for creating flexible Opey agent configurations.
@@ -165,13 +183,27 @@ class OpeyAgentGraphBuilder:
     def reset(self):
         """Reset builder to default state"""
         self._tools: List[BaseTool] = []
-        self._system_prompt: str = os.getenv("OPEY_SYSTEM_PROMPT", opey_system_prompt_template)
+        # Main prompt: OPEY_SYSTEM_PROMPT_FILE > OPEY_SYSTEM_PROMPT > bundled YAML
+        self._system_prompt: str = (
+            _prompt_from_env("OPEY_SYSTEM_PROMPT_FILE", "OPEY_SYSTEM_PROMPT")
+            or opey_system_prompt_template
+        )
         self._model_name: str = "medium"
         self._temperature: float = 0.7
         self._checkpointer: Optional[BaseCheckpointSaver] = None
         self._enable_human_review: bool = False
         self._enable_summarization: bool = True
         self._prompt_additions: List[str] = []
+        # Deployment-specific hints (e.g. dynamic entities for a particular project)
+        # appended after the main prompt, whichever source it came from.
+        supplementary_prompt = _prompt_from_env(
+            "OPEY_SUPPLEMENTARY_PROMPT_FILE", "OPEY_SUPPLEMENTARY_PROMPT"
+        )
+        if supplementary_prompt:
+            logger.info("Appending supplementary prompt to system prompt (%d chars)", len(supplementary_prompt))
+            # The final prompt is fed to SystemMessagePromptTemplate.from_template, where
+            # bare braces (e.g. in JSON examples) would be parsed as template variables.
+            self._prompt_additions.append(supplementary_prompt.replace("{", "{{").replace("}", "}}"))
         self._model_kwargs: Dict[str, Any] = {}
         return self
     
