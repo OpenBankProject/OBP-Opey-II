@@ -543,6 +543,38 @@ def _consent_cache_key(required_roles: list, bank_id: Optional[str]) -> str:
     return ",".join(parts) if parts else f"@{bank_id or ''}"
 
 
+def _jwt_covers(consent_jwt: str, required_roles: list, bank_id: Optional[str]) -> bool:
+    """True when the JWT's embedded entitlements plausibly satisfy the required roles.
+
+    OBP executes a consent as a shadow user holding exactly the entitlements EMBEDDED
+    in the consent JWT — the human's live entitlements are never consulted at call time.
+    So a JWT without a matching (role, bank) pair is guaranteed to 403; don't reuse it.
+    `required_roles` are alternatives (any one suffices, mirroring OBP's
+    "missing one or more roles: X or Y").
+    """
+    if not required_roles:
+        return True
+    try:
+        parts = consent_jwt.split(".")
+        payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+    except Exception:
+        return True  # undecodable — let the retry decide
+    entitlements = payload.get("entitlements") or []
+    for r in required_roles:
+        role = r.get("role") if isinstance(r, dict) else None
+        if not role:
+            continue
+        wanted_bank = (bank_id or "") if r.get("requires_bank_id") else ""
+        for e in entitlements:
+            if not isinstance(e, dict) or e.get("role_name") != role:
+                continue
+            embedded_bank = e.get("bank_id") or ""
+            if embedded_bank == "" or embedded_bank == wanted_bank:
+                return True
+    return False
+
+
 def _consent_retry_ok(result) -> bool:
     """Best-effort check that a consent retry actually succeeded — i.e. the Consent-JWT
     was accepted. Returns False on a fresh consent_required or a 401/403, which means a
@@ -724,12 +756,23 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
                     # JWT exp unknown — fall back to a conservative safety TTL.
                     cache_valid = (now - cached.get("created_at", 0)) < CONSENT_JWT_FALLBACK_TTL_SECONDS
                 if cache_valid:
-                    consent_jwt = cached.get("jwt")
-                    used_cached_jwt = True
-                    logger.info(
-                        f"🔐 CONSENT_FLOW: Reusing cached Consent-JWT for operation '{op_id}' "
-                        f"(cache_key={cache_key}) — skipping consent prompt"
-                    )
+                    cached_jwt = cached.get("jwt")
+                    if cached_jwt and not _jwt_covers(cached_jwt, required_roles, bank_id):
+                        # Guaranteed 403 at OBP (the consent's shadow user lacks the
+                        # role) — evict and fall through to a fresh prompt instead.
+                        logger.warning(
+                            f"🔐 CONSENT_FLOW: Cached Consent-JWT for '{op_id}' "
+                            f"(cache_key={cache_key}) embeds no entitlement matching the "
+                            f"required roles — evicting and re-prompting"
+                        )
+                        consent_cache.pop(cache_key, None)
+                    else:
+                        consent_jwt = cached_jwt
+                        used_cached_jwt = True
+                        logger.info(
+                            f"🔐 CONSENT_FLOW: Reusing cached Consent-JWT for operation '{op_id}' "
+                            f"(cache_key={cache_key}) — skipping consent prompt"
+                        )
 
         # No usable cached JWT → prompt the user (interrupt → consent card → resume).
         if not consent_jwt:
@@ -741,6 +784,14 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
                 "operation_id": op_id if op_id != "__unknown__" else None,
                 "required_roles": required_roles,
                 "bank_id": bank_id,
+                # Scoping metadata from the MCP's consent_required payload, relayed
+                # verbatim so the consent card can build the right consent body.
+                "account_id": first["consent_info"].get("account_id"),
+                "view_id": first["consent_info"].get("view_id"),
+                "requires_view_access": bool(first["consent_info"].get("requires_view_access", False)),
+                "is_user_scoped": bool(first["consent_info"].get("is_user_scoped", False)),
+                # The User's own resources the consent must list (my_resources), if any.
+                "my_resources": first["consent_info"].get("my_resources"),
                 # Batch context so the frontend can show "N tool calls need this consent"
                 "tool_call_count": len(group),
                 "tool_call_ids": tool_call_ids,
@@ -757,6 +808,14 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
             )
 
             consent_jwt = user_response.get("consent_jwt")
+            if consent_jwt and not _jwt_covers(consent_jwt, required_roles, bank_id):
+                # Retry anyway (the user approved), but this points at a consent-builder
+                # bug in the frontend — the minted consent doesn't authorize the call.
+                logger.warning(
+                    f"🔐 CONSENT_FLOW: Fresh Consent-JWT for operation '{op_id}' embeds no "
+                    f"entitlement matching required roles {required_roles} (bank_id={bank_id}) "
+                    f"— the OBP call will likely return 403. Check the frontend consent builder."
+                )
             if consent_jwt and cache_key:
                 consent_cache[cache_key] = {
                     "jwt": consent_jwt,
@@ -765,10 +824,27 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
                 }
 
         if not consent_jwt:
-            logger.warning(f"🔐 CONSENT_FLOW: Consent denied for operation '{op_id}' — denying {len(group)} tool call(s)")
+            denial_reason = None
+            if isinstance(user_response, dict):
+                denial_reason = user_response.get("denial_reason")
+            if denial_reason:
+                # The consent could not be granted (e.g. missing entitlement) — tell the
+                # agent WHY so it can propose the fix (like granting the role first)
+                # instead of treating this as a plain refusal.
+                denial_content = (
+                    f"Consent could not be granted for this tool call. Reason: {denial_reason} "
+                    f"If the reason says the user can grant the missing entitlement to themself, "
+                    f"offer to do that (add the entitlement, then retry this call)."
+                )
+            else:
+                denial_content = "End user denied consent for this tool."
+            logger.warning(
+                f"🔐 CONSENT_FLOW: Consent denied for operation '{op_id}' — denying {len(group)} tool call(s)"
+                + (f" (reason: {denial_reason})" if denial_reason else "")
+            )
             for ce in group:
                 all_replacements.append(ToolMessage(
-                    content="End user denied consent for this tool.",
+                    content=denial_content,
                     tool_call_id=ce["error_msg"].tool_call_id,
                     id=ce["error_msg"].id,
                     status="error",
@@ -792,11 +868,14 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
                 if not ok:
                     op_retry_failed = True
 
-            # A cached JWT that no longer works (expired/revoked server-side) must be
-            # evicted so the next attempt re-prompts instead of looping on a dead JWT.
-            if used_cached_jwt and op_retry_failed and cache_key:
+            # A JWT that failed on retry (expired, revoked, or a mis-scoped consent) must
+            # not stay cached, or the next attempt loops on the same dead JWT. Fresh JWTs
+            # are cached on receipt above, so this must fire for them too — not only for
+            # cache hits.
+            if op_retry_failed and cache_key:
                 logger.warning(
-                    f"🔐 CONSENT_FLOW: Cached Consent-JWT for '{op_id}' failed on retry — evicting from cache"
+                    f"🔐 CONSENT_FLOW: {'Cached' if used_cached_jwt else 'Fresh'} Consent-JWT for "
+                    f"'{op_id}' failed on retry — evicting from cache"
                 )
                 consent_cache.pop(cache_key, None)
 

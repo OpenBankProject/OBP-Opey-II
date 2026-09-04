@@ -6,6 +6,10 @@ An agentic version of the Opey chatbot for Open Bank Project that uses the [Lang
 
 ## Architecture: How Opey reaches the OBP API
 
+![How Opey, Claude Code and OBP-MCP call OBP-API](https://github.com/user-attachments/assets/d3ff5c10-7167-4034-98f7-c53a323bf985)
+
+*(Editable master in Lucidchart: [architecture overview](https://lucid.app/lucidchart/3ee12366-1269-49a9-9f6a-b2f5eb70d59a/edit).)*
+
 There are **two distinct paths** from Opey to the Open Bank Project (OBP) API, used for different purposes:
 
 **1. The agent's banking tools → via OBP-MCP (not direct)**
@@ -21,6 +25,10 @@ User → Opey (agent) → OBP-MCP → OBP API
 ```
 
 **2. Opey's own infrastructure → calls the OBP API directly**
+
+![Opey II direct HTTP calls to OBP-API](https://github.com/user-attachments/assets/1acbe08d-9e8c-4ad1-9d35-338ce0b36ac4)
+
+*(Editable master in Lucidchart: [Opey direct-HTTP detail](https://lucid.app/lucidchart/fe000bca-db8e-4179-bf84-e80e79ba861e/edit). To update: edit in Lucid, export as PNG, upload to a GitHub issue comment, and replace the `user-attachments` URL here.)*
 
 Opey also has a direct `aiohttp`-based `OBPClient` (`src/client/obp_client.py`) used **outside the agent loop**, not for answering user questions:
 

@@ -40,9 +40,16 @@ class MCPServerConfig:
     url: Optional[str] = None
     headers: Dict[str, str] = field(default_factory=dict)
     
-    # Whether to forward the user's bearer token to this server
-    # If True, the bearer token from the session will be added as an Authorization header
+    # Whether to forward the USER'S bearer token to this server.
+    # Explicit opt-in: the user's token leaving Opey is the exception, not the rule.
     forward_bearer_token: bool = False
+
+    # Whether to authenticate to this server with OPEY'S OWN client-credentials
+    # token (see auth/service_token.py). This is the right choice for consent-mode
+    # OBP-MCP: the bearer answers "which service is calling", the per-tool-call
+    # Consent-JWT answers "on whose behalf". Ignored when forward_bearer_token
+    # is true and a user bearer is present.
+    use_service_token: bool = False
     
     # stdio transport
     command: Optional[str] = None
@@ -59,15 +66,23 @@ class MCPToolLoader:
     2. Per-request tools (with bearer token): Create client per-request with user's token
     """
     
-    def __init__(self, servers: List[MCPServerConfig], bearer_token: Optional[str] = None):
+    def __init__(
+        self,
+        servers: List[MCPServerConfig],
+        bearer_token: Optional[str] = None,
+        service_token: Optional[str] = None,
+    ):
         """
         Args:
             servers: List of server configurations
-            bearer_token: Optional bearer token for authenticated requests.
-                         If provided, adds Authorization header to servers with forward_bearer_token=True.
+            bearer_token: Optional USER bearer token — only attached to servers
+                         with forward_bearer_token=True (explicit opt-in).
+            service_token: Optional OPEY service token (client credentials) —
+                         attached to servers with use_service_token=True.
         """
         self.servers = servers
         self.bearer_token = bearer_token
+        self.service_token = service_token
         self._client: Optional[MultiServerMCPClient] = None
         self._tools: List[BaseTool] = []
     
@@ -136,9 +151,14 @@ class MCPToolLoader:
                 headers = dict(server.headers)  # Copy to avoid mutating config
                 if server.forward_bearer_token and self.bearer_token:
                     headers["Authorization"] = f"Bearer {self.bearer_token}"
-                    logger.debug(f"Injecting bearer token for MCP server '{server.name}'")
+                    logger.debug(f"Injecting USER bearer token for MCP server '{server.name}'")
+                elif server.use_service_token and self.service_token:
+                    headers["Authorization"] = f"Bearer {self.service_token}"
+                    logger.debug(f"Injecting Opey service token for MCP server '{server.name}'")
                 elif server.forward_bearer_token and not self.bearer_token:
                     logger.warning(f"MCP server '{server.name}' has forward_bearer_token=true but no bearer token provided")
+                elif server.use_service_token and not self.service_token:
+                    logger.warning(f"MCP server '{server.name}' has use_service_token=true but no service token available")
                 
                 if headers:
                     config["headers"] = headers
@@ -164,8 +184,9 @@ class MCPToolLoader:
 
 
 async def create_mcp_tools_with_auth(
-    servers: List[MCPServerConfig], 
-    bearer_token: Optional[str] = None
+    servers: List[MCPServerConfig],
+    bearer_token: Optional[str] = None,
+    service_token: Optional[str] = None,
 ) -> List[BaseTool]:
     """
     Factory function to create MCP tools with optional bearer token authentication.
@@ -179,7 +200,7 @@ async def create_mcp_tools_with_auth(
     Returns:
         List of LangChain-compatible tools
     """
-    loader = MCPToolLoader(servers=servers, bearer_token=bearer_token)
+    loader = MCPToolLoader(servers=servers, bearer_token=bearer_token, service_token=service_token)
     try:
         return await loader.load_tools()
     except MCPConnectionError as e:

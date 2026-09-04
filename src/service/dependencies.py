@@ -22,6 +22,30 @@ from .checkpointer import get_global_checkpointer
 logger = logging.getLogger(__name__)
 
 
+async def _extract_client_tools(request: Request) -> list[str]:
+    """
+    Client-tool names declared in a POST /stream body (StreamInput.client_tools).
+
+    Read here — not in the route handler — because the graph (and thus its tool
+    set) is built by this dependency before the handler runs. Starlette caches
+    the body, so the handler's own parse is unaffected. Endpoints without a
+    JSON body (GET routes, /approval with a bare ToolCallApproval) simply
+    yield no client tools.
+    """
+    if request.method != "POST":
+        return []
+    if "application/json" not in (request.headers.get("content-type") or ""):
+        return []
+    try:
+        body = await request.json()
+    except Exception:
+        return []
+    names = body.get("client_tools") if isinstance(body, dict) else None
+    if not isinstance(names, list):
+        return []
+    return [n for n in names if isinstance(n, str)]
+
+
 def _extract_bearer_token(request: Request) -> str | None:
     """Extract bearer token from Authorization header if present."""
     auth_header = request.headers.get("Authorization")
@@ -83,8 +107,10 @@ async def get_opey_session(
         session_data.bearer_token = header_token
         await backend.update(session_id, session_data)
     
+    client_tools = await _extract_client_tools(request)
+
     session = OpeySession(request, session_data, session_id, checkpointer)
-    await session.async_init(bearer_token=bearer_token)
+    await session.async_init(bearer_token=bearer_token, client_tools=client_tools)
     return session
 
 

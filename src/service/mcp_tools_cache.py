@@ -8,11 +8,13 @@ Loads MCP server configurations at startup. Tools can be loaded:
 import os
 import json
 import logging
+import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from langchain_core.tools import BaseTool
 from agent.components.tools import MCPToolLoader, MCPServerConfig, MCPConnectionError, create_mcp_tools_with_auth
+from auth.service_token import service_token_provider
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +96,7 @@ def _parse_mcp_config() -> List[MCPServerConfig]:
                 headers=raw.get("headers", {}),
                 # Support both new "forward_bearer_token" and legacy "requires_auth"
                 forward_bearer_token=raw.get("forward_bearer_token", raw.get("requires_auth", False)),
+                use_service_token=raw.get("use_service_token", False),
                 command=raw.get("command"),
                 args=raw.get("args", []),
                 env=raw.get("env"),
@@ -137,8 +140,14 @@ async def initialize_mcp_tools() -> List[BaseTool]:
         return []
     
     logger.info(f"Loading tools from {len(no_auth_servers)} no-auth MCP server(s) at startup...")
-    
-    _mcp_loader = MCPToolLoader(servers=no_auth_servers)
+
+    # Service-token servers are session-independent, so they load at startup too —
+    # with Opey's OWN client-credentials token, never a user's.
+    service_token = None
+    if any(s.use_service_token for s in no_auth_servers):
+        service_token = await service_token_provider.get_token()
+
+    _mcp_loader = MCPToolLoader(servers=no_auth_servers, service_token=service_token)
     
     try:
         _mcp_tools = await _mcp_loader.load_tools()
@@ -157,16 +166,46 @@ async def initialize_mcp_tools() -> List[BaseTool]:
 def get_mcp_tools() -> List[BaseTool]:
     """
     Get cached MCP tools (loaded at startup).
-    
+
     Must call initialize_mcp_tools() first (typically at app startup).
     Returns empty list if not initialized or initialization failed.
-    
+
     Note: For authenticated MCP servers, use get_mcp_tools_with_auth() instead.
+    Prefer ensure_mcp_tools() in async code: it recovers from a failed startup load.
     """
     if _mcp_tools is None:
         logger.warning("MCP tools not initialized - call initialize_mcp_tools() first")
         return []
     return _mcp_tools
+
+
+_last_tools_retry_monotonic: float = 0.0
+_TOOLS_RETRY_COOLDOWN_SECONDS = 30.0
+
+
+async def ensure_mcp_tools() -> List[BaseTool]:
+    """
+    Cached MCP tools, with lazy recovery from a failed startup load.
+
+    If Opey starts before its MCP server (a stack restart in the wrong order),
+    initialize_mcp_tools() caches an empty list and nothing ever retried it:
+    every session's graph was built tool-less while /status — which probes the
+    MCP server live — showed green. Here an empty cache triggers a reload, at
+    most once per cooldown window so a genuinely-down MCP server isn't hammered
+    on every request.
+    """
+    global _last_tools_retry_monotonic
+    if _mcp_tools:
+        return _mcp_tools
+    # Legitimately empty: every configured server loads per-request with auth.
+    if _server_configs is not None and not [s for s in _server_configs if not s.forward_bearer_token]:
+        return []
+    now = time.monotonic()
+    if now - _last_tools_retry_monotonic < _TOOLS_RETRY_COOLDOWN_SECONDS:
+        return _mcp_tools or []
+    _last_tools_retry_monotonic = now
+    logger.warning("MCP tools cache is empty - retrying tool load (MCP server may have started after Opey)")
+    return await initialize_mcp_tools()
 
 
 def get_server_configs() -> List[MCPServerConfig]:
@@ -198,8 +237,12 @@ async def get_mcp_tools_with_auth(bearer_token: Optional[str] = None) -> List[Ba
     configs = get_server_configs()
     if not configs:
         return []
-    
-    return await create_mcp_tools_with_auth(configs, bearer_token)
+
+    service_token = None
+    if any(s.use_service_token for s in configs):
+        service_token = await service_token_provider.get_token()
+
+    return await create_mcp_tools_with_auth(configs, bearer_token, service_token)
 
 
 async def close_mcp_tools() -> None:

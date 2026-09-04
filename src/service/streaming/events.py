@@ -162,6 +162,30 @@ class ConsentRequestEvent(BaseStreamEvent):
     required_roles: list = Field(default_factory=list, description="OBP roles required for this operation")
     tool_call_count: int = Field(default=1, description="Number of tool calls waiting on this consent (>1 means batch)")
     bank_id: Optional[str] = Field(default=None, description="OBP bank ID from the consent_required error")
+    account_id: Optional[str] = Field(default=None, description="OBP account ID for account/view-scoped calls")
+    view_id: Optional[str] = Field(default=None, description="OBP view ID for view-scoped calls")
+    requires_view_access: bool = Field(default=False, description="True when the endpoint is gated by account access to a view")
+    is_user_scoped: bool = Field(default=False, description="True when the endpoint is identity-bound (a /my endpoint)")
+    my_resources: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="The User's own resources the consent must list (OBP consent my_resources block), if any",
+    )
+
+    def to_sse_data(self) -> str:
+        return f"data: {self.model_dump_json()}\n\n"
+
+
+class ClientToolCallEvent(BaseStreamEvent):
+    """Event fired when a client-executed tool call needs the browser to act.
+
+    The frontend executes the named tool locally (it declared support via
+    StreamInput.client_tools) and resumes the graph via POST /stream with
+    tool_call_approval.client_tool_result.
+    """
+    type: Literal["client_tool_call"] = "client_tool_call"
+    tool_call_id: str = Field(description="Unique identifier for this tool call")
+    tool_name: str = Field(description="Name of the client-executed tool, e.g. set_form_fields")
+    tool_input: Dict[str, Any] = Field(description="Input arguments for the client to execute with")
 
     def to_sse_data(self) -> str:
         return f"data: {self.model_dump_json()}\n\n"
@@ -198,6 +222,7 @@ StreamEvent = Union[
     BatchApprovalRequestEvent,
     UserMessageConfirmEvent,
     ConsentRequestEvent,
+    ClientToolCallEvent,
     ThreadSyncEvent,
     StreamEndEvent
 ]
@@ -537,6 +562,11 @@ class StreamEventFactory:
         required_roles: Optional[list] = None,
         tool_call_count: int = 1,
         bank_id: Optional[str] = None,
+        account_id: Optional[str] = None,
+        view_id: Optional[str] = None,
+        requires_view_access: bool = False,
+        is_user_scoped: bool = False,
+        my_resources: Optional[Dict[str, Any]] = None,
     ) -> ConsentRequestEvent:
         """Create a consent request event for tool calls requiring OBP consent."""
         event = ConsentRequestEvent(
@@ -546,6 +576,11 @@ class StreamEventFactory:
             required_roles=required_roles or [],
             tool_call_count=tool_call_count,
             bank_id=bank_id,
+            account_id=account_id,
+            view_id=view_id,
+            requires_view_access=requires_view_access,
+            is_user_scoped=is_user_scoped,
+            my_resources=my_resources,
         )
         StreamEventFactory._log_event(
             event,
@@ -561,4 +596,24 @@ class StreamEventFactory:
         )
         return event
 
-
+    @staticmethod
+    def client_tool_call(
+        tool_call_id: str,
+        tool_name: str,
+        tool_input: Dict[str, Any],
+    ) -> ClientToolCallEvent:
+        """Create a client tool call event for a tool the browser executes."""
+        event = ClientToolCallEvent(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            tool_input=tool_input,
+        )
+        StreamEventFactory._log_event(
+            event,
+            "CLIENT_TOOL_CALL",
+            {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+            },
+        )
+        return event

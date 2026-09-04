@@ -311,6 +311,14 @@ class OpeyAgentGraphBuilder:
                     f"When a request does not name a bank, use this bank_id."
                 )))
 
+            client_context = (config.get("configurable", {}) or {}).get("client_context")
+            if client_context:
+                prepend.append(SystemMessage(content=(
+                    "Page context (what the user currently sees in their browser; use the "
+                    "exact field names given here with the set_form_fields tool, and call "
+                    "that tool on its own, never alongside other tools):\n" + client_context
+                )))
+
             messages = prepend + state["messages"]
 
             # DIAGNOSTIC (temporary): locate context bloat. Logs message count, total

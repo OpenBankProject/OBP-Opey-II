@@ -46,6 +46,11 @@ class StreamManager:
         if stream_input.current_bank_id:
             config.setdefault("configurable", {})["current_bank_id"] = stream_input.current_bank_id
 
+        # Same pattern for the page context of client-executed tools: ephemeral,
+        # re-sent by the client each turn, never persisted to message history.
+        if getattr(stream_input, "client_context", None):
+            config.setdefault("configurable", {})["client_context"] = stream_input.client_context
+
         logger.info("Starting stream response", extra={
             "event_type": "stream_start",
             "thread_id": thread_id,
@@ -72,8 +77,23 @@ class StreamManager:
                 logger.info(f"Stream input: message={msg_preview!r} stream_tokens={stream_input.stream_tokens} has_approval={stream_input.tool_call_approval is not None}")
             if stream_input.tool_call_approval:
                 approval = stream_input.tool_call_approval
-                
-                if approval.is_consent_response():
+
+                if approval.is_client_tool_result():
+                    # Client-executed tool result — resume the interrupt inside the tool.
+                    # interrupt() returns this dict; the tool JSON-encodes it as its output.
+                    result = approval.client_tool_result
+                    logger.info(
+                        f"Resuming client tool interrupt: {result.tool_call_id} status={result.status}",
+                        extra={
+                            "event_type": "client_tool_result_processing",
+                            "thread_id": thread_id,
+                            "status": result.status,
+                        },
+                    )
+                    from langgraph.types import Command
+                    graph_input = Command(resume=result.model_dump())
+
+                elif approval.is_consent_response():
                     # Consent JWT response — resume consent_check_node interrupt
                     jwt_preview = approval.consent_jwt[:50] + "..." if approval.consent_jwt and len(approval.consent_jwt) > 50 else approval.consent_jwt
                     logger.info(f"🔐 CONSENT_FLOW: Received consent JWT from frontend (preview: {jwt_preview})", extra={
@@ -85,7 +105,10 @@ class StreamManager:
                     
                     from langgraph.types import Command
                     graph_input = Command(
-                        resume={"consent_jwt": approval.consent_jwt}
+                        resume={
+                            "consent_jwt": approval.consent_jwt,
+                            "denial_reason": approval.consent_denial_reason,
+                        }
                     )
                     logger.info(f"🔐 CONSENT_FLOW: Created Command(resume={{consent_jwt: ...}}) to resume consent_check_node")
                 
@@ -314,6 +337,19 @@ class StreamManager:
                 
                 logger.info(f"Processing interrupt payload for tool: {approval_payload.get('tool_name')}")
                 
+                # Check if this is a client-executed tool interrupt (from a client tool's interrupt())
+                if approval_payload.get("client_tool"):
+                    logger.info(
+                        f"Processing client tool interrupt: {approval_payload.get('client_tool')} "
+                        f"({approval_payload.get('tool_call_id')})"
+                    )
+                    yield StreamEventFactory.client_tool_call(
+                        tool_call_id=approval_payload.get("tool_call_id", ""),
+                        tool_name=approval_payload.get("client_tool", ""),
+                        tool_input=approval_payload.get("tool_input", {}),
+                    )
+                    continue
+
                 # Check if this is a consent interrupt (from consent_check_node)
                 if approval_payload.get("consent_type") == "consent_required":
                     tool_call_count = approval_payload.get("tool_call_count", 1)
@@ -328,6 +364,11 @@ class StreamManager:
                         required_roles=approval_payload.get("required_roles", []),
                         tool_call_count=tool_call_count,
                         bank_id=approval_payload.get("bank_id"),
+                        account_id=approval_payload.get("account_id"),
+                        view_id=approval_payload.get("view_id"),
+                        requires_view_access=bool(approval_payload.get("requires_view_access", False)),
+                        is_user_scoped=bool(approval_payload.get("is_user_scoped", False)),
+                        my_resources=approval_payload.get("my_resources"),
                     )
                     continue
                 
@@ -465,6 +506,29 @@ class StreamManager:
                         f"operation={payload.get('operation_id')} "
                         f"with {len(denial_messages)} denial(s)",
                         extra={"event_type": "consent_interrupt_resolved", "thread_id": thread_id}
+                    )
+
+                elif payload.get("client_tool"):
+                    # Client-executed tool interrupt — the browser never answered
+                    # (page closed, navigation, handler error). Resolve as cancelled
+                    # so the tools node completes and the interrupt task clears.
+                    tool_call_id = payload.get("tool_call_id")
+                    cancel_messages = []
+                    if tool_call_id:
+                        cancel_messages.append(LCToolMessage(
+                            content="Client tool call cancelled — user sent a new message before the page responded.",
+                            tool_call_id=tool_call_id,
+                            status="error",
+                        ))
+                    await self.graph.aupdate_state(
+                        config,
+                        {"messages": cancel_messages},
+                        as_node="tools",
+                    )
+                    logger.info(
+                        f"Resolved pending client tool interrupt for {payload.get('client_tool')} "
+                        f"({tool_call_id})",
+                        extra={"event_type": "client_tool_interrupt_resolved", "thread_id": thread_id}
                     )
 
                 elif payload.get("tool_calls") or payload.get("tool_call_id"):

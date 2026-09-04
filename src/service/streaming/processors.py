@@ -5,6 +5,7 @@ import logging
 from typing import AsyncGenerator, Optional, Dict, Any
 from langchain_core.runnables.schema import StreamEvent as LangGraphStreamEvent
 from langchain_core.messages import AIMessage, ToolMessage, HumanMessage
+from langgraph.errors import GraphInterrupt
 
 from .events import StreamEvent, StreamEventFactory
 from schema import StreamInput, convert_message_content_to_string
@@ -489,8 +490,26 @@ class ApprovalEventProcessor(BaseEventProcessor):
 class ErrorEventProcessor(BaseEventProcessor):
     """Processes error events"""
 
+    @staticmethod
+    def _is_interrupt(error: Any) -> bool:
+        # GraphInterrupt (raised by interrupt() in client tools / approval nodes)
+        # surfaces through astream_events as on_tool_error / on_chain_error, but
+        # it is control flow, not a failure: the checkpointed interrupt is turned
+        # into its client_tool_call / approval event after the stream drains.
+        # Emitting it as an error event also crashes SSE serialization (the raw
+        # exception object is not pydantic-serializable).
+        return isinstance(error, GraphInterrupt) or (
+            isinstance(error, BaseException) and error.__class__.__name__ == "GraphInterrupt"
+        )
+
     async def process(self, event: LangGraphStreamEvent) -> AsyncGenerator[StreamEvent, None]:
         """Process error events"""
+
+        if event["event"] in ("on_chain_error", "on_tool_error") and self._is_interrupt(
+            event.get("data", {}).get("error")
+        ):
+            logger.debug(f"Suppressing {event['event']} for GraphInterrupt (handled as interrupt after stream)")
+            return
 
         # Handle various error conditions from LangGraph
         if event["event"] == "on_chain_error":
@@ -510,7 +529,8 @@ class ErrorEventProcessor(BaseEventProcessor):
                 error_message=error_message,
                 error_code="chain_error",
                 for_message_id=message_id,
-                details={"event_metadata": event.get("metadata", {}), "error_data": error_data}
+                # str(): error_data holds the raw exception, which pydantic cannot serialize to SSE
+                details={"event_metadata": event.get("metadata", {}), "error_data": str(error_data)}
             )
 
         elif event["event"] == "on_tool_error":
@@ -529,7 +549,8 @@ class ErrorEventProcessor(BaseEventProcessor):
             yield StreamEventFactory.error(
                 error_message=error_message,
                 error_code="tool_error",
-                details={"tool_name": tool_name, "event_metadata": event.get("metadata", {}), "error_data": error_data}
+                # str(): error_data holds the raw exception, which pydantic cannot serialize to SSE
+                details={"tool_name": tool_name, "event_metadata": event.get("metadata", {}), "error_data": str(error_data)}
             )
 
 

@@ -185,6 +185,24 @@ class SingleApprovalDecision(BaseModel):
     )
 
 
+class ClientToolResult(BaseModel):
+    """
+    Result of a client-executed tool call (e.g. set_form_fields).
+
+    The browser executed the tool (it is the only party that can — the tool
+    acts on page state) and reports the outcome so the graph's interrupt()
+    can return it as the ToolMessage content.
+    """
+    tool_call_id: str = Field(description="The tool call this result answers")
+    status: Literal["applied", "rejected", "error"] = Field(
+        description="applied: the client executed the tool; rejected: the user or page refused; error: execution failed"
+    )
+    result: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Tool-specific result payload, e.g. {applied: [...], ignored: [...]} for set_form_fields",
+    )
+
+
 class ToolCallApproval(BaseModel):
     """
     Tool call approval - supports both single and batch approvals.
@@ -231,6 +249,17 @@ class ToolCallApproval(BaseModel):
         default=False,
         description="Set to true to explicitly deny consent without providing a JWT"
     )
+    consent_denial_reason: Optional[str] = Field(
+        default=None,
+        description="Why the consent was denied / could not be granted (e.g. the "
+                    "consent-creation error) — surfaced to the agent so it can propose a fix"
+    )
+
+    # Result of a client-executed tool (resumes a client_tool_call interrupt)
+    client_tool_result: Optional[ClientToolResult] = Field(
+        default=None,
+        description="Result of a client-executed tool call, resuming a client_tool_call interrupt"
+    )
 
     def is_batch(self) -> bool:
         """Check if this is a batch approval"""
@@ -239,6 +268,10 @@ class ToolCallApproval(BaseModel):
     def is_single(self) -> bool:
         """Check if this is a single approval"""
         return self.tool_call_id is not None
+
+    def is_client_tool_result(self) -> bool:
+        """Check if this resumes a client-executed tool interrupt"""
+        return self.client_tool_result is not None
 
     def is_consent_response(self) -> bool:
         """Check if this is a consent response (approval with JWT, or explicit denial)"""
@@ -279,6 +312,21 @@ class StreamInput(UserInput):
     stream_tokens: bool = Field(
         description="Whether to stream LLM tokens to the client.",
         default=True,
+    )
+    client_tools: list[str] = Field(
+        description="Names of client-executed tools this client can handle (e.g. set_form_fields). "
+                    "Only declared tools are registered into the graph, so a client that "
+                    "cannot execute them never receives a client_tool_call event. "
+                    "Send on EVERY /stream request of the conversation, including approval "
+                    "and client-tool-result resumes: the graph is rebuilt per request and "
+                    "the resumed tool batch re-executes inside it.",
+        default_factory=list,
+    )
+    client_context: str | None = Field(
+        description="Free-text description of the page the client is on (e.g. a form's "
+                    "fields, their types and current values). Injected as ephemeral "
+                    "system context each turn, like current_bank_id — never persisted.",
+        default=None,
     )
 
 class ConsentAuthBody(BaseModel):

@@ -8,7 +8,7 @@ from uuid import UUID
 
 from agent.graph_builder import OpeyAgentGraphBuilder, create_basic_opey_graph
 from agent.components.tools import create_approval_store
-from service.mcp_tools_cache import get_mcp_tools, get_mcp_tools_with_auth, get_auth_required_servers
+from service.mcp_tools_cache import ensure_mcp_tools, get_mcp_tools_with_auth, get_auth_required_servers
 
 from service.checkpointer import get_global_checkpointer
 from service.redis_client import get_redis_client
@@ -57,12 +57,17 @@ class OpeySession:
             redis_client=redis_client,
         )
         
-        # Initialize auth object only if not anonymous
+        # Initialize auth object only if not anonymous.
+        # CONSENT FIRST: the consent carries both the user identity and the consumer
+        # (its aud), and its roles/views/TTL are what the user actually granted. A
+        # bearer in the same session must never outrank it — that silently bypasses
+        # the whole consent ceremony (this was a live bug: Portal sessions sent both,
+        # and Opey called OBP with the user's full-power token).
         if not self.is_anonymous:
-            if session_data.bearer_token:
-                self.auth = OBPBearerAuth(bearer_token=session_data.bearer_token)
-            elif self.consent_id:
+            if self.consent_id:
                 self.auth = OBPConsentAuth(consent_id=self.consent_id)
+            elif session_data.bearer_token:
+                self.auth = OBPBearerAuth(bearer_token=session_data.bearer_token)
 
         # Store bearer token for MCP authentication
         self._bearer_token = session_data.bearer_token
@@ -81,7 +86,11 @@ class OpeySession:
         self.graph = None  # Will be initialized in async_init()
         self._tools = []  # Will be populated in async_init()
 
-    async def async_init(self, bearer_token: str | None = None) -> "OpeySession":
+    async def async_init(
+        self,
+        bearer_token: str | None = None,
+        client_tools: list[str] | None = None,
+    ) -> "OpeySession":
         """
         Async initialization for components that require async setup.
         
@@ -91,6 +100,10 @@ class OpeySession:
         Args:
             bearer_token: OAuth bearer token for MCP server authentication.
                          If provided, overrides the token stored in session_data.
+            client_tools: Names of client-executed tools the requesting client
+                         declared support for (StreamInput.client_tools). Only
+                         declared tools are registered, so clients that cannot
+                         execute them never receive a client_tool_call event.
         
         Returns:
             self for chaining
@@ -98,7 +111,7 @@ class OpeySession:
         # Use provided token, fall back to stored session token
         token = bearer_token if bearer_token is not None else self._bearer_token
         
-        logger.info(f"DEBUG: token value = {token[:20] if token else 'None'}... (type: {type(token)})")
+        logger.info(f"async_init: user bearer present for MCP forwarding: {bool(token)}")
         
         # Get tools - use authenticated if bearer token present and servers require it
         auth_servers = get_auth_required_servers()
@@ -106,11 +119,21 @@ class OpeySession:
             logger.info(f"Loading MCP tools with bearer token for servers: {auth_servers}")
             tools = await get_mcp_tools_with_auth(token)
         else:
-            # Use cached tools from startup
-            tools = get_mcp_tools()
+            # Cached startup tools, self-healing if the MCP server came up after Opey.
+            tools = await ensure_mcp_tools()
         
         if not tools:
             logger.warning("No MCP tools available - agent will have limited capabilities")
+
+        # Client-executed tools (run in the browser via interrupt round trip).
+        # Purely additive and safe in every OBP_API_MODE: they act on page
+        # state in the user's own browser, never on OBP.
+        if client_tools:
+            from agent.components.tools.client_tools import make_client_tools
+            registered = make_client_tools(client_tools)
+            if registered:
+                logger.info(f"Registering client-executed tools: {[t.name for t in registered]}")
+                tools = tools + registered
 
         # Store tools for consent retry (tools_by_name in config)
         self._tools = tools

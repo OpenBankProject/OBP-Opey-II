@@ -45,42 +45,11 @@ async def create_session(
     logger.info(f"CREATE SESSION REQUEST - Bearer present: {bool(bearer_token)}, Consent-Id present: {bool(consent_id)}, Anonymous allowed: {allow_anonymous}")
     logger.debug(f"create_session - Request headers: {dict(request.headers)}")
 
-    if bearer_token:
-        # PRIMARY: Validate bearer token against OBP
-        logger.info("create_session: Authenticating via Bearer token")
-        bearer_auth = auth_config.auth_strategies["obp_bearer"]
-
-        if not await bearer_auth.acheck_auth(bearer_token):
-            raise HTTPException(status_code=401, detail="Invalid Bearer token")
-
-        user_data = await bearer_auth.get_current_user(bearer_token)
-        user_id = user_data.get("user_id") if user_data else None
-
-        if not user_id:
-            raise HTTPException(status_code=403, detail="Could not retrieve user information from Bearer token")
-
-        session_id = uuid.uuid4()
-        session_data = SessionData(
-            consent_id=consent_id,  # Store consent_id too if provided
-            is_anonymous=False,
-            token_usage=0,
-            request_count=0,
-            user_id=user_id,
-            bearer_token=bearer_token,
-        )
-
-        await backend.create(session_id, session_data)
-        session_cookie.attach_to_response(response, session_id)
-
-        logger.info("Creating authenticated session via Bearer token")
-        return SessionCreateResponse(
-            message="Authenticated session created",
-            session_type="authenticated"
-        )
-
-    elif consent_id:
-        # BACKWARD COMPAT: Consent-Id flow
-        logger.info("create_session: Authenticating via Consent-Id")
+    if consent_id:
+        # PRIMARY: the consent is the user's identity AND scope (roles/views/TTL,
+        # consumer via its aud). When both headers arrive, the consent wins — a
+        # user bearer must never be persisted alongside an available consent.
+        logger.info("create_session: Authenticating via Consent-Id (consent-first)")
 
         if not await auth_config.auth_strategies["obp_consent_id"].acheck_auth(consent_id):
             raise HTTPException(status_code=401, detail="Invalid Consent-Id")
@@ -106,6 +75,40 @@ async def create_session(
         session_cookie.attach_to_response(response, session_id)
 
         logger.info("Creating authenticated session via Consent-Id")
+        return SessionCreateResponse(
+            message="Authenticated session created",
+            session_type="authenticated"
+        )
+
+    elif bearer_token:
+        # SERVICE / MCP-standard clients: a bearer-only caller (no consent) gets a
+        # bearer session. Validated against OBP /users/current.
+        logger.info("create_session: Authenticating via Bearer token (no consent presented)")
+        bearer_auth = auth_config.auth_strategies["obp_bearer"]
+
+        if not await bearer_auth.acheck_auth(bearer_token):
+            raise HTTPException(status_code=401, detail="Invalid Bearer token")
+
+        user_data = await bearer_auth.get_current_user(bearer_token)
+        user_id = user_data.get("user_id") if user_data else None
+
+        if not user_id:
+            raise HTTPException(status_code=403, detail="Could not retrieve user information from Bearer token")
+
+        session_id = uuid.uuid4()
+        session_data = SessionData(
+            consent_id=None,  # unreachable with a consent header — consent branch wins
+            is_anonymous=False,
+            token_usage=0,
+            request_count=0,
+            user_id=user_id,
+            bearer_token=bearer_token,
+        )
+
+        await backend.create(session_id, session_data)
+        session_cookie.attach_to_response(response, session_id)
+
+        logger.info("Creating authenticated session via Bearer token")
         return SessionCreateResponse(
             message="Authenticated session created",
             session_type="authenticated"
