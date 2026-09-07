@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 @tool
 async def set_form_fields(
-    fields: dict[str, Any],
+    fields: dict[str, Any] | None = None,
     note: str = "",
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> str:
@@ -54,6 +54,21 @@ async def set_form_fields(
         fields: Mapping of form field name to new value.
         note: Optional one-line summary of what you filled and why.
     """
+    if not fields:
+        # The arguments arrived empty. The usual cause is the reply being cut off by the output
+        # token limit while a long value was being written, which leaves the call with no
+        # arguments at all. Tell the model instead of raising, so it can recover in the next turn
+        # rather than the user seeing a validation trace.
+        logger.warning("set_form_fields called with no fields (tool_call_id=%s)", tool_call_id)
+        return json.dumps({
+            "tool_call_id": tool_call_id,
+            "status": "error",
+            "error": (
+                "No `fields` were received: the tool call arguments were empty. This happens when the "
+                "reply was cut off before the arguments were complete. Call set_form_fields again with "
+                "the complete `fields` object. If a value is very long, send it on its own in one call."
+            ),
+        })
     result = interrupt({
         "client_tool": "set_form_fields",
         "tool_call_id": tool_call_id,

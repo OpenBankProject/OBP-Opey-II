@@ -80,14 +80,14 @@ MODEL_CONFIGS = {
         LLMProviders.ANTHROPIC,
         "ANTHROPIC_API_KEY",
         context_window=200000,
-        default_max_tokens=8192
+        default_max_tokens=16384
     ),
     "claude-sonnet-4.5-1m": ModelConfig(
         "claude-sonnet-4-5-20250929",
         LLMProviders.ANTHROPIC,
         "ANTHROPIC_API_KEY",
         context_window=1000000,
-        default_max_tokens=8192,
+        default_max_tokens=16384,
         betas=["context-1m-2025-08-07"],
     ),
     "claude-haiku-4.5": ModelConfig(
@@ -95,7 +95,7 @@ MODEL_CONFIGS = {
         LLMProviders.ANTHROPIC,
         "ANTHROPIC_API_KEY",
         context_window=200000,
-        default_max_tokens=8192
+        default_max_tokens=16384
     ),
     
     # Ollama models (no API key required)
@@ -267,6 +267,10 @@ class ModelFactory:
             logger.info(
                 f"Creating ChatAnthropic for {config.model_id} with betas={anthropic_kwargs.get('betas')} default_headers={anthropic_kwargs.get('default_headers')}"
             )
+            # langchain-anthropic defaults max_tokens to 1024 when it is not given, which cuts off
+            # any long tool call (a set_form_fields with a full report definition, for example)
+            # and delivers it with empty arguments. Always pass the configured cap.
+            anthropic_kwargs.setdefault("max_tokens", kwargs.get("max_tokens", config.default_max_tokens))
             return ChatAnthropic(
                 model_name=config.model_id,
                 api_key=os.getenv(config.api_key_env),
