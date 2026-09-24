@@ -1,3 +1,28 @@
+> ### ⚠️ OUT OF DATE — describes a system that does not run
+>
+> *Annotated 2026-09-22. This note was added to an existing document; no code and no other
+> part of this document was changed.*
+>
+> The human-in-the-loop tool-approval system described below **is not active**. All five
+> `OBP_API_MODE` branches in `src/service/opey_session.py` (lines 163, 177, 187, 198, 211)
+> build the graph with `.enable_human_review(False)`, so `human_review_node` is never added
+> to it and `ApprovalStore` is never consulted. `create_supervised_opey_graph`
+> (`src/agent/graph_builder.py:460`) is the only caller that passes `True`, and nothing calls it.
+>
+> **Authorization is handled by the OBP consent flow instead** — `consent_check_node`
+> (`src/agent/components/nodes.py:642`) plus the roles carried by the consent JWT, enforced
+> server-side by OBP. See `../../CONSENT_FLOW.md`. This is deliberate: the `DANGEROUS` branch
+> carries the comment `# Consent flow handles authorization`.
+>
+> **This one is actively misleading.** The prerequisites below tell you to set
+> `OBP_API_MODE=DANGEROUS  # For approval testing`. That mode explicitly *disables* human
+> review (`opey_session.py:198`), so the approval interrupts these tests wait for will never
+> fire. The procedures below cannot pass as written.
+>
+> Kept for historical reference. Do not follow it as a guide to current behaviour.
+
+---
+
 # Approval System - Testing Guide
 
 ## Overview
