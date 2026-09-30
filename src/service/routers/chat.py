@@ -7,6 +7,8 @@ from ..opey_session import OpeySession
 from langgraph.graph.state import CompiledStateGraph
 from ..dependencies import get_stream_manager, get_opey_session
 from ..streaming import StreamManager
+from ..streaming_legacy import _parse_input
+from utils.forwarded_for import forwarded_for_config
 
 import logging
 import uuid
@@ -50,7 +52,9 @@ async def invoke(user_input: UserInput, request: Request, opey_session: Annotate
     opey_session.update_request_count()
 
     agent: CompiledStateGraph = opey_session.graph
-    kwargs, run_id = _parse_input(user_input, str(opey_session.session_id))
+    kwargs, run_id = _parse_input(
+        user_input, str(opey_session.session_id), forwarded_for=forwarded_for_config(request)
+    )
     try:
         response = await agent.ainvoke(**kwargs)
         output = ChatMessage.from_langchain(response["messages"][-1])
@@ -88,6 +92,7 @@ async def stream_agent(
     config = stream_manager.opey_session.build_config({
         'configurable': {
             'thread_id': thread_id,
+            'forwarded_for': forwarded_for_config(request),
         }
     })
 
@@ -188,6 +193,7 @@ async def regenerate_from_message(
     config = stream_manager.opey_session.build_config({
         'configurable': {
             'thread_id': thread_id,
+            'forwarded_for': forwarded_for_config(request),
         }
     })
     
@@ -310,6 +316,7 @@ async def regenerate_from_message(
 async def user_approval(
     user_approval_response: ToolCallApproval,
     thread_id: str,
+    request: Request,
     stream_manager: StreamManager = Depends(get_stream_manager)
 ) -> StreamingResponse:
     logger.info(f"[DEBUG] Approval endpoint user_response: {user_approval_response}\n")
@@ -325,6 +332,7 @@ async def user_approval(
     config = stream_manager.opey_session.build_config({
         'configurable': {
             'thread_id': thread_id,
+            'forwarded_for': forwarded_for_config(request),
         }
     })
 

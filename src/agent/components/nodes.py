@@ -15,6 +15,7 @@ from agent.components.states import OpeyGraphState
 from agent.components.chains import conversation_summarizer_chain
 from agent.components.tools import ApprovalStore, ApprovalScope, ApprovalRequest
 from agent.utils.model_factory import get_llm
+from utils.forwarded_for import forwarded_for_from_config, tool_accepts_headers, with_forwarded_for
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -599,11 +600,15 @@ async def _retry_tool_with_consent(
     original_tc: Dict,
     consent_jwt: str,
     tools_by_name: Dict,
+    forwarded_for: Optional[str] = None,
 ) -> tuple[ToolMessage, bool]:
     """Retry a single tool call with an injected Consent-JWT.
 
     Returns (replacement ToolMessage, ok) — ok is False if the retry still looks like
     an auth/consent failure, so the caller can evict a stale cached JWT.
+
+    The retry calls the tool directly rather than through the ToolNode, so it adds the
+    end user's X-Forwarded-For list itself (see utils/forwarded_for.py).
     """
     tool_name = original_tc["name"]
     tool_fn = tools_by_name.get(tool_name)
@@ -619,6 +624,8 @@ async def _retry_tool_with_consent(
     original_args = dict(original_tc.get("args", {}))
     existing_headers = original_args.get("headers", {}) or {}
     original_args["headers"] = {**existing_headers, "Consent-JWT": consent_jwt}
+    if tool_accepts_headers(tool_fn):
+        original_args = with_forwarded_for(original_args, forwarded_for)
 
     try:
         logger.info(f"🔐 CONSENT_FLOW: Retrying '{tool_name}' (tool_call_id={tool_call_id}) with Consent-JWT")
@@ -863,6 +870,7 @@ async def consent_check_node(state: OpeyGraphState, config: RunnableConfig):
                     original_tc=ce["original_tc"],
                     consent_jwt=consent_jwt,
                     tools_by_name=tools_by_name,
+                    forwarded_for=forwarded_for_from_config(config),
                 )
                 all_replacements.append(replacement)
                 if not ok:

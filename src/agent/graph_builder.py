@@ -24,6 +24,7 @@ from agent.components.edges import should_summarize, needs_human_review
 from agent.utils.model_factory import get_model
 from agent.utils.decorators import cancellable
 from agent.utils.token_counter import count_tokens_from_messages
+from utils.forwarded_for import forwarded_for_from_config, tool_accepts_headers, with_forwarded_for
 
 from typing import List, Optional, Dict, Any, Literal, Tuple
 from pathlib import Path
@@ -33,6 +34,22 @@ import os
 from langchain_core.messages import AIMessage, BaseMessage
 
 logger = logging.getLogger("uvicorn.error")
+
+
+async def add_forwarded_for_to_tool_call(request, execute):
+    """
+    Give each tool call that forwards HTTP headers the end user's X-Forwarded-For list.
+
+    The chat route stores the list in the run's configuration. The rewritten arguments are
+    used only for this execution; the tool call saved in the conversation is left as the
+    model wrote it, so the user's address never reaches the model or the saved state.
+    See utils/forwarded_for.py.
+    """
+    if not tool_accepts_headers(request.tool):
+        return await execute(request)
+    chain = forwarded_for_from_config(getattr(request.runtime, "config", None))
+    rewritten_call = {**request.tool_call, "args": with_forwarded_for(request.tool_call.get("args") or {}, chain)}
+    return await execute(request.override(tool_call=rewritten_call))
 
 
 async def _invoke_with_recovery(
@@ -375,7 +392,7 @@ class OpeyAgentGraphBuilder:
         opey_workflow.add_node("preflight_safety_check", preflight_safety_check)
 
         if self._tools:
-            all_tools = ToolNode(self._tools)
+            all_tools = ToolNode(self._tools, awrap_tool_call=add_forwarded_for_to_tool_call)
             opey_workflow.add_node("tools", all_tools)
             opey_workflow.add_node("sanitize_tool_responses", sanitize_tool_responses)
             opey_workflow.add_node("consent_check", consent_check_node)

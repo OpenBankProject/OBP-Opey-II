@@ -49,6 +49,20 @@ Opey (auth / admin / checkpointer / health) → OBP API
 
 > **Note:** an `obp_requests` tool is defined inside `src/client/obp_client.py` for direct agent-driven OBP calls, but it is **not currently wired into the agent** — the agent's banking tools come entirely from OBP-MCP. It is a legacy/alternative path superseded by MCP.
 
+### The end user's address (X-Forwarded-For)
+
+So that OBP-API's per-address rate limits, address penalties and busiest-callers view see the end user rather than OBP-MCP, the user's address travels along the chain in `X-Forwarded-For`. Every hop appends the address of the peer it received the request from:
+
+```
+browser → NGINX → API Explorer II → Opey → OBP-MCP → OBP-API
+```
+
+- Opey takes the `X-Forwarded-For` list from each chat request (`/stream`, `/stream/{thread_id}/regenerate`, `/approval/{thread_id}`, `/invoke`), appends the address of the peer that sent it (API Explorer II), and sets the result as `X-Forwarded-For` in the `headers` argument of every tool call that takes one (OBP-MCP's `call_obp_api`), including the retry after a consent is granted. See `src/utils/forwarded_for.py`.
+- Any `X-Forwarded-For`, `X-Real-IP` or `Forwarded` header the model put in a tool call is removed first, so the model cannot name an address.
+- The address is kept in the run's configuration only. It is never added to the conversation, so it does not reach the model, the saved conversation or checkpoint metadata.
+- Opey needs no configuration for this and keeps no list of trusted addresses. OBP-API alone decides whom to believe: it reads the list from the right and skips the addresses in its `trust.proxy.peers` Prop, which must therefore list the NGINX, API Explorer II, Opey and OBP-MCP addresses (with `trust.proxy.enabled=true` and `trust.proxy.header=X-Forwarded-For`).
+- Opey's own direct calls (`OBPClient`: validation, admin, checkpointer, health probes) are made for Opey itself and carry no end user address.
+
 ### Installing Locally
 ### 1. Installing the dependencies
 The easiest way to do this is using _poetry_. Install using the [reccomended method](https://python-poetry.org/docs/) rather than trying to manually install.

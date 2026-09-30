@@ -47,8 +47,16 @@ if __name__ == "__main__":
             f"Tip: view OpenAPI docs at http://127.0.0.1:{port}/docs "
             "(establish a session or include auth headers if you see 403)."
         )
-        uvicorn.run("service:app", reload=True, reload_excludes=["checkpoints.db*"], log_level="info", port=port)
+        # proxy_headers=False keeps request.client as the real socket peer. With it on, Uvicorn
+        # replaces that address with one taken from X-Forwarded-For whenever the peer is
+        # 127.0.0.1, and Opey appends request.client to the chain it passes on to OBP-API
+        # (see utils/forwarded_for.py).
+        uvicorn.run("service:app", reload=True, reload_excludes=["checkpoints.db*"], log_level="info", port=port, proxy_headers=False)
     else:
         logging.info("🏭 Running in production mode")
         from service import app
-        uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+        # proxy_headers=False keeps request.client as the real socket peer. With it on, Uvicorn
+        # replaces that address with one taken from X-Forwarded-For whenever the peer is
+        # 127.0.0.1, and Opey appends request.client to the chain it passes on to OBP-API
+        # (see utils/forwarded_for.py).
+        uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), proxy_headers=False)
