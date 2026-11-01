@@ -8,13 +8,13 @@ import logging
 from typing import List, Dict, Optional
 
 from langchain_core.messages import ToolMessage, SystemMessage, RemoveMessage, AIMessage, trim_messages
+from langchain_core.messages.utils import count_tokens_approximately
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
 
 from agent.components.states import OpeyGraphState
 from agent.components.chains import conversation_summarizer_chain
 from agent.components.tools import ApprovalStore, ApprovalScope, ApprovalRequest
-from agent.utils.model_factory import get_llm
 from utils.forwarded_for import forwarded_for_from_config, tool_accepts_headers, with_forwarded_for
 
 logger = logging.getLogger("uvicorn.error")
@@ -114,9 +114,11 @@ async def run_summary_chain(state: OpeyGraphState):
     logger.debug(f"\nSummary: {summary}\n")
 
     # Right now we delete all but the last two messages
+    # A local estimate: counting with a model would call its provider for every candidate cut, and Anthropic
+    # refuses to count a cut that starts with a tool_result whose tool_use was cut off (a 400 that ends the turn).
     trimmed_messages = trim_messages(
         messages=messages,
-        token_counter=get_llm("medium"),
+        token_counter=count_tokens_approximately,
         max_tokens=4000,
         strategy="last",
         include_system=True

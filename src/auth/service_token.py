@@ -42,7 +42,10 @@ class ClientCredentialsTokenProvider:
         client_secret = os.getenv("OPEY_OIDC_CLIENT_SECRET")
         if not (token_url and client_id and client_secret):
             return None
-        return {"token_url": token_url, "client_id": client_id, "client_secret": client_secret}
+        # OBP-MCP (bearer-only) requires these scopes on every token by default; without them a valid
+        # client-credentials token is still refused as invalid_token.
+        scope = os.getenv("OPEY_OIDC_SCOPE", "openid profile email").strip()
+        return {"token_url": token_url, "client_id": client_id, "client_secret": client_secret, "scope": scope}
 
     def is_configured(self) -> bool:
         return self._config() is not None
@@ -73,6 +76,7 @@ class ClientCredentialsTokenProvider:
                         "grant_type": "client_credentials",
                         "client_id": config["client_id"],
                         "client_secret": config["client_secret"],
+                        **({"scope": config["scope"]} if config["scope"] else {}),
                     },
                 ) as response:
                     if response.status != 200:

@@ -15,6 +15,7 @@ from agent.components.tools import MCPToolLoader
 
 from .checkpointer import checkpointers
 from .llm_credentials import llm_status
+from auth.service_token import service_token_provider
 from .mcp_tools_cache import get_mcp_tools, get_server_configs
 from .redis_client import get_redis_client
 
@@ -45,7 +46,11 @@ async def _probe_obp() -> dict[str, Any]:
                 up = resp.status < 500
     except Exception:
         up = False
-    return {"up": up, "latency_ms": int((time.monotonic() - start) * 1000)}
+    # Which OBP-API Opey uses (scheme, host and port only), so an app can check it is the same as its own: the
+    # consents an app gives Opey are known only to the OBP-API that issued them.
+    parts = urlsplit(base)
+    base_url = urlunsplit((parts.scheme, parts.hostname + (f":{parts.port}" if parts.port else ""), "", "", "")) if parts.hostname else None
+    return {"up": up, "latency_ms": int((time.monotonic() - start) * 1000), "base_url": base_url}
 
 
 async def _probe_redis() -> dict[str, Any]:
@@ -134,7 +139,11 @@ async def _probe_mcp() -> dict[str, Any]:
         result["test_call"] = "skipped: needs a user's token"
     elif testable:
         try:
-            loader = MCPToolLoader(servers=testable)
+            # Servers that take Opey's own client-credentials token get it here too, as in a real session.
+            service_token = None
+            if any(getattr(c, "use_service_token", False) for c in testable):
+                service_token = await service_token_provider.get_token()
+            loader = MCPToolLoader(servers=testable, service_token=service_token)
             tools = await asyncio.wait_for(
                 loader.load_tools(), timeout=_MCP_TEST_CALL_TIMEOUT_SEC
             )

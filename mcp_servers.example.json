@@ -4,8 +4,8 @@
       "name": "obp-mcp",
       "url": "http://localhost:9100/mcp",
       "transport": "streamable_http",
-      "forward_bearer_token": true,
-      "_comment": "OBP-MCP server - forwards the user's OAuth bearer token via Authorization header"
+      "use_service_token": true,
+      "_comment": "OBP-MCP in consent mode (:9100): Opey authenticates with its own client-credentials token (OPEY_OIDC_TOKEN_URL, OPEY_OIDC_CLIENT_ID, OPEY_OIDC_CLIENT_SECRET); the user's consent travels with each tool call. Use forward_bearer_token only for an OBP-MCP in oauth mode that should see the user's own token"
     },
     {
       "name": "local-tools",
