@@ -34,6 +34,15 @@ class ModelConfig:
     supports_tools: bool = True
     extra_headers: Optional[Dict[str, str]] = None  # Passed as default_headers to the client
     betas: Optional[List[str]] = None  # Anthropic beta flags (e.g. ["context-1m-2025-08-07"])
+    thinking: Optional[Dict[str, Any]] = None  # Anthropic `thinking` request field, when the model needs one set
+
+
+# Current Anthropic models (5.5) bind each thinking block to the conversation before it. Opey edits its history:
+# summarization removes earlier turns, and oversized tool results are truncated. For accounts created on or after
+# 2026-08-31 that is a 400 on the next request unless the API is told to drop the invalidated blocks instead; the
+# model then answers that turn without the earlier reasoning. Requires the thinking-binding-controls beta.
+_PRESERVED_THINKING_BETAS = ["thinking-binding-controls-2026-08-01"]
+_DROP_INVALIDATED_THINKING = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
 
 # Define available models with their configurations
 MODEL_CONFIGS = {
@@ -67,13 +76,35 @@ MODEL_CONFIGS = {
         default_max_tokens=4096
     ),
     
-    # Anthropic models
-    "claude-sonnet-4": ModelConfig(
-        "claude-sonnet-4-20250514", 
-        LLMProviders.ANTHROPIC, 
+    # Anthropic models. Current: Sonnet 5.5, Opus 5.5, Haiku 5.5. These reject temperature/top_p/top_k and forced
+    # tool_choice ("any"/"tool"), so no temperature is sent to Anthropic (see _create_model) and tools are bound
+    # with tool_choice "auto". Sonnet 4 is retired; Sonnet 4.5 is deprecated and retires on 2026-11-30.
+    "claude-sonnet-5.5": ModelConfig(
+        "claude-sonnet-5-5",
+        LLMProviders.ANTHROPIC,
         "ANTHROPIC_API_KEY",
-        context_window=200000,
-        default_max_tokens=8192
+        context_window=1000000,
+        default_max_tokens=16384,
+        betas=_PRESERVED_THINKING_BETAS,
+        thinking=_DROP_INVALIDATED_THINKING,
+    ),
+    "claude-opus-5.5": ModelConfig(
+        "claude-opus-5-5",
+        LLMProviders.ANTHROPIC,
+        "ANTHROPIC_API_KEY",
+        context_window=1000000,
+        default_max_tokens=16384,
+        betas=_PRESERVED_THINKING_BETAS,
+        thinking=_DROP_INVALIDATED_THINKING,
+    ),
+    "claude-haiku-5.5": ModelConfig(
+        "claude-haiku-5-5",
+        LLMProviders.ANTHROPIC,
+        "ANTHROPIC_API_KEY",
+        context_window=1000000,
+        default_max_tokens=16384,
+        betas=_PRESERVED_THINKING_BETAS,
+        thinking=_DROP_INVALIDATED_THINKING,
     ),
     "claude-sonnet-4.5": ModelConfig(
         "claude-sonnet-4-5-20250929",
@@ -123,6 +154,7 @@ EMBEDDING_MODELS = {
 # Define size categories with fallback chains
 MODEL_SIZE_FALLBACKS = {
     "small": [
+        "claude-haiku-5.5",
         "claude-haiku-4.5",
         "gpt-4o-mini", 
         "gpt-3.5-turbo",
@@ -130,16 +162,16 @@ MODEL_SIZE_FALLBACKS = {
         "qwen2.5"
     ],
     "medium": [
+        "claude-sonnet-5.5",
         "gpt-4o",
-        "claude-3-5-sonnet-20241022",
         "gpt-4-turbo", 
         "llama3.1:70b",
         "llama3.1"
     ],
     "large": [
-        "claude-3-opus-20240229",
+        "claude-opus-5.5",
         "gpt-4o",
-        "claude-3-5-sonnet-20241022",
+        "claude-sonnet-5.5",
         "llama3.1:70b"
     ]
 }
@@ -255,7 +287,9 @@ class ModelFactory:
                 **model_kwargs
             )
         elif config.provider == LLMProviders.ANTHROPIC:
-            anthropic_kwargs = dict(model_kwargs)
+            # Current Anthropic models answer 400 to any temperature (and the API's 2026-10-21 version does so for
+            # every model), so it is never sent; the model's own default applies.
+            anthropic_kwargs = {k: v for k, v in model_kwargs.items() if k != "temperature"}
             if config.extra_headers:
                 merged_headers = {**config.extra_headers, **anthropic_kwargs.get("default_headers", {})}
                 anthropic_kwargs["default_headers"] = merged_headers
@@ -271,6 +305,8 @@ class ModelFactory:
             # any long tool call (a set_form_fields with a full report definition, for example)
             # and delivers it with empty arguments. Always pass the configured cap.
             anthropic_kwargs.setdefault("max_tokens", kwargs.get("max_tokens", config.default_max_tokens))
+            if config.thinking is not None:
+                anthropic_kwargs.setdefault("thinking", config.thinking)
             return ChatAnthropic(
                 model_name=config.model_id,
                 api_key=os.getenv(config.api_key_env),
@@ -359,7 +395,7 @@ def get_model(model_name: str, **kwargs) -> BaseChatModel:
     Get a model instance with automatic fallbacks
     
     Args:
-        model_name: Model name (e.g., "gpt-4o", "claude-3-5-sonnet-20241022") 
+        model_name: Model name (e.g., "gpt-4o", "claude-sonnet-5.5") 
                    or size category ("small", "medium", "large")
         **kwargs: Additional model parameters (temperature, max_tokens, etc.)
     
@@ -369,7 +405,7 @@ def get_model(model_name: str, **kwargs) -> BaseChatModel:
     Examples:
         >>> model = get_model("gpt-4o", temperature=0.7)
         >>> model = get_model("medium", temperature=0.5, max_tokens=2048)
-        >>> model = get_model("claude-3-5-sonnet-20241022")
+        >>> model = get_model("claude-sonnet-5.5")
     """
     return model_factory.get_model(model_name, **kwargs)
 
@@ -403,7 +439,7 @@ def get_context_window(model_name: str) -> int:
     Examples:
         >>> get_context_window("gpt-4o")
         128000
-        >>> get_context_window("claude-sonnet-4")
+        >>> get_context_window("claude-sonnet-5.5")
         200000
     """
     # If it's a size category, get the first available model

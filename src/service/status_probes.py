@@ -14,6 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 from agent.components.tools import MCPToolLoader
 
 from .checkpointer import checkpointers
+from .llm_credentials import llm_status
 from .mcp_tools_cache import get_mcp_tools, get_server_configs
 from .redis_client import get_redis_client
 
@@ -125,12 +126,15 @@ async def _probe_mcp() -> dict[str, Any]:
     # Protocol-level test call: perform a real MCP handshake + tools/list over the
     # same loader the agent uses. MCPToolLoader is used directly (not the
     # create_mcp_tools_with_auth wrapper, which swallows connection errors into an
-    # empty list). Unauthenticated — succeeds when the server's inbound auth is
-    # disabled (e.g. consent-based OBP-MCP setups); with inbound auth enabled it
-    # may fail, so a failure is reported but does not demote "up".
-    if configs:
+    # empty list). It runs without any user, so servers that need the user's token
+    # (forward_bearer_token) are skipped: they would only refuse it, and a warning
+    # every status refresh says nothing. Their reachability is checked above.
+    testable = [c for c in configs if not getattr(c, "forward_bearer_token", False)]
+    if configs and not testable:
+        result["test_call"] = "skipped: needs a user's token"
+    elif testable:
         try:
-            loader = MCPToolLoader(servers=configs)
+            loader = MCPToolLoader(servers=testable)
             tools = await asyncio.wait_for(
                 loader.load_tools(), timeout=_MCP_TEST_CALL_TIMEOUT_SEC
             )
@@ -144,10 +148,10 @@ async def _probe_mcp() -> dict[str, Any]:
 
 
 async def _probe_llm() -> dict[str, Any]:
-    # Don't call the provider — just verify credentials are configured.
-    # Calling would cost money and let a public endpoint amplify traffic to an LLM API.
-    configured = any(os.getenv(k) for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"))
-    return {"up": configured}
+    # Up only when the configured provider's key is real and the provider accepts it: a placeholder key is down.
+    # The provider is asked only to list its models (no tokens, no cost), and llm_status caches the answer for
+    # minutes, so this public endpoint cannot amplify traffic to an LLM API.
+    return await llm_status()
 
 
 def _get_version() -> str:

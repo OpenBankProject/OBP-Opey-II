@@ -157,7 +157,7 @@ to continue a task."
 ```python
 OpeyAgentGraphBuilder()
     .with_tools([endpoint_retrieval_tool, glossary_retrieval_tool, obp_client_tool])
-    .with_model("claude-sonnet-4", temperature=0.7)
+    .with_model("claude-sonnet-5.5")
     .enable_human_review(True)
     .add_to_system_prompt("Additional safety guidelines...")
     .with_checkpointer(SqliteSaver("./checkpoints.db"))
@@ -227,8 +227,8 @@ Processors:
 MODEL_CONFIGS = {
     "anthropic": {
         "small": "claude-3-haiku-20240307",
-        "medium": "claude-3-5-sonnet-20241022", 
-        "large": "claude-3-opus-20240229"
+        "medium": "claude-sonnet-5.5", 
+        "large": "claude-opus-5.5"
     },
     "openai": {
         "small": "gpt-4o-mini",
@@ -246,7 +246,7 @@ MODEL_CONFIGS = {
 **Configuration:**
 ```env
 MODEL_PROVIDER="anthropic"
-MODEL_NAME="claude-sonnet-4"  # or size: "medium"
+MODEL_NAME="claude-sonnet-5.5"  # or size: "medium"
 TEMPERATURE=0.7
 ```
 
@@ -419,7 +419,7 @@ services:
 ```env
 # LLM
 MODEL_PROVIDER="anthropic"
-MODEL_NAME="claude-sonnet-4"
+MODEL_NAME="claude-sonnet-5.5"
 
 # OBP API
 OBP_BASE_URL="https://api.openbankproject.com"

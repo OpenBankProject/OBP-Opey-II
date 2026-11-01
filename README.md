@@ -88,7 +88,7 @@ To use change the model used by opey set the environment variables:
 
 ```env
 MODEL_PROVIDER="anthropic"
-MODEL_NAME="claude-sonnet-4"
+MODEL_NAME="claude-sonnet-5.5"
 ```
 Just note that the provider must match the MODEL_NAME i.e. you cannot use MODEL_PROVDER="anthropic" and MODEL_NAME="gpt-4.1"
 

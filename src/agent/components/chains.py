@@ -180,7 +180,7 @@ query_formulator_prompt_template = ChatPromptTemplate.from_messages(
     ]
 )
 
-query_formulator_llm = get_model(model_name='medium', temperature=0).with_structured_output(QueryFormulatorOutput)
+query_formulator_llm = get_model(model_name='medium', temperature=0).with_structured_output(QueryFormulatorOutput, method="json_schema")
 query_formulator_chain = query_formulator_prompt_template | query_formulator_llm
 
 
