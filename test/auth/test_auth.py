@@ -12,8 +12,7 @@ os.environ.setdefault('SESSION_SECRET_KEY', 'test-secret-key')
 os.environ.setdefault('OBP_BASE_URL', 'https://test-api.example.com')
 os.environ.setdefault('OBP_CONSUMER_KEY', 'test-consumer-key')
 
-from auth.auth import BaseAuth, AuthConfig, OBPConsentAuth, OBPDirectLoginAuth
-from auth.schema import DirectLoginConfig
+from auth.auth import BaseAuth, AuthConfig, OBPConsentAuth
 from auth.usage_tracker import AnonymousUsageTracker
 from auth.session import SessionData
 
@@ -50,31 +49,6 @@ class TestOBPConsentAuth:
         headers = auth.construct_headers("test-token")
         assert headers['Consent-Id'] == "test-token"
         assert headers['Consumer-Key'] == "test-key"
-
-
-class TestOBPDirectLoginAuth:
-    def test_init_no_config(self):
-        auth = OBPDirectLoginAuth()
-        assert not hasattr(auth, 'username')
-
-    def test_construct_headers(self):
-        auth = OBPDirectLoginAuth()
-        headers = auth.construct_headers("test-token")
-        assert headers['Authorization'] == "DirectLogin token=test-token"
-
-
-class TestDirectLoginConfig:
-    def test_create_config(self):
-        config = DirectLoginConfig(
-            username="test",
-            password="pass",
-            consumer_key="key",
-            base_uri="http://test.api"
-        )
-        assert config.username == "test"
-        assert config.password == "pass"
-        assert config.consumer_key == "key"
-        assert config.base_uri == "http://test.api"
 
 
 class TestUsageTracker:

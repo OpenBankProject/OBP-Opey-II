@@ -110,11 +110,7 @@ class ToolApprovalMetadata:
 - **Request/response logging** with user identifier extraction
 - **JSON serialization safeguards** to prevent corruption (ANK bug fix)
 
-**Admin Client Singleton:**
-- System-level operations with admin credentials
-- Automatic entitlement verification on startup
-- Centralized token refresh and authentication
-- Used for operations requiring elevated privileges
+**Checkpoints:** Checkpoints (each conversation's working state) are kept in a local SQLite file, `checkpoints.db`. If we ever store them in OBP-API instead, as dynamic entities, Opey should do it as a Platform App: its own Consumer, holding the Roles it needs as Scopes, with an application token, not an admin username and password.
 
 **Consent JWT Architecture:**
 ```
@@ -427,8 +423,6 @@ MODEL_NAME="claude-sonnet-4"
 
 # OBP API
 OBP_BASE_URL="https://api.openbankproject.com"
-OBP_USERNAME="admin@example.com"
-OBP_PASSWORD="secure_password"
 OBP_CONSUMER_KEY="your_consumer_key"
 
 # Database

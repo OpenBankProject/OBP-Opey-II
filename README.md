@@ -33,19 +33,17 @@ User → Opey (agent) → OBP-MCP → OBP API
 Opey also has a direct `aiohttp`-based `OBPClient` (`src/client/obp_client.py`) used **outside the agent loop**, not for answering user questions:
 
 - **Auth / validation** — validating bearer tokens & consent, fetching user roles/entitlements (`src/auth/auth.py`, session router `/users/current`).
-- **Admin operations** — the admin client singleton (`src/auth/admin_client.py`).
-- **Checkpointer** — persisting agent conversation state into OBP (`src/checkpointer/obp_checkpoint_saver.py`).
 - **Status probes** — health checks against `/obp/v5.1.0/root` (`src/service/status_probes.py`).
 
 ```
-Opey (auth / admin / checkpointer / health) → OBP API
+Opey (auth / health) → OBP API
 ```
 
 | Purpose | Who calls the OBP API |
 |---|---|
 | Agent answering banking questions (accounts, transactions…) | **OBP-MCP** (Opey forwards the user's token to it) |
 | Token/consent validation, roles/entitlements | Opey directly (`OBPClient`) |
-| Admin operations, checkpoint persistence, health probes | Opey directly (`OBPClient`) |
+| Health probes | Opey directly (`OBPClient`) |
 
 > **Note:** an `obp_requests` tool is defined inside `src/client/obp_client.py` for direct agent-driven OBP calls, but it is **not currently wired into the agent** — the agent's banking tools come entirely from OBP-MCP. It is a legacy/alternative path superseded by MCP.
 
@@ -115,12 +113,11 @@ MODEL_NAME="llama3.2"
 ```
 
 ### 4. Open Bank Project (OBP) credentials
-In order for the agent to communicate with the Open Bank Project API, we need to set credentials in the env. First sign up and get an API key on your specific instance of OBP i.e. https://apisandbox.openbankproject.com/ (this should match the `OBP_BASE_URL` in the env). Then set:
+Opey acts for the user through a consent, sent with Opey's own Consumer key. Register Opey as a Consumer on your instance of OBP, i.e. https://apisandbox.openbankproject.com/ (this should match the `OBP_BASE_URL` in the env). Then set:
 ```
-OBP_USERNAME="your-obp-username"
-OBP_PASSWORD="your-obp-password"
 OBP_CONSUMER_KEY="your-obp-consumer-key"
 ```
+Opey has no admin login: it needs no OBP username or password.
 
 ### 5. Changing the system prompt
 Opey only knows about its environment as long as you tell it. The default system prompt is OpenBankProject-focused. Iterating on the prompt for better final responses or better alignment with your particular instance is recommended. The system prompt can be set via the env var
@@ -196,22 +193,9 @@ i.e.
 OBP_BASE_URL="http://192.168.0.112:8080"
 ```
 
-### Admin Client Configuration
+### Checkpoints
 
-Opey II includes an admin OBP client singleton for system-level operations. This is initialized automatically at startup if the required environment variables are present:
-
-```env
-OBP_USERNAME=admin@example.com
-OBP_PASSWORD=secure_password
-OBP_CONSUMER_KEY=your_consumer_key
-OBP_BASE_URL=https://api.openbankproject.com
-```
-
-The admin client:
-- Initializes once at app startup
-- Provides a singleton instance accessible throughout the application
-- Automatically verifies admin entitlements
-- Handles authentication and token refresh centrally
+Checkpoints (each conversation's working state) are kept in a local SQLite file, `checkpoints.db`. If we ever store them in OBP-API instead, as dynamic entities, Opey should do it as a Platform App: its own Consumer, holding the Roles it needs as Scopes, with an application token, not an admin username and password.
 
 
 ## Service Configuration

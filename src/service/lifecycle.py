@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 
 from .redis_client import get_redis_client
 from .mcp_tools_cache import initialize_mcp_tools, close_mcp_tools
-from auth import initialize_admin_client, close_admin_client
 from .streaming.orchestrator_repository import orchestrator_repository
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from .checkpointer import checkpointers
@@ -46,14 +45,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize redis client
     redis_client = await get_redis_client()
 
-    # Initialize admin OBP client
-    try:
-        await initialize_admin_client(verify_entitlements=True)
-    except Exception as e:
-        logger.error(f'Failed to initialize admin client: {e}')
-        # Continue startup even if admin client fails - it may not be required for all operations
-        logger.warning('⚠️  Admin client initialization failed - admin operations will be unavailable')
-
     # Initialize MCP tools
     try:
         tools = await initialize_mcp_tools()
@@ -69,13 +60,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     cancellation_cleanup_task = asyncio.create_task(periodic_cancellation_cleanup())
     
     # Ensures that the checkpointer is created and closed properly, and that only this one is used
-    # for the whole app
+    # for the whole app. Checkpoints (each conversation's working state) are kept in a local SQLite file.
+    # If we ever store them in OBP-API instead (as dynamic entities), Opey should do it as a Platform App:
+    # its own Consumer, holding the Roles it needs as Scopes, with an application token. Not an admin
+    # username and password.
     async with AsyncSqliteSaver.from_conn_string('checkpoints.db') as sql_checkpointer:
         checkpointers['aiosql'] = sql_checkpointer
         yield
 
     # Cleanup during shutdown
-    await close_admin_client()
     await close_mcp_tools()
     
     # Cancel cleanup tasks during shutdown
