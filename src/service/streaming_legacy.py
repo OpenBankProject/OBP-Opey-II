@@ -30,7 +30,12 @@ def _parse_input(
     kwargs = {
         "input": _input,
         "config": RunnableConfig(
-            configurable={"thread_id": thread_id, "forwarded_for": forwarded_for},
+            configurable={
+                "thread_id": thread_id,
+                "forwarded_for": forwarded_for,
+                **({"app_supplementary_prompt": user_input.app_supplementary_prompt}
+                   if user_input.app_supplementary_prompt else {}),
+            },
             run_id=run_id,
             recursion_limit=int(os.getenv("OPEY_RECURSION_LIMIT", "100")),
         ),

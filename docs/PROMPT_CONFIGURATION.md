@@ -7,7 +7,7 @@ per deployment without touching the code. There are two prompts:
   lives in `src/agent/components/prompts/opey_system.prompt.yaml` and is baked into
   the Docker image.
 - **Supplementary prompt** — optional deployment/project-specific hints **appended
-  after** the main prompt (e.g. dynamic-entity guidance for the OGCR project).
+  after** the main prompt (e.g. dynamic-entity guidance for one project).
   Prefer this over replacing the main prompt: the main prompt evolves in git, and a
   copied override silently goes stale.
 
@@ -66,11 +66,11 @@ metadata:
   name: opey-prompts
 data:
   supplementary_prompt.md: |
-    OGCR project context:
+    Project context:
     - This instance makes heavy use of dynamic entities (system-level Dynamic Entities on OBP).
-    - When the user mentions carbon credits, projects or registries, look for the matching
+    - When the user mentions projects or registries, look for the matching
       dynamic entity endpoints (e.g. /obp/dynamic-entity/...) before falling back to core endpoints.
-    - Example entity record: {"project_id": "OGCR-001", "status": "issued"}
+    - Example entity record: {"project_id": "PRJ-001", "status": "issued"}
     - Prefer asking the user which registry they mean if more than one is available.
 ---
 apiVersion: apps/v1
@@ -105,7 +105,7 @@ Why files + ConfigMap rather than an inline env var:
 - **Prompt updates without rebuilding the image** — edit the ConfigMap and
   `kubectl rollout restart deployment/opey`. (The prompt is read once at agent
   startup, so a restart is required; the file mount itself updates in place.)
-- **Per-environment personalities from one image** — e.g. the OGCR cluster and a
+- **Per-environment personalities from one image** — e.g. a project's cluster and a
   vanilla OBP cluster run the same image with different ConfigMaps.
 - **Graceful failure** — a missing mount logs a warning and Opey runs with the
   bundled default prompt.

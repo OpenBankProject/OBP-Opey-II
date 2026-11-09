@@ -144,6 +144,15 @@ async def _invoke_with_recovery(
     response = graceful_failure_message(messages=state.get("messages", []))
     return response, state_updates, messages
 
+def app_supplementary_message(configurable: Dict[str, Any]) -> Optional[SystemMessage]:
+    """The calling app's own focus (StreamInput.app_supplementary_prompt) as this turn's system context, if sent.
+    It follows the per-instance OPEY_SUPPLEMENTARY_PROMPT and comes before the page context."""
+    prompt = (configurable.get("app_supplementary_prompt") or "").strip()
+    if not prompt:
+        return None
+    return SystemMessage(content="Guidance from the app the user is using Opey in:\n" + prompt)
+
+
 def _prompt_from_env(file_var: str, inline_var: str) -> Optional[str]:
     """Resolve a prompt from env: <file_var> names a text file (wins if readable and
     non-empty, e.g. a mounted Kubernetes ConfigMap), else fall back to the literal
@@ -327,6 +336,10 @@ class OpeyAgentGraphBuilder:
                     f"The user currently has OBP bank '{current_bank_id}' selected in the UI. "
                     f"When a request does not name a bank, use this bank_id."
                 )))
+
+            app_message = app_supplementary_message(config.get("configurable", {}) or {})
+            if app_message:
+                prepend.append(app_message)
 
             client_context = (config.get("configurable", {}) or {}).get("client_context")
             if client_context:

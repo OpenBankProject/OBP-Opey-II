@@ -51,6 +51,10 @@ class StreamManager:
         if getattr(stream_input, "client_context", None):
             config.setdefault("configurable", {})["client_context"] = stream_input.client_context
 
+        # And for the calling app's own focus (its supplementary prompt), sent by the app's server each turn.
+        if getattr(stream_input, "app_supplementary_prompt", None):
+            config.setdefault("configurable", {})["app_supplementary_prompt"] = stream_input.app_supplementary_prompt
+
         logger.info("Starting stream response", extra={
             "event_type": "stream_start",
             "thread_id": thread_id,

@@ -304,6 +304,21 @@ class UserInput(BaseModel):
         default=None,
         examples=["gh.29.uk"],
     )
+    app_supplementary_prompt: str | None = Field(
+        description="The calling app's own focus for Opey (e.g. Cohort: startup programmes and where its data is), "
+                    "set by the app's server, not the browser. Appended after OPEY_SUPPLEMENTARY_PROMPT as "
+                    "ephemeral system context each turn, like current_bank_id: never persisted.",
+        default=None,
+    )
+
+
+class RegenerateInput(BaseModel):
+    """Optional body of /stream/{thread_id}/regenerate: the per-turn context a regenerated answer needs again."""
+
+    app_supplementary_prompt: str | None = Field(
+        description="As in UserInput: the calling app's own focus for Opey.",
+        default=None,
+    )
 
 
 class StreamInput(UserInput):

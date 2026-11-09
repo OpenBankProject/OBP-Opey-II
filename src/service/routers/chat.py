@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request, Response, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse
 from auth.session import session_cookie, backend, SessionData
 from typing import Annotated, Any
-from schema import UserInput, ChatMessage, StreamInput, ToolCallApproval
+from schema import UserInput, ChatMessage, StreamInput, ToolCallApproval, RegenerateInput
 from ..opey_session import OpeySession
 from langgraph.graph.state import CompiledStateGraph
 from ..dependencies import get_stream_manager, get_opey_session
@@ -159,7 +159,8 @@ async def regenerate_from_message(
     thread_id: str,
     request: Request,
     message_id: str,
-    stream_manager: StreamManager = Depends(get_stream_manager)
+    stream_manager: StreamManager = Depends(get_stream_manager),
+    body: RegenerateInput | None = None,
 ) -> StreamingResponse:
     """
     Regenerate the response starting from a specific message ID.
@@ -260,6 +261,7 @@ async def regenerate_from_message(
         regenerate_input = StreamInput(
             message="",  # Empty - the state already has the context
             thread_id=thread_id,
+            app_supplementary_prompt=body.app_supplementary_prompt if body else None,
         )
         
         # Update request count for usage tracking
