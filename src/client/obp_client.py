@@ -153,7 +153,7 @@ class OBPClient:
             OBPResponse object.
             
         Example:
-            response = await client.get('/obp/v4.0.0/banks')
+            response = await client.get('/obp/v5.1.0/banks')
             data = response.json()
         """
         return await self._make_request("GET", path, operation_id=operation_id)
@@ -171,7 +171,7 @@ class OBPClient:
             OBPResponse object.
             
         Example:
-            response = await client.post('/obp/v4.0.0/banks/BANK_ID/accounts', body={'name': 'test'})
+            response = await client.post('/obp/v5.1.0/banks/BANK_ID/accounts', body={'name': 'test'})
             data = response.json()
         """
         return await self._make_request("POST", path, body=body, operation_id=operation_id)
@@ -189,7 +189,7 @@ class OBPClient:
             OBPResponse object.
             
         Example:
-            response = await client.put('/obp/v4.0.0/banks/BANK_ID/accounts/ACCOUNT_ID', body={'name': 'updated'})
+            response = await client.put('/obp/v5.1.0/banks/BANK_ID/accounts/ACCOUNT_ID', body={'name': 'updated'})
             data = response.json()
         """
         return await self._make_request("PUT", path, body=body, operation_id=operation_id)
@@ -206,7 +206,7 @@ class OBPClient:
             OBPResponse object.
             
         Example:
-            response = await client.delete('/obp/v4.0.0/banks/BANK_ID/accounts/ACCOUNT_ID')
+            response = await client.delete('/obp/v5.1.0/banks/BANK_ID/accounts/ACCOUNT_ID')
             data = response.json()
         """
         return await self._make_request("DELETE", path, operation_id=operation_id)
@@ -224,7 +224,7 @@ class OBPClient:
             OBPResponse object.
             
         Example:
-            response = await client.patch('/obp/v4.0.0/banks/BANK_ID/accounts/ACCOUNT_ID', body={'status': 'active'})
+            response = await client.patch('/obp/v5.1.0/banks/BANK_ID/accounts/ACCOUNT_ID', body={'status': 'active'})
             data = response.json()
         """
         return await self._make_request("PATCH", path, body=body, operation_id=operation_id)
