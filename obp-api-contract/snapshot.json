@@ -1,0 +1,65 @@
+{
+ "about": "Written by obp-api-contract/snapshot.py; do not edit by hand.",
+ "obp_api": {
+  "https://k8s.openbankproject.com": {
+   "version": "v6.0.0",
+   "git_commit": "474d4bcc554f1d8e9516e12d85be121d92410aa5"
+  }
+ },
+ "taken_at": "2026-11-12T23:17:58Z",
+ "endpoints": [
+  {
+   "verb": "GET",
+   "path": "/obp/v6.0.0/users/current",
+   "docs_from": "https://k8s.openbankproject.com",
+   "operation_id": "OBPv6.0.0-getCurrentUser",
+   "documented_path": "/obp/v6.0.0/users/current",
+   "fields": [
+    "email",
+    "entitlements",
+    "entitlements.list",
+    "entitlements.list[]",
+    "entitlements.list[].bank_id",
+    "entitlements.list[].entitlement_id",
+    "entitlements.list[].role_name",
+    "provider",
+    "provider_id",
+    "user_id",
+    "username",
+    "views",
+    "views.list",
+    "views.list[]",
+    "views.list[].account_id",
+    "views.list[].bank_id",
+    "views.list[].view_id"
+   ]
+  },
+  {
+   "verb": "GET",
+   "path": "/obp/v5.1.0/root",
+   "docs_from": "https://k8s.openbankproject.com",
+   "operation_id": "OBPv5.1.0-root",
+   "documented_path": "/obp/v5.1.0/root",
+   "fields": [
+    "connector",
+    "energy_source",
+    "energy_source.organisation",
+    "energy_source.organisation_website",
+    "git_commit",
+    "hosted_at",
+    "hosted_at.organisation",
+    "hosted_at.organisation_website",
+    "hosted_by",
+    "hosted_by.email",
+    "hosted_by.organisation",
+    "hosted_by.organisation_website",
+    "hosted_by.phone",
+    "hostname",
+    "local_identity_provider",
+    "resource_docs_requires_role",
+    "version",
+    "version_status"
+   ]
+  }
+ ]
+}
