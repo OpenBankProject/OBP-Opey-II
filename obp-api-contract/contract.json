@@ -1,0 +1,28 @@
+{
+ "about": "Every OBP-API call Opey makes from its own code: verb, path (OBP placeholders in capitals), the source file and the text that makes the call (needles), and the response fields the code reads. Paths built from OBP_API_VERSION are recorded with the version .env.example sets. Not listed: the obp_requests tool of src/client/obp_client.py and the OBP-MCP tools, whose method and path the model chooses at run time. test/test_obp_contract.py checks this list against the source and against snapshot.json, which obp-api-contract/snapshot.py writes from an OBP-API's resource docs.",
+ "calls": [
+  {
+   "verb": "GET",
+   "path": "/obp/v6.0.0/users/current",
+   "source": "src/auth/auth.py",
+   "needles": [
+    "version = os.getenv('OBP_API_VERSION')",
+    "f'/obp/{version}/users/current'"
+   ],
+   "reads": [
+    "user_id"
+   ],
+   "note": "Checks a Consent-Id (OBPConsentAuth) or a bearer token (OBPBearerAuth); src/service/routers/session.py reads user_id from the answer."
+  },
+  {
+   "verb": "GET",
+   "path": "/obp/v5.1.0/root",
+   "source": "src/service/status_probes.py",
+   "needles": [
+    "f\"{base.rstrip('/')}/obp/v5.1.0/root\""
+   ],
+   "reads": [],
+   "note": "Only the status code is checked: below 500 means OBP-API is up."
+  }
+ ]
+}
