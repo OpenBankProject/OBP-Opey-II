@@ -27,6 +27,10 @@ THIS_FILE = "test/test_obp_api_version.py"
 
 OBP_PATH_VERSION = re.compile(r"obp/v(\d+)\.(\d+)\.(\d+)(?![\d.])")
 VERSION_LITERAL = re.compile(r"(?<![\w.])v(\d+)\.(\d+)\.(\d+)(?![\d.])")
+# A string that ends in /obp or /obp/: the start of a path put together with `+`, e.g. base + "/obp/" + "v4.0.0".
+OBP_PIECE = re.compile(r"/obp/?[\"']")
+# The line after `name: OBP_API_VERSION` in a Kubernetes or compose environment block: `value: "v4.0.0"`.
+VALUE_LINE = re.compile(r"^\s*[-,]?\s*(?:[\"']?value[\"']?\s*[:=]\s*)?[\"']?(v\d+\.\d+\.\d+)[\"']?\s*,?\s*$")
 
 
 def _below_v510(match: re.Match) -> bool:
@@ -34,8 +38,12 @@ def _below_v510(match: re.Match) -> bool:
 
 
 def versions_below_v510(line: str) -> list[str]:
-    """Every `obp/vX.Y.Z` in `line` whose version is below v5.1.0, as written."""
-    return [m.group(0) for m in OBP_PATH_VERSION.finditer(line) if _below_v510(m)]
+    """Every `obp/vX.Y.Z` in `line` whose version is below v5.1.0, as written, and every `vX.Y.Z` below v5.1.0 on a
+    line that has the start of a path as a string of its own (`"/obp/" + "v4.0.0"`)."""
+    found = [m.group(0) for m in OBP_PATH_VERSION.finditer(line) if _below_v510(m)]
+    if OBP_PIECE.search(line):
+        found += [m.group(0) for m in VERSION_LITERAL.finditer(line) if _below_v510(m)]
+    return found
 
 
 def version_settings_below_v510(line: str) -> list[str]:
@@ -43,6 +51,15 @@ def version_settings_below_v510(line: str) -> list[str]:
     if "OBP_API_VERSION" not in line:
         return []
     return [m.group(0) for m in VERSION_LITERAL.finditer(line) if _below_v510(m)]
+
+
+def version_settings_below_v510_on_next_line(line: str, next_line: str) -> list[str]:
+    """A `vX.Y.Z` below v5.1.0 given to OBP_API_VERSION on the line after its name (`- name: OBP_API_VERSION`, then
+    `value: "v4.0.0"`), which version_settings_below_v510 cannot see on one line."""
+    if "OBP_API_VERSION" not in line or VERSION_LITERAL.search(line):
+        return []
+    m = VALUE_LINE.match(next_line)
+    return [m.group(1)] if m and _below_v510(VERSION_LITERAL.search(m.group(1))) else []
 
 
 def source_files() -> list[Path]:
@@ -67,8 +84,11 @@ def calls_below_v510() -> list[str]:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        for n, line in enumerate(text.splitlines(), start=1):
-            for version in versions_below_v510(line) + version_settings_below_v510(line):
+        lines = text.splitlines()
+        for n, line in enumerate(lines, start=1):
+            next_line = lines[n] if n < len(lines) else ""
+            for version in (versions_below_v510(line) + version_settings_below_v510(line)
+                            + version_settings_below_v510_on_next_line(line, next_line)):
                 allowed = any(
                     key.split("|", 1)[0] == rel and key.split("|", 1)[1] in line for key in BELOW_V510
                 )
@@ -113,3 +133,17 @@ def test_recognises_the_ways_an_old_version_can_be_written():
     assert version_settings_below_v510("os.getenv('OBP_API_VERSION', 'v5.0.0')") == ["v5.0.0"]
     assert version_settings_below_v510('OBP_API_VERSION="v6.0.0"') == []
     assert version_settings_below_v510("version v4.0.0 of something else") == []
+    assert versions_below_v510("base + '/obp/' + 'v4.0.0' + '/banks'") == ["v4.0.0"]
+    assert versions_below_v510("base + '/obp/' + 'v6.0.0'") == []
+    assert versions_below_v510("'http://localhost:9000/obp-oidc' + 'v4.0.0'") == []
+
+
+def test_recognises_a_version_given_on_the_line_after_the_name():
+    # Tests the two-line form of an environment block: the version is on the `value:` line, not on the name's line.
+    name = "    - name: OBP_API_VERSION"
+    assert version_settings_below_v510_on_next_line(name, '      value: "v4.0.0"') == ["v4.0.0"]
+    assert version_settings_below_v510_on_next_line(name, "      value: v5.0.0") == ["v5.0.0"]
+    assert version_settings_below_v510_on_next_line('"name": "OBP_API_VERSION",', '"value": "v4.0.0"') == ["v4.0.0"]
+    assert version_settings_below_v510_on_next_line(name, '      value: "v6.0.0"') == []
+    assert version_settings_below_v510_on_next_line(name, '      value: "dev"') == []
+    assert version_settings_below_v510_on_next_line("    - name: OTHER", '      value: "v4.0.0"') == []
