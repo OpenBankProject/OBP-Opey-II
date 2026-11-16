@@ -15,8 +15,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CONTRACT_DIR = ROOT / "obp-api-contract"
 
-# A string that builds an OBP-API path: a version (/obp/v6.0.0) or one filled in (/obp/{version}).
-OBP_PATH = re.compile(r"/obp/(v\d|\{)")
+# A string that builds an OBP-API path or the start of one: a version (/obp/v6.0.0), one filled in (/obp/{version}),
+# no version at all (/obp/dynamic-entity/...) or a piece put together with `+` (base + "/obp/" + version).
+# /obp-oidc is not an OBP-API path.
+OBP_PATH = re.compile(r"/obp(?![\w-])")
 
 
 def load(name: str) -> dict:
@@ -170,6 +172,18 @@ def test_a_renamed_or_removed_field_is_reported():
     either = {"reads": ["user_id|id"]}
     assert undocumented_reads(either, {"id"}) == []
     assert undocumented_reads(either, set()) == ["user_id|id"]
+
+
+def test_the_coverage_scan_finds_a_path_put_together_from_pieces_and_a_path_without_a_version():
+    # Tests the scan itself: base + "/obp/" + version and /obp/dynamic-entity/... are found, /obp-oidc is not.
+    source = (
+        'def get(base, version):\n'
+        '    a = base + "/obp/" + version + "/banks"\n'
+        '    b = f"{base}/obp/dynamic-entity/x"\n'
+        '    c = "http://localhost:9000/obp-oidc"\n'
+        '    return a, b, c\n'
+    )
+    assert [n for n, _ in obp_path_lines_in(source)] == [2, 3]
 
 
 def test_the_coverage_scan_skips_comments_and_docstrings():
