@@ -22,13 +22,6 @@ jobs:
         run: pip install poetry
       - name: Install the dependencies from poetry.lock
         run: poetry install --no-root
-      # Four test files and cases no longer match the code and are left out until they are fixed:
-      # test/session (src.session is gone), test_approval_system.py (make_approval_key is gone),
-      # test_session_management.py (no `client` fixture) and test_global_instance (request_cancellation is gone).
-      - name: Run the tests, including the OBP-API contract and the v5.1.0 version floor
+      - name: Run all the tests, including the OBP-API contract and the v5.1.0 version floor
         run: >
           poetry run pytest test -q --asyncio-mode=auto
-          --ignore=test/session
-          --ignore=test/agent/test_approval_system.py
-          --ignore=test/service/test_session_management.py
-          --deselect test/service/test_cancellation_manager.py::TestGlobalCancellationManager::test_global_instance

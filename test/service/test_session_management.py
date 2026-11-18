@@ -1,93 +1,121 @@
-from service.service import app
-from httpx import AsyncClient
+"""
+The session endpoints, run in the same process with no OBP-API and no Redis:
+
+  - POST /create-session refuses a Consent-Id OBP-API does not accept, and a call with no credentials
+  - POST /create-session with an accepted Consent-Id sets the session cookie, and that cookie opens the
+    session-protected routes
+  - POST /delete-session removes the session, after which the cookie no longer opens them
+  - a session-protected route without a cookie answers 403
+
+The auth strategies and the session store are fakes. Which header wins when several arrive is pinned in
+test_session_priority.py.
+"""
 import pytest
-import pytest_asyncio
-import os
-import json
+
+try:
+    from httpx import ASGITransport, AsyncClient
+    from service.service import app
+    from service.dependencies import get_auth_config
+    import auth.session as auth_session
+except Exception:  # pragma: no cover - mirror conftest's tolerance of a broken env
+    app = None
+
+
+class _Strategy:
+    def __init__(self, accepts: bool, user_id: str = "user-1"):
+        self._accepts = accepts
+        self._user_id = user_id
+
+    async def acheck_auth(self, token: str | None = None) -> bool:
+        return self._accepts
+
+    async def get_current_user(self, token: str | None = None) -> dict:
+        return {"user_id": self._user_id}
+
+
+class _AuthConfig:
+    def __init__(self, accepts: bool):
+        self.auth_strategies = {"obp_consent_id": _Strategy(accepts), "obp_bearer": _Strategy(accepts)}
 
 
 @pytest.fixture()
-async def create_session(client: AsyncClient, get_obp_consent):
-    """
-    Used for creating a session in the subsequent tests. NOT for testing the session creation endpoint itself.
-    """
-    consent_id = get_obp_consent
-    response = await client.post("/create-session", headers={'Consent-JWT': consent_id})
+def store(monkeypatch):
+    """An in-memory session store in place of Redis."""
+    if app is None:
+        pytest.skip("service.service app not importable in this environment")
+    sessions: dict = {}
 
-    return response.cookies.get("session")
+    async def create(session_id, data):
+        sessions[session_id] = data
 
+    async def read(session_id):
+        return sessions[session_id]
 
-@pytest.mark.asyncio(loop_scope="session")
-async def test_create_session_incorrect_format(client: AsyncClient):
-    response = await client.post("/create-session", headers={'Consent-JWT': 'test-jwt'})
-    assert response.status_code == 401    
+    async def delete(session_id):
+        sessions.pop(session_id, None)
 
-
-@pytest.mark.dependency()
-@pytest.mark.asyncio(loop_scope="session")
-@pytest.mark.skip("Requires valid OBP JWT token - run with real credentials to test")
-async def test_create_session(client: AsyncClient, get_obp_consent):
-    consent_id = get_obp_consent
-    response = await client.post("/create-session", headers={'Consent-JWT': consent_id})
-    print("Cookies:", response.cookies)
-    assert response.status_code == 200
-    assert "session" in response.cookies
-    assert response.text == "session created"
+    monkeypatch.setattr(auth_session.backend, "create", create)
+    monkeypatch.setattr(auth_session.backend, "read", read)
+    monkeypatch.setattr(auth_session.backend, "delete", delete)
+    monkeypatch.delenv("ALLOW_ANONYMOUS_SESSIONS", raising=False)
+    yield sessions
+    app.dependency_overrides.pop(get_auth_config, None)
 
 
-@pytest.mark.asyncio(loop_scope="session")
-@pytest.mark.dependency(depends=["test_create_session"])
-async def test_get_protected_route(client: AsyncClient,):
+def client() -> "AsyncClient":
+    return AsyncClient(transport=ASGITransport(app=app), base_url="https://test")  # the session cookie is Secure
 
-    # Try to access the protected route
-    response = await client.get("/status")
-    assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+
+def accept_consents(accepts: bool) -> None:
+    app.dependency_overrides[get_auth_config] = lambda: _AuthConfig(accepts)
+
 
 @pytest.mark.asyncio
-@pytest.mark.skip("Streaming endpoints are difficult to test cleanly")
-async def test_get_protected_streaming_route(client: AsyncClient, create_session, mocker):
-    # Create a session first
-    session_id = create_session
-    print(session_id)
-
-    from typing import AsyncGenerator
-    
-    # Define your mock async generator function
-    async def mock_generator(*args, **kwargs):
-        yield "data: {\"content\":\"Test response\"}\n\n"
-        yield "data: [DONE]\n\n"
-    
-    # Use the mocker fixture to patch the function
-    mock = mocker.patch('service.service.opey_message_generator', return_value=mock_generator)
-    
-    # Test with the mock
-    response = await client.post(
-        "/stream", 
-        json={'message': 'Hello opey.', 'thread_id': '12345', 'tool_call_approval': {'approval': 'approve', 'tool_call_id': 'call_12345'}},
-        headers={'Content-Type': 'application/json'}
-    )
-    assert response.status_code == 200
+async def test_create_session_refuses_a_consent_id_obp_does_not_accept(store):
+    accept_consents(False)
+    async with client() as c:
+        response = await c.post("/create-session", headers={"Consent-Id": "not-a-consent"})
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid Consent-Id"}
+    assert store == {}
 
 
-@pytest.mark.dependency(depends=["test_create_session"])
-@pytest.mark.asyncio(loop_scope="session")
-async def test_delete_session(client: AsyncClient, create_session):
-    # Create a session first
-    session_id = create_session
-    print(session_id)
+@pytest.mark.asyncio
+async def test_create_session_without_credentials_is_refused_unless_anonymous_sessions_are_allowed(store):
+    accept_consents(True)
+    async with client() as c:
+        response = await c.post("/create-session")
+    assert response.status_code == 401
+    assert store == {}
 
-    # Try to delete the session
-    response = await client.post("/delete-session")
-    assert response.status_code == 200
-    assert response.text == "session deleted"
 
-@pytest.mark.dependency(depends=["test_delete_session"])
-@pytest.mark.asyncio(loop_scope="session")
-async def test_get_protected_route_after_deletion(client: AsyncClient):
-    # Try to access the protected route after session deletion
-    response = await client.get("/status")
+@pytest.mark.asyncio
+async def test_a_protected_route_without_a_session_answers_403(store):
+    async with client() as c:
+        response = await c.get("/usage")
     assert response.status_code == 403
-    assert response.json() == {"detail": "No session provided"}
+    assert response.json()["message"] == "No session provided"
+    assert response.json()["error_code"] == "authentication_failed"
 
 
+@pytest.mark.asyncio
+async def test_a_created_session_opens_protected_routes_until_it_is_deleted(store):
+    accept_consents(True)
+    async with client() as c:
+        created = await c.post("/create-session", headers={"Consent-Id": "consent-1"})
+        assert created.status_code == 200
+        assert "session" in created.cookies
+        assert len(store) == 1
+        assert next(iter(store.values())).user_id == "user-1"
+
+        opened = await c.get("/usage")
+        assert opened.status_code != 403
+
+        deleted = await c.post("/delete-session")
+        assert deleted.status_code == 200
+        assert store == {}
+
+        c.cookies.clear()
+        closed = await c.get("/usage")
+        assert closed.status_code == 403
+        assert closed.json()["message"] == "No session provided"
