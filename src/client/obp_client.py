@@ -4,11 +4,38 @@ import asyncio
 import json
 import logging
 import os
+import re
+from urllib.parse import unquote
 
 from typing import Literal
 from langchain_core.tools import StructuredTool
 
 logger = logging.getLogger(__name__)
+
+# Opey calls OBP-API on v5.1.0 or newer. The obp_requests tool takes its path from the model, so the floor is
+# enforced here, where every request passes, and not left to the prompt.
+MIN_OBP_API_VERSION = (5, 1, 0)
+_OBP_VERSION_IN_PATH = re.compile(r"^/?obp/v(\d+)\.(\d+)\.(\d+)(?=[/?#]|$)", re.IGNORECASE)
+
+
+def check_obp_api_version(path: str) -> None:
+    """Raise ValueError for a path on an OBP-API version below v5.1.0, or one that climbs out of its version.
+
+    Paths with no OBP version in them (`/obp/dynamic-entity/...`, `/obp/berlin-group/v1.3/...`) are not versioned
+    this way and pass.
+    """
+    decoded = unquote(path)
+    while (again := unquote(decoded)) != decoded:  # %252e%252e is '..' after two decodings
+        decoded = again
+    if ".." in decoded.split("?", 1)[0].split("/"):
+        raise ValueError(f"Refusing the path {path!r}: it climbs out of its OBP-API version with '..'.")
+    match = _OBP_VERSION_IN_PATH.match(decoded)
+    if match and tuple(int(g) for g in match.groups()) < MIN_OBP_API_VERSION:
+        floor = "v" + ".".join(str(n) for n in MIN_OBP_API_VERSION)
+        raise ValueError(
+            f"Refusing the path {path!r}: it uses OBP-API v{'.'.join(match.groups())}, "
+            f"and this client only calls OBP-API {floor} or newer."
+        )
 
 
 class OBPResponse:
@@ -94,6 +121,7 @@ class OBPClient:
         Returns:
             OBPResponse object with requests.Response-like interface.
         """
+        check_obp_api_version(path)
         url = f"{self.obp_base_url}{path}"
         headers = self.auth.construct_headers()
         
