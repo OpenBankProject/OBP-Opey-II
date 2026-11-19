@@ -2,18 +2,18 @@
  "about": "Written by obp-api-contract/snapshot.py; do not edit by hand.",
  "obp_api": {
   "https://k8s.openbankproject.com": {
-   "version": "v6.0.0",
+   "version": "v5.1.0",
    "git_commit": "474d4bcc554f1d8e9516e12d85be121d92410aa5"
   }
  },
- "taken_at": "2026-11-12T23:17:58Z",
+ "taken_at": "2026-11-19T10:09:48Z",
  "endpoints": [
   {
    "verb": "GET",
-   "path": "/obp/v6.0.0/users/current",
+   "path": "/obp/v5.1.0/users/current",
    "docs_from": "https://k8s.openbankproject.com",
-   "operation_id": "OBPv6.0.0-getCurrentUser",
-   "documented_path": "/obp/v6.0.0/users/current",
+   "operation_id": "OBPv3.0.0-getCurrentUser",
+   "documented_path": "/obp/v5.1.0/users/current",
    "fields": [
     "email",
     "entitlements",

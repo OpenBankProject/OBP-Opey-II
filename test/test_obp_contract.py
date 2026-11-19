@@ -79,12 +79,6 @@ def obp_path_lines() -> list[tuple[str, int, str]]:
     return out
 
 
-def env_example_api_version() -> str:
-    match = re.search(r'^OBP_API_VERSION="?([^"\s]+)"?', (ROOT / ".env.example").read_text(encoding="utf-8"), re.M)
-    assert match, ".env.example sets no OBP_API_VERSION"
-    return match.group(1)
-
-
 def test_every_call_in_the_contract_is_in_its_source_file():
     # Tests that each listed call still exists: every needle of an entry occurs in the entry's source file.
     gone = []
@@ -104,18 +98,6 @@ def test_every_obp_api_call_in_the_source_is_in_the_contract():
         if not any(c["source"] == file and any(needle.strip() in line for needle in c["needles"]) for c in listed)
     ]
     assert unlisted == []
-
-
-def test_paths_built_from_obp_api_version_use_the_version_of_env_example():
-    # Tests that a call whose version comes from OBP_API_VERSION is recorded with the version .env.example sets,
-    # so the snapshot checks the endpoint Opey reaches by default.
-    version = env_example_api_version()
-    wrong = [
-        f"{key(c)}: .env.example sets {version}"
-        for c in calls()
-        if any("OBP_API_VERSION" in needle for needle in c["needles"]) and c["path"].split("/")[2] != version
-    ]
-    assert wrong == []
 
 
 def test_the_snapshot_was_taken_for_this_contract():

@@ -12,6 +12,10 @@ load_dotenv()
 
 logger = logging.getLogger('__main__.' + __name__)
 
+# The OBP-API call that tells who a Consent-Id or a bearer token belongs to. Its version is written here, not read
+# from a setting: Opey only calls OBP-API on v5.1.0 or newer.
+CURRENT_USER_PATH = '/obp/v5.1.0/users/current'
+
 class BaseAuth():
     def __init__(self, async_requests_client: Optional[aiohttp.ClientSession] = None):
         """
@@ -84,11 +88,7 @@ class OBPConsentAuth(BaseAuth):
         if not self.opey_consumer_key:
             raise ValueError('OBP_CONSUMER_KEY not set in environment variables')
         
-        version = os.getenv('OBP_API_VERSION')
-        if not version:
-            raise ValueError('OBP_API_VERSION not set in environment variables')
-        
-        self.current_user_url = self.base_uri + f'/obp/{version}/users/current'
+        self.current_user_url = self.base_uri + CURRENT_USER_PATH
         
         self.current_user_id = None
 
@@ -205,11 +205,7 @@ class OBPBearerAuth(BaseAuth):
 
         self.token = bearer_token
 
-        version = os.getenv('OBP_API_VERSION')
-        if not version:
-            raise ValueError('OBP_API_VERSION not set in environment variables')
-
-        self.current_user_url = self.base_uri + f'/obp/{version}/users/current'
+        self.current_user_url = self.base_uri + CURRENT_USER_PATH
 
     def construct_headers(self, token: str | None = None) -> Dict[str, str]:
         if not token and not self.token:
