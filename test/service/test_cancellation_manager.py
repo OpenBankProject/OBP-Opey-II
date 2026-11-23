@@ -162,24 +162,18 @@ class TestGlobalCancellationManager:
     @pytest.mark.asyncio
     async def test_global_instance(self):
         """Test that the global instance works"""
-        from utils.cancellation_manager import (
-            request_cancellation,
-            is_cancelled,
-            clear_cancellation
-        )
-        
+        from utils.cancellation_manager import cancellation_manager
+
         thread_id = "global-test-thread"
-        
+
         try:
-            # Use convenience functions
-            await request_cancellation(thread_id)
-            assert await is_cancelled(thread_id)
-            
-            await clear_cancellation(thread_id)
-            assert not await is_cancelled(thread_id)
+            await cancellation_manager.request_cancellation(thread_id)
+            assert await cancellation_manager.is_cancelled(thread_id)
+
+            await cancellation_manager.clear_cancellation(thread_id)
+            assert not await cancellation_manager.is_cancelled(thread_id)
         finally:
-            # Cleanup
-            await clear_cancellation(thread_id)
+            await cancellation_manager.clear_cancellation(thread_id)
 
 
 @pytest.mark.asyncio

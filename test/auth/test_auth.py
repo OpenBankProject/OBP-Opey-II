@@ -12,7 +12,7 @@ os.environ.setdefault('SESSION_SECRET_KEY', 'test-secret-key')
 os.environ.setdefault('OBP_BASE_URL', 'https://test-api.example.com')
 os.environ.setdefault('OBP_CONSUMER_KEY', 'test-consumer-key')
 
-from auth.auth import BaseAuth, AuthConfig, OBPConsentAuth
+from auth.auth import BaseAuth, AuthConfig, OBPConsentAuth, OBPBearerAuth
 from auth.usage_tracker import AnonymousUsageTracker
 from auth.session import SessionData
 
@@ -71,3 +71,25 @@ class TestSessionData:
         assert session.is_anonymous is False
         assert session.token_usage == 0
         assert session.request_count == 0
+
+
+class TestCurrentUserUrl:
+    """The current-user check calls OBP-API v5.1.0, written in the code and not read from a setting."""
+
+    ENV = {'OBP_BASE_URL': 'https://test.com', 'OBP_CONSUMER_KEY': 'test-key'}
+
+    def test_a_consent_auth_calls_users_current_on_v510(self, monkeypatch):
+        monkeypatch.delenv('OBP_API_VERSION', raising=False)
+        with patch.dict(os.environ, self.ENV):
+            assert OBPConsentAuth().current_user_url == 'https://test.com/obp/v5.1.0/users/current'
+
+    def test_a_bearer_auth_calls_users_current_on_v510(self, monkeypatch):
+        monkeypatch.delenv('OBP_API_VERSION', raising=False)
+        with patch.dict(os.environ, self.ENV):
+            assert OBPBearerAuth().current_user_url == 'https://test.com/obp/v5.1.0/users/current'
+
+    def test_the_obp_api_version_setting_is_ignored(self, monkeypatch):
+        monkeypatch.setenv('OBP_API_VERSION', 'v4.0.0')
+        with patch.dict(os.environ, self.ENV):
+            assert '/obp/v5.1.0/users/current' in OBPConsentAuth().current_user_url
+            assert '/obp/v5.1.0/users/current' in OBPBearerAuth().current_user_url

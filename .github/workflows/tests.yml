@@ -1,0 +1,26 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches:
+    - main
+
+env:
+  SESSION_SECRET_KEY: test-secret
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.7"
+      - name: Install Poetry
+        run: pip install poetry
+      - name: Install the dependencies from poetry.lock
+        run: poetry install --no-root
+      - name: Run all the tests, including the OBP-API contract and the v5.1.0 version floor
+        run: >
+          poetry run pytest test -q --asyncio-mode=auto

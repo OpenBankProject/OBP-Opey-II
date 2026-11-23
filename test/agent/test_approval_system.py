@@ -16,12 +16,14 @@ from datetime import datetime, timedelta
 import json
 
 from src.agent.components.states import (
-    OpeyGraphState, 
-    make_approval_key, 
-    parse_approval_key,
+    OpeyGraphState,
     merge_dicts
 )
-from src.agent.components.tools.approval_manager import ApprovalManager
+from src.agent.components.tools.approval_manager import (
+    ApprovalManager,
+    make_approval_key,
+    parse_approval_key,
+)
 from src.agent.components.tools.approval_models import (
     ApprovalDecision,
     ApprovalLevel,
