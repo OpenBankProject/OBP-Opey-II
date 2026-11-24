@@ -186,3 +186,6 @@ simon_opeyII_env
 
 # Backups of .env, which hold secrets
 .env.bak*
+
+# Zed editor settings, which open_dev_env writes for each project
+.zed/
