@@ -183,3 +183,6 @@ agent_architecture.png
 /.cursorrules
 simon_opeyII_env
 simon_opeyII_env
+
+# Backups of .env, which hold secrets
+.env.bak*

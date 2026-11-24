@@ -21,6 +21,12 @@ async def get_health() -> dict[str, Any]:
     return {"status": "ok"}
 
 
+@router.get("/alive")
+async def get_alive() -> Response:
+    """Liveness check modelled on OBP-API's /alive: the body is `true` while the process serves HTTP. No dependency probes."""
+    return Response("true", media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
 @router.get("/status")
 async def get_status(request: Request) -> Response:
     """Public status page: reports component health. Cached to prevent DoS amplification.
