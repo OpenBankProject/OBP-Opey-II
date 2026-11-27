@@ -153,6 +153,23 @@ def app_supplementary_message(configurable: Dict[str, Any]) -> Optional[SystemMe
     return SystemMessage(content="Guidance from the app the user is using Opey in:\n" + prompt)
 
 
+# The names of the languages the OBP apps are shown in, so the instruction names the language rather than a code.
+LANGUAGE_NAMES = {"ar": "Arabic", "en": "English"}
+
+
+def page_language_message(configurable: Dict[str, Any]) -> Optional[SystemMessage]:
+    """The language of the user's page (StreamInput.page_language) as this turn's system context, if sent."""
+    code = (configurable.get("page_language") or "").strip()
+    if not code:
+        return None
+    name = LANGUAGE_NAMES.get(code.split("-")[0].lower(), code)
+    return SystemMessage(content=(
+        f"The user's page is shown in {name}. Answer in {name}, unless the user writes to you in another language "
+        f"or asks for one. Keep OBP names exactly as they are, in Latin letters: Role names, endpoint paths, "
+        f"API versions, JSON field names and ids."
+    ))
+
+
 def _prompt_from_env(file_var: str, inline_var: str) -> Optional[str]:
     """Resolve a prompt from env: <file_var> names a text file (wins if readable and
     non-empty, e.g. a mounted Kubernetes ConfigMap), else fall back to the literal
@@ -340,6 +357,10 @@ class OpeyAgentGraphBuilder:
             app_message = app_supplementary_message(config.get("configurable", {}) or {})
             if app_message:
                 prepend.append(app_message)
+
+            language_message = page_language_message(config.get("configurable", {}) or {})
+            if language_message:
+                prepend.append(language_message)
 
             client_context = (config.get("configurable", {}) or {}).get("client_context")
             if client_context:

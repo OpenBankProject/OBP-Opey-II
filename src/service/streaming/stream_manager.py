@@ -55,6 +55,10 @@ class StreamManager:
         if getattr(stream_input, "app_supplementary_prompt", None):
             config.setdefault("configurable", {})["app_supplementary_prompt"] = stream_input.app_supplementary_prompt
 
+        # And for the language the user's page is shown in, so Opey answers in it.
+        if getattr(stream_input, "page_language", None):
+            config.setdefault("configurable", {})["page_language"] = stream_input.page_language
+
         logger.info("Starting stream response", extra={
             "event_type": "stream_start",
             "thread_id": thread_id,

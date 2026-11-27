@@ -310,6 +310,12 @@ class UserInput(BaseModel):
                     "ephemeral system context each turn, like current_bank_id: never persisted.",
         default=None,
     )
+    page_language: str | None = Field(
+        description="The language the user's page is shown in, as a language code such as ar or en. Opey answers in "
+                    "that language unless the user writes in another one or asks for one. Sent each turn, never persisted.",
+        default=None,
+        examples=["ar"],
+    )
 
 
 class RegenerateInput(BaseModel):
@@ -317,6 +323,10 @@ class RegenerateInput(BaseModel):
 
     app_supplementary_prompt: str | None = Field(
         description="As in UserInput: the calling app's own focus for Opey.",
+        default=None,
+    )
+    page_language: str | None = Field(
+        description="As in UserInput: the language the user's page is shown in.",
         default=None,
     )
 

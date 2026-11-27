@@ -35,6 +35,7 @@ def _parse_input(
                 "forwarded_for": forwarded_for,
                 **({"app_supplementary_prompt": user_input.app_supplementary_prompt}
                    if user_input.app_supplementary_prompt else {}),
+                **({"page_language": user_input.page_language} if user_input.page_language else {}),
             },
             run_id=run_id,
             recursion_limit=int(os.getenv("OPEY_RECURSION_LIMIT", "100")),

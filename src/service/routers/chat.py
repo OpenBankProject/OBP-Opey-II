@@ -262,6 +262,7 @@ async def regenerate_from_message(
             message="",  # Empty - the state already has the context
             thread_id=thread_id,
             app_supplementary_prompt=body.app_supplementary_prompt if body else None,
+            page_language=body.page_language if body else None,
         )
         
         # Update request count for usage tracking
